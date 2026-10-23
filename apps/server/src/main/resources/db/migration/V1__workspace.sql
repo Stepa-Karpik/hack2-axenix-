@@ -1,0 +1,14 @@
+CREATE TABLE projects (id uuid PRIMARY KEY, name varchar(120) NOT NULL, head_revision_id uuid, original_revision_id uuid, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE revisions (id uuid PRIMARY KEY, project_id uuid NOT NULL REFERENCES projects(id), parent_revision_id uuid, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(project_id,id), FOREIGN KEY(project_id,parent_revision_id) REFERENCES revisions(project_id,id));
+ALTER TABLE projects ADD CONSTRAINT project_head FOREIGN KEY(id,head_revision_id) REFERENCES revisions(project_id,id);
+ALTER TABLE projects ADD CONSTRAINT project_original FOREIGN KEY(id,original_revision_id) REFERENCES revisions(project_id,id);
+CREATE TABLE resources (project_id uuid NOT NULL REFERENCES projects(id), id uuid NOT NULL, kind text NOT NULL, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(project_id,id));
+CREATE INDEX resource_kind ON resources(project_id,kind,created_at DESC,id DESC);
+CREATE TABLE layouts (project_id uuid NOT NULL, revision_id uuid NOT NULL, analysis_id uuid NOT NULL, method_id text NOT NULL, version integer NOT NULL, data jsonb NOT NULL, PRIMARY KEY(project_id,revision_id,analysis_id,method_id), FOREIGN KEY(project_id,revision_id) REFERENCES revisions(project_id,id), FOREIGN KEY(project_id,analysis_id) REFERENCES resources(project_id,id));
+CREATE TABLE jobs (id uuid PRIMARY KEY,project_id uuid NOT NULL REFERENCES projects(id),type text NOT NULL,status text NOT NULL DEFAULT 'queued',input jsonb NOT NULL, result jsonb,attempt_id uuid,lease_until timestamptz,cancel_requested_at timestamptz,error jsonb,created_at timestamptz NOT NULL DEFAULT now(),started_at timestamptz,finished_at timestamptz, UNIQUE(project_id,id), CHECK(status IN ('queued','running','succeeded','failed','cancelled')));
+CREATE TABLE job_attempts (id uuid PRIMARY KEY,job_id uuid NOT NULL REFERENCES jobs(id),started_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz,status text NOT NULL);
+CREATE TABLE idempotency (scope text NOT NULL,key uuid NOT NULL,payload_hash text NOT NULL,response jsonb,status integer NOT NULL,PRIMARY KEY(scope,key));
+CREATE TABLE artifacts (project_id uuid NOT NULL REFERENCES projects(id),id uuid NOT NULL,kind text NOT NULL,media_type text NOT NULL,sha256 text NOT NULL,bytes bytea NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(project_id,id));
+CREATE TABLE audit_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, project_id uuid REFERENCES projects(id),event text NOT NULL,entity_id uuid,created_at timestamptz NOT NULL DEFAULT now());
+CREATE FUNCTION immutable_revision() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'immutable revision'; END $$;
+CREATE TRIGGER immutable_revision BEFORE UPDATE OR DELETE ON revisions FOR EACH ROW EXECUTE FUNCTION immutable_revision();

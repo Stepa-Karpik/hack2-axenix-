@@ -1,0 +1,60 @@
+# Local documentation and development notes
+/docs/
+/AGENTS.md
+/CHECKLIST.md
+
+# Local environment and secrets; root template contains placeholders only
+.env
+.env.*
+*.env
+*.env.*
+!/.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Uploaded projects and private execution data
+/uploads/
+/storage/
+/data/private/
+/data/raw/
+*.dump
+*.sql.gz
+
+# Runtime, scratch and test artifacts
+/.local/
+/work/
+/tmp/
+/temp/
+node_modules/
+.pnpm-store/
+.vite/
+dist/
+build/
+target/
+.gradle/
+coverage/
+playwright-report/
+test-results/
+*.log
+*.class
+*.jar
+!/.mvn/wrapper/maven-wrapper.jar
+*.war
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# Editor and OS state
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+*.tsbuildinfo

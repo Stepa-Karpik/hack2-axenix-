@@ -1,0 +1,45 @@
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+        env:
+          POSTGRES_DB: java_blueprints
+          POSTGRES_USER: java_blueprints
+          POSTGRES_PASSWORD: ci_database_only
+        ports: ['55433:5432']
+        options: >-
+          --health-cmd 'pg_isready -U java_blueprints -d java_blueprints'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      JB_DB_HOST: 127.0.0.1
+      JB_DB_PORT: 55433
+      JB_DB_NAME: java_blueprints
+      JB_DB_USER: java_blueprints
+      JB_DB_PASSWORD: ci_database_only
+      JB_RUNNER_ENABLED: 'false'
+      MAVEN_USER_HOME: ${{ github.workspace }}/.local/cache/maven-wrapper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - run: bash ./mvnw -B -ntp verify
+      - run: pnpm install --frozen-lockfile --store-dir .local/cache/pnpm
+      - run: pnpm typecheck
+      - run: pnpm test:web
+      - run: pnpm build

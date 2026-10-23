@@ -1,0 +1,18 @@
+* text=auto
+*.java text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.pdf binary
+mvnw text eol=lf
+mvnw.cmd text eol=crlf
+*.xml text eol=lf
+*.css text eol=lf

@@ -1,0 +1,1 @@
+{"name":"java-blueprints","private":true,"packageManager":"pnpm@11.25.0","scripts":{"dev":"pnpm --filter @java-blueprints/web dev","build":"pnpm --filter @java-blueprints/web build","typecheck":"pnpm --filter @java-blueprints/web typecheck","test:web":"pnpm --filter @java-blueprints/web test"}}
