@@ -16,7 +16,7 @@ jobs:
           POSTGRES_PASSWORD: ci_database_only
         ports: ['55433:5432']
         options: >-
-          --health-cmd 'pg_isready -U java_blueprints -d java_blueprints'
+          --health-cmd "pg_isready -U java_blueprints -d java_blueprints"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       JB_DB_HOST: 127.0.0.1
