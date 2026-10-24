@@ -54,6 +54,9 @@ public class ApiController {
             "java21-v1",
             "implementedCommands",
             List.of("replace_expression", "insert_statement", "delete_statement"),
+            "symbols",
+            map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
+                dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
             "runner",
             map("available", worker.available(), "profileId", "java21-v1"),
             "limits",
@@ -340,7 +343,7 @@ public class ApiController {
     str(b, "methodId");
     str(b, "nodeId");
     String r = str(b, "baseRevisionId");
-    w.analysis(p, r, str(b, "analysisId"));
+    var analysis = w.analysis(p, r, str(b, "analysisId"));
     if (!Set.of("semantic_edit", "preserve_behavior").contains(str(b, "intent")))
       throw new ApiError(400, "INVALID_REQUEST", "Unknown intent");
     return mutation(
@@ -349,6 +352,7 @@ public class ApiController {
         b,
         202,
         () -> {
+          w.currentAnalysis(analysis);
           String c = id();
           var proposal =
               map(

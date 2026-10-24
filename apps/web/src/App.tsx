@@ -13,6 +13,7 @@ import type {
   Report,
   Revision,
   SourceRange,
+  SymbolReference,
 } from "./types";
 import {
   canApply,
@@ -26,6 +27,8 @@ import {
 import type { Draft } from "./state";
 import CodeEditor from "./CodeEditor";
 import FlowCanvas, { kindName } from "./FlowCanvas";
+import SymbolInspector from "./SymbolInspector";
+import { currentBindings, referenceAt } from "./symbols";
 import { sampleSource } from "./sample";
 function message(e: unknown) {
   return e instanceof Error ? e.message : "Не удалось выполнить действие";
@@ -326,6 +329,7 @@ function Workbench({
   const [job, setJob] = useState<Job | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [loadingRevision, setLoadingRevision] = useState(false);
+  const [referenceId, setReferenceId] = useState<string | null>(null);
   const [expression, setExpression] = useState("");
   const [operation, setOperation] = useState("");
   const [position, setPosition] = useState("");
@@ -443,6 +447,8 @@ function Workbench({
   );
   async function openRevision(id: string, restore = false) {
     setProposal(null);
+    setReferenceId(null);
+    setRange(null);
     const openId = ++openGeneration.current;
     setLoadingRevision(true);
     try {
@@ -647,9 +653,53 @@ function Workbench({
       controllers.current.delete(controller);
     };
   }, [runId, base]);
+  const bindingsActive =
+    currentBindings(analysis, revision?.id, dirty) && !loadingRevision;
+  const references = analysis?.semantics?.references ?? [];
+  const activeReference = bindingsActive
+    ? references.find((r) => r.id === referenceId)
+    : undefined;
+  function pickReference(reference: SymbolReference) {
+    if (!bindingsActive || busy || saving || loadingRevision) return;
+    setReferenceId(reference.id);
+    setFile(reference.sourceRange.filePath);
+    setRange(reference.sourceRange);
+    setMode(narrow ? "code" : "split");
+  }
+  function jumpDeclaration(target: SourceRange) {
+    if (
+      !bindingsActive ||
+      busy ||
+      saving ||
+      loadingRevision ||
+      !Object.hasOwn(files, target.filePath)
+    )
+      return;
+    setFile(target.filePath);
+    setRange(target);
+    setSelected(null);
+    const enclosing = graph?.methods.find(
+      (m) =>
+        m.sourceRange.filePath === target.filePath &&
+        m.sourceRange.startOffset <= target.startOffset &&
+        target.endOffset <= m.sourceRange.endOffset,
+    );
+    setMethodId(enclosing?.id ?? "");
+    setMode(narrow ? "code" : "split");
+  }
   function pickNode(n: GraphNode) {
     if (stale || busy || saving || loadingRevision) return;
     setSelected(n);
+    setReferenceId(
+      bindingsActive && n.sourceRange
+        ? (references.find(
+            (r) =>
+              r.sourceRange.filePath === n.sourceRange!.filePath &&
+              r.sourceRange.startOffset >= n.sourceRange!.startOffset &&
+              r.sourceRange.endOffset <= n.sourceRange!.endOffset,
+          )?.id ?? null)
+        : null,
+    );
     const bound = editRange(n);
     setRange(bound ?? n.sourceRange);
     if (n.sourceRange) setFile(n.sourceRange.filePath);
@@ -667,8 +717,14 @@ function Workbench({
     setFiles((f) => ({ ...f, [file]: text }));
     setStatus("Есть изменения");
     setProposal(null);
+    setReferenceId(null);
+    setRange(null);
   }
   function offset(value: number) {
+    if (bindingsActive && !busy && !saving && !loadingRevision) {
+      const reference = referenceAt(references, file, value);
+      setReferenceId(reference?.id ?? null);
+    }
     if (!graph || stale || busy || saving || loadingRevision) return;
     const n = nodeAtOffset(graph.nodes, file, value);
     if (n) {
@@ -922,6 +978,24 @@ function Workbench({
   const method = graph?.methods.find((m) => m.id === methodId);
   const expressions =
     graph?.nodes.filter((n) => n.methodId === methodId && !!editRange(n)) ?? [];
+  const symbolPanel = (
+    <SymbolInspector
+      semantics={analysis?.semantics}
+      active={bindingsActive && !busy && !saving}
+      selected={activeReference}
+      file={file}
+      scope={
+        selected?.sourceRange?.filePath === file
+          ? selected.sourceRange
+          : method?.sourceRange?.filePath === file
+            ? method.sourceRange
+            : null
+      }
+      files={files}
+      onSelect={pickReference}
+      onJump={jumpDeclaration}
+    />
+  );
   return (
     <div className={"workbench " + (!inspector ? "inspector-hidden" : "")}>
       <header className="toolbar">
@@ -1005,7 +1079,11 @@ function Workbench({
               <div key={f}>
                 <button
                   className={"file-item " + (file === f ? "active" : "")}
-                  onClick={() => setFile(f)}
+                  onClick={() => {
+                    setFile(f);
+                    setReferenceId(null);
+                    setRange(null);
+                  }}
                 >
                   <Icon name="file" size={15} />
                   {f}
@@ -1031,6 +1109,7 @@ function Workbench({
                         setFile(f);
                         setRange(m.sourceRange);
                         setSelected(null);
+                        setReferenceId(null);
                       }}
                     >
                       <Icon name="method" size={12} />
@@ -1260,7 +1339,10 @@ function Workbench({
                   value={files[file] ?? ""}
                   onChange={edit}
                   range={
-                    range
+                    range &&
+                    !dirty &&
+                    analysis?.revisionId === revision?.id &&
+                    analysis?.parseStatus === "valid"
                       ? { ...range, filePath: projectId + "/" + range.filePath }
                       : null
                   }
@@ -1528,6 +1610,7 @@ function Workbench({
                   Перейти к коду <Icon name="external" size={14} />
                 </button>
               )}
+              {symbolPanel}
               {operations.length > 0 ? (
                 <div className="expression-form">
                   <label htmlFor="node-operation">Действие</label>
@@ -1650,13 +1733,20 @@ function Workbench({
               )}
             </>
           ) : (
-            <div className="inspector-placeholder">
+            <div
+              className={
+                "inspector-placeholder " +
+                (activeReference ? "symbol-selected" : "")
+              }
+            >
               <span>
                 <Icon name="workflow" size={27} />
               </span>
               <p>Выберите узел</p>
             </div>
           )}
+
+          {!selected && symbolPanel}
           <div className="inspector-section">
             <div className="panel-caption">
               ВЫРАЖЕНИЯ <span>{expressions.length}</span>

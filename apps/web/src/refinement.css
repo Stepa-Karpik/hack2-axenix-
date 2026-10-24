@@ -1315,3 +1315,76 @@ select:focus-visible,
   min-width: 0;
   box-sizing: border-box;
 }
+
+.symbol-detail,
+.symbol-target {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.symbol-detail {
+  padding: 0 0 12px;
+}
+.symbol-detail code {
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.symbol-target {
+  padding: 8px;
+  background: var(--surface-hover);
+  border-radius: 6px;
+}
+.symbol-reference-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 210px;
+  overflow: auto;
+}
+.symbol-reference-list button {
+  text-align: left;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 7px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+}
+.symbol-reference-list button.active {
+  background: var(--selected);
+}
+.symbol-reference-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.symbol-reference-list button > span:first-child {
+  color: var(--quiet);
+  font-size: 10px;
+}
+.symbol-resolution {
+  margin-left: auto;
+  color: var(--quiet);
+}
+
+.symbol-detail {
+  overflow-wrap: anywhere;
+}
+.inspector-placeholder.symbol-selected {
+  display: none;
+}
+.symbol-usage-list summary {
+  color: var(--quiet);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 7px 0;
+}
+.symbol-detail,
+.symbol-usage-list,
+.symbol-inspector > p {
+  margin-left: 18px;
+  margin-right: 18px;
+}

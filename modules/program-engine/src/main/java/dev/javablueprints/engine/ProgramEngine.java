@@ -21,8 +21,10 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.2.0";
+    public static final String VERSION = "engine-0.3.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
+    public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
+    public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
     private JavaParser parser() {
         return new JavaParser(new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21)
@@ -40,6 +42,9 @@ public final class ProgramEngine {
                 || !analysis.id().equals(command.analysisId()) || !analysis.bundleHash().equals(bundleHash(bundle))
                 || !SOURCE_MAP_VERSION.equals(analysis.sourceMapVersion()) || !VERSION.equals(analysis.analyzerVersion())) {
             throw failure("ANALYSIS_CONFLICT", "Command requires its exact revision and analysis binding");
+        }
+        if (!currentSymbolEnvironmentHash().equals(analysis.symbolEnvironmentHash())) {
+            throw failure("ANALYSIS_CONFLICT", "Symbol environment changed; analysis must be refreshed");
         }
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
@@ -224,7 +229,13 @@ public final class ProgramEngine {
     private Parsed analyze(SourceBundle bundle, String id) {
         Builder builder = new Builder(bundle, id);
         for (var entry : new TreeMap<>(bundle.files()).entrySet()) {
-            var result = parser().parse(entry.getValue());
+            com.github.javaparser.ParseResult<CompilationUnit> result;
+            try { result = parser().parse(entry.getValue()); }
+            catch (StackOverflowError tooDeep) {
+                builder.invalid = true;
+                builder.diagnostics.add(new Diagnostic(builder.id(), "error", "ANALYSIS_LIMIT", "Source exceeds parser nesting budget", null));
+                continue;
+            }
             if (!result.isSuccessful() || result.getResult().isEmpty()) {
                 builder.invalid = true;
                 result.getProblems().forEach(problem -> builder.diagnostics.add(new Diagnostic(builder.id(), "error", "PARSE_ERROR",
@@ -232,6 +243,12 @@ public final class ProgramEngine {
                 continue;
             }
             CompilationUnit unit = result.getResult().orElseThrow();
+            if (!boundedAst(unit)) {
+                builder.invalid = true;
+                builder.diagnostics.add(new Diagnostic(builder.id(), "error", "ANALYSIS_LIMIT", "Source exceeds AST depth or node budget", null));
+                continue;
+            }
+            builder.units.put(entry.getKey(), unit);
             SourceMap map = new SourceMap(entry.getKey(), entry.getValue(), unit);
             builder.maps.put(entry.getKey(), map);
             Map<Node, String> typeIds = new IdentityHashMap<>();
@@ -239,6 +256,7 @@ public final class ProgramEngine {
                 String typeId = builder.id();
                 String parentType = type.findAncestor(TypeDeclaration.class).map(typeIds::get).orElse(null);
                 typeIds.put(type, typeId);
+                builder.declarationBindings.put(type, typeId);
                 builder.declarations.add(new Declaration(typeId, entry.getKey(), type.getClass().getSimpleName(),
                         type.getNameAsString(), parentType, map.range(type)));
             }
@@ -246,31 +264,49 @@ public final class ProgramEngine {
                 BlockStmt body = callable instanceof MethodDeclaration m ? m.getBody().orElse(null)
                         : callable instanceof ConstructorDeclaration c ? c.getBody() : null;
                 String declaration = builder.id();
-                String owner = callable.findAncestor(TypeDeclaration.class).map(t -> t.getNameAsString()).orElse("<local>");
-                String fqName = unit.getPackageDeclaration().map(p -> p.getNameAsString() + ".").orElse("") + owner + "." + callable.getNameAsString();
+                String fqName = SemanticAnalyzer.ownerName(callable) + "." + callable.getNameAsString();
                 String parentType = callable.findAncestor(TypeDeclaration.class).map(typeIds::get).orElse(null);
-                builder.declarations.add(new Declaration(declaration, entry.getKey(), "method", callable.getNameAsString(), parentType, map.range(callable)));
+                builder.declarationBindings.put(callable, declaration);
+                builder.declarations.add(new Declaration(declaration, entry.getKey(), callable instanceof ConstructorDeclaration ? "constructor" : "method", callable.getNameAsString(), parentType, map.range(callable)));
                 if (body != null) builder.method(callable, body, declaration, fqName, map);
             }
         }
         if (builder.invalid) { builder.methods.clear(); builder.nodes.clear(); builder.edges.clear(); builder.bindings.clear(); }
         Graph graph = new Graph(bundle.revisionId(), id, SOURCE_MAP_VERSION, builder.methods, builder.nodes, builder.edges);
+        SemanticAnalyzer.Result semantic = builder.invalid ? new SemanticAnalyzer.Result(SemanticModel.empty(), List.of())
+                : SemanticAnalyzer.inspect(id, builder.units, node -> {
+                    CompilationUnit unit = node.findCompilationUnit().orElseThrow();
+                    String path = builder.units.entrySet().stream().filter(e -> e.getValue() == unit).findFirst().orElseThrow().getKey();
+                    return builder.maps.get(path).range(node);
+                }, builder.declarationBindings);
+        builder.declarations.addAll(semantic.declarations());
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
                 new Capability("control_flow", "partial", "Structured if/while/do/for, return/throw and unlabeled loop jumps; exceptional calls and opaque constructs are not complete CFG"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
-                new Capability("symbols", "unsupported", "No resolved call/type claims; classpath symbol analysis not implemented"),
+                new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
                 new Capability("OPT-MEMBERSHIP-001", "unsupported", "Alias, escape, dominance and effect proof not implemented"));
         Analysis analysis = new Analysis(id, bundle.revisionId(), bundleHash(bundle), VERSION, "3.28.2", "JAVA_21",
-                builder.invalid ? "invalid" : "valid", "not_requested", "partial", SOURCE_MAP_VERSION,
-                builder.diagnostics, coverage, builder.declarations, graph);
+                builder.invalid ? "invalid" : "valid", "not_requested", builder.invalid ? "not_requested" : "partial", SOURCE_MAP_VERSION,
+                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model());
         return new Parsed(analysis, builder.bindings, builder.maps);
     }
 
     private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps) {}
+    private static boolean boundedAst(Node root) {
+        record AtDepth(Node node, int depth) {}
+        Deque<AtDepth> pending = new ArrayDeque<>(); pending.push(new AtDepth(root, 0));
+        int count = 0;
+        while (!pending.isEmpty()) {
+            AtDepth current = pending.pop();
+            if (++count > 100000 || current.depth() > 128) return false;
+            for (Node child : current.node().getChildNodes()) pending.push(new AtDepth(child, current.depth() + 1));
+        }
+        return true;
+    }
     private static EngineException failure(String code, String message) { return new EngineException(code, message); }
 
     /** Problems can retain a token chain even when no compilation unit was produced. */
@@ -357,6 +393,8 @@ public final class ProgramEngine {
         private final Map<String, Node> bindings = new HashMap<>();
         private final Map<Node, String> astIds = new IdentityHashMap<>();
         private final Map<String, SourceMap> maps = new HashMap<>();
+        private final Map<String, CompilationUnit> units = new TreeMap<>();
+        private final Map<Node, String> declarationBindings = new IdentityHashMap<>();
         private String methodId;
         private String normalExit;
         private String exceptionalExit;

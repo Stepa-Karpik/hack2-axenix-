@@ -81,8 +81,18 @@ export default function CodeEditor({
   );
   const onOffsetRef = useRef(onOffset);
   onOffsetRef.current = onOffset;
-  useEffect(() => {
-    if (!editor.current || !range || range.filePath !== path) return;
+  const highlight = useRef(() => {});
+  highlight.current = () => {
+    decorations.current?.clear();
+    const model = editor.current?.getModel();
+    if (
+      !editor.current ||
+      !model ||
+      !range ||
+      range.filePath !== path ||
+      model.uri.toString() !== monaco.Uri.parse(path).toString()
+    )
+      return;
     const r = new monaco.Range(
       range.startLine,
       range.startColumn,
@@ -93,6 +103,9 @@ export default function CodeEditor({
     decorations.current?.set([
       { range: r, options: { isWholeLine: false, className: "code-binding" } },
     ]);
+  };
+  useEffect(() => {
+    highlight.current();
   }, [range, path]);
   useEffect(() => {
     const model = editor.current?.getModel();
@@ -140,6 +153,8 @@ export default function CodeEditor({
       onMount={(instance) => {
         editor.current = instance;
         decorations.current = instance.createDecorationsCollection();
+        instance.onDidChangeModel(() => highlight.current());
+        highlight.current();
         instance.onDidChangeCursorPosition((e) => {
           const model = instance.getModel();
           if (model) onOffsetRef.current(model.getOffsetAt(e.position));

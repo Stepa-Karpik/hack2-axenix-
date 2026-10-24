@@ -589,6 +589,169 @@ class WorkspaceIntegrationTest {
             .get("analyzerVersion"));
   }
 
+  Map<String, Object> analyzeRevision(String p, String revision) throws Exception {
+    var queued = post("/projects/" + p + "/revisions/" + revision + "/analysis", Map.of(), id(), null);
+    assertEquals(202, queued.status, queued.body.toString());
+    assertEquals("succeeded", waitJob(p, str(obj(queued), "id")).get("status"));
+    var reply = send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null);
+    assertEquals(200, reply.status, reply.body.toString());
+    return obj(reply);
+  }
+
+  @Test
+  void semanticModelSurvivesDatabaseAndHttpWithAnalysisScopedBindings() throws Exception {
+    String p = project();
+    String main = "// 😀\npackage sample; public class Main { int value=1; int parameter(int value){return this.value + value;} int local(){int value=3;return value;} int call(){return Util.twice(value);} public static void main(String[] args){System.out.println(new Main().call());}}";
+    String util = "package sample; public class Util {public static int twice(int input){return input*2;}}";
+    var texts = Map.of("sample/Main.java", main, "sample/Util.java", util);
+    var save = post("/projects/" + p + "/revisions", map("files", texts.entrySet().stream().map(e -> map("path", e.getKey(), "content", e.getValue())).toList(), "intent", "semantic_edit"), id(), "empty");
+    assertEquals(201, save.status, save.body.toString());
+    String revision = str(obj(save), "id");
+    var a = analyzeRevision(p, revision);
+    assertEquals(dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash(), a.get("symbolEnvironmentHash"));
+    var model = (Map<String, Object>) a.get("semantics");
+    assertEquals(a.get("symbolEnvironmentHash"), ((Map<?, ?>) model.get("environment")).get("environmentHash"));
+    var symbols = (List<Map<String, Object>>) model.get("symbols");
+    var references = (List<Map<String, Object>>) model.get("references");
+    assertFalse(symbols.isEmpty());
+    assertFalse(references.isEmpty());
+    var ids = new HashSet<String>();
+    symbols.forEach(s -> assertTrue(ids.add(str(s, "id")), "Distinct symbol IDs"));
+    var referenceIds = new HashSet<String>();
+    for (var symbol : symbols) {
+      var range = (Map<String, Object>) symbol.get("sourceRange");
+      if (Boolean.TRUE.equals(symbol.get("external"))) {
+        assertNull(range);
+        assertNotNull(symbol.get("externalKey"));
+      } else {
+        assertNotNull(range);
+        String text = texts.get(str(range, "filePath"));
+        assertNotNull(text);
+        String slice = text.substring(((Number) range.get("startOffset")).intValue(), ((Number) range.get("endOffset")).intValue());
+        assertTrue(slice.contains(str(symbol, "name")), symbol.toString());
+      }
+    }
+    var values = symbols.stream().filter(s -> "value".equals(s.get("name")) && !Boolean.TRUE.equals(s.get("external"))).toList();
+    assertEquals(3, values.size(), values.toString());
+    assertEquals(3, values.stream().map(s -> s.get("id")).distinct().count());
+    for (var ref : references) {
+      assertTrue(referenceIds.add(str(ref, "id")), "Distinct reference IDs");
+      assertTrue(ids.containsAll((List<String>) ref.get("targetIds")), "Every target belongs to this semantic model");
+      if (ref.get("enclosingCallableId") != null)
+        assertTrue(ids.contains(ref.get("enclosingCallableId")), "Callable belongs to this semantic model");
+      assertTrue(((List<?>) ref.get("runtimeTargetIds")).isEmpty(), "No closed runtime dispatch claim");
+      var range = (Map<String, Object>) ref.get("sourceRange");
+      assertNotNull(texts.get(str(range, "filePath")));
+      assertTrue(((Number) range.get("endOffset")).intValue() > ((Number) range.get("startOffset")).intValue());
+    }
+    // this.field and the parameter/local return occurrences must bind to separate declarations.
+    var targets = new HashSet<Object>();
+    for (int offset : List.of(main.indexOf("this.value") + 5, main.indexOf("+ value") + 2, main.indexOf("return value") + 7)) {
+      var ref = references.stream().filter(r -> {
+        var range = (Map<?, ?>) r.get("sourceRange");
+        return "sample/Main.java".equals(range.get("filePath"))
+            && ((Number) range.get("startOffset")).intValue() <= offset
+            && ((Number) range.get("endOffset")).intValue() > offset
+            && "value".equals(r.get("name"));
+      }).findFirst().orElseThrow();
+      assertEquals("exact", ref.get("resolution"), ref.toString());
+      assertEquals(1, ((List<?>) ref.get("targetIds")).size());
+      targets.add(((List<?>) ref.get("targetIds")).getFirst());
+    }
+    assertEquals(3, targets.size());
+    assertTrue(references.stream().anyMatch(r -> "twice".equals(r.get("name")) && "exact".equals(r.get("resolution"))));
+    String aid = str(a, "id");
+    assertEquals(a, w.resource(p, aid, "analysis"));
+    assertEquals(a, obj(send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis?analysisId=" + aid, null, null, null, null)));
+    var mapped = w.convert(a, dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertEquals(model, w.decode(w.encode(mapped.semantics())));
+    var next = analyzeRevision(p, revision);
+    assertNotEquals(aid, next.get("id"));
+    var nextSymbols = (List<Map<String, Object>>) ((Map<?, ?>) next.get("semantics")).get("symbols");
+    assertTrue(nextSymbols.stream().noneMatch(s -> ids.contains(s.get("id"))), "Bindings are analysis scoped");
+    String foreign = project();
+    String foreignRevision = str(obj(post("/projects/" + foreign + "/revisions", sources(code), id(), "empty")), "id");
+    assertEquals(404, send("GET", "/projects/" + foreign + "/revisions/" + foreignRevision + "/analysis?analysisId=" + aid, null, null, null, null).status);
+  }
+
+  @Test
+  void symbolEnvironmentFencesCacheAndCommandsWhileHistoricalJsonRemainsReadable() throws Exception {
+    String p = project();
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(code), id(), "empty")), "id");
+    var fixture = new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    var original = w.decode(w.encode(fixture));
+    for (String variant : List.of("stale_environment", "missing_environment", "old_engine", "old_map")) {
+      var historical = new LinkedHashMap<>(original);
+      String aid = id();
+      historical.put("id", aid);
+      if (variant.equals("stale_environment")) historical.put("symbolEnvironmentHash", "stale-environment");
+      if (variant.equals("missing_environment")) { historical.remove("symbolEnvironmentHash"); historical.remove("semantics"); }
+      if (variant.equals("old_engine")) historical.put("analyzerVersion", "engine-0.2.0");
+      if (variant.equals("old_map")) historical.put("sourceMapVersion", "old-map");
+      w.putResource(p, aid, "analysis", historical);
+      assertEquals(404, send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null).status);
+      assertEquals(historical, obj(send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis?analysisId=" + aid, null, null, null, null)));
+      var edit = map("baseRevisionId", revision, "analysisId", aid, "methodId", "m", "nodeId", "n", "operation", "delete_statement", "payload", Map.of(), "intent", "semantic_edit");
+      assertEquals(409, post("/projects/" + p + "/changes", edit, id(), null).status);
+      if (variant.equals("missing_environment")) {
+        var old = w.convert(historical, dev.javablueprints.engine.EngineModel.Analysis.class);
+        assertNull(old.symbolEnvironmentHash());
+        assertNull(old.semantics().environment());
+        assertTrue(old.semantics().symbols().isEmpty());
+        assertTrue(old.semantics().references().isEmpty());
+      }
+    }
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    var current = analyzeRevision(p, revision);
+    assertEquals(dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash(), current.get("symbolEnvironmentHash"));
+    // A newer stale-environment record cannot shadow an older compatible analysis.
+    var stale = new LinkedHashMap<>(original);
+    stale.put("id", id()); stale.put("symbolEnvironmentHash", "stale-environment");
+    w.putResource(p, str(stale, "id"), "analysis", stale);
+    assertEquals(current.get("id"), w.analysis(p, revision, null).get("id"));
+    var capabilities = obj(send("GET", "/capabilities", null, null, null, null));
+    assertEquals("partial", ((Map<?, ?>) capabilities.get("symbols")).get("status"));
+    assertEquals("unknown", ((Map<?, ?>) capabilities.get("symbols")).get("runtimeDispatch"));
+  }
+
+  @Test
+  void invalidParseHasNoFalselyResolvedSemanticBindings() throws Exception {
+    String p = project();
+    String source = "class Main { int value=1; void broken( {";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var analysis = analyzeRevision(p, revision);
+    assertEquals("invalid", analysis.get("parseStatus"));
+    var model = (Map<?, ?>) analysis.get("semantics");
+    assertTrue(((List<?>) model.get("references")).isEmpty());
+    assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
+  }
+
+  @Test
+  void acceptedHistoricalChangeReplaysAfterEnvironmentUpgradeWithoutNewWork() throws Exception {
+    String p = project();
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(code), id(), "empty")), "id");
+    var fixture = new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    var old = w.decode(w.encode(fixture));
+    old.put("symbolEnvironmentHash", "prior-server-environment");
+    w.putResource(p, fixture.id(), "analysis", old);
+    String key = id(), proposalId = id(), jobId = id();
+    var body = map("baseRevisionId", revision, "analysisId", fixture.id(), "methodId", "m", "nodeId", "n", "operation", "delete_statement", "payload", Map.of(), "intent", "semantic_edit");
+    // Seed the durable state produced by a prior server environment, without mutating any
+    // immutable analysis or changing the running JVM's actual environment fingerprint.
+    var accepted = w.idem(p + ":change", key, body, 202, () -> {
+      w.db.update("INSERT INTO jobs(id,project_id,type,status,input)VALUES(?,?,'change','failed',?::jsonb)", uuid(jobId), uuid(p), w.encode(body));
+      var proposal = map("id", proposalId, "proposalId", proposalId, "projectId", p, "jobId", jobId, "baseRevisionId", revision, "status", "rejected", "command", body);
+      w.putResource(p, proposalId, "proposal", proposal);
+      return proposal;
+    });
+    var replay = post("/projects/" + p + "/changes", body, key, null);
+    assertEquals(202, replay.status, replay.body.toString());
+    assertEquals(accepted, obj(replay));
+    assertEquals(409, post("/projects/" + p + "/changes", body, id(), null).status);
+    assertEquals(1, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    assertEquals(1, w.db.queryForObject("SELECT count(*) FROM resources WHERE project_id=? AND kind='proposal'", Integer.class, uuid(p)));
+  }
+
   @Test
   void runnerIngressRejectsInvalidIdentifiersArgumentsAndPathsBeforeQueueing() throws Exception {
     String p = project();

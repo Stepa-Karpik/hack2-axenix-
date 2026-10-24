@@ -68,8 +68,43 @@ public final class EngineModel {
                            String parserVersion, String languageLevel, String parseStatus,
                            String compileStatus, String symbolStatus, String sourceMapVersion,
                            List<Diagnostic> diagnostics, List<Capability> coverage,
-                           List<Declaration> declarations, Graph graph) {
-        public Analysis { diagnostics = List.copyOf(diagnostics); coverage = List.copyOf(coverage); declarations = List.copyOf(declarations); }
+                           List<Declaration> declarations, Graph graph, String symbolEnvironmentHash,
+                           SemanticModel semantics) {
+        public Analysis {
+            diagnostics = List.copyOf(diagnostics); coverage = List.copyOf(coverage); declarations = List.copyOf(declarations);
+            semantics = semantics == null ? SemanticModel.empty() : semantics;
+        }
+        public Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
+                        String parserVersion, String languageLevel, String parseStatus,
+                        String compileStatus, String symbolStatus, String sourceMapVersion,
+                        List<Diagnostic> diagnostics, List<Capability> coverage,
+                        List<Declaration> declarations, Graph graph) {
+            this(id, revisionId, bundleHash, analyzerVersion, parserVersion, languageLevel, parseStatus,
+                    compileStatus, symbolStatus, sourceMapVersion, diagnostics, coverage, declarations, graph, null, null);
+        }
+    }
+    public record SymbolEnvironment(String schemaVersion, String resolverVersion, String configVersion,
+                                    String jdkVersion, String jdkVendor, String environmentHash) {}
+    public record SemanticModel(String schemaVersion, SymbolEnvironment environment, List<Symbol> symbols,
+                                List<Reference> references, List<String> limitations) {
+        public SemanticModel {
+            symbols = symbols == null ? List.of() : List.copyOf(symbols);
+            references = references == null ? List.of() : List.copyOf(references);
+            limitations = limitations == null ? List.of() : List.copyOf(limitations);
+        }
+        public static SemanticModel empty() { return new SemanticModel(null, null, List.of(), List.of(), List.of()); }
+    }
+    public record Symbol(String id, String declarationId, String kind, String name, String ownerId,
+                         String qualifiedName, String signature, String declaredType, String resolvedType,
+                         boolean external, String externalKey, SourceRange sourceRange) {}
+    /** targetIds select compile-time declarations; runtimeTargetIds never imply a closed dispatch world. */
+    public record Reference(String id, String kind, String name, SourceRange sourceRange,
+                            String enclosingCallableId, String resolution, List<String> targetIds,
+                            String resolvedType, String dispatch, List<String> runtimeTargetIds, String reason) {
+        public Reference {
+            targetIds = targetIds == null ? List.of() : List.copyOf(targetIds);
+            runtimeTargetIds = runtimeTargetIds == null ? List.of() : List.copyOf(runtimeTargetIds);
+        }
     }
     /** Typed operation payloads; no untyped AST or arbitrary graph mutation crosses this boundary. */
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,

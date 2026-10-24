@@ -81,6 +81,8 @@ export interface Analysis {
   diagnostics: Diagnostic[];
   graph: Graph | null;
   sourceMapVersion: string;
+  symbolEnvironmentHash?: string;
+  semantics?: SemanticModel | null;
 }
 export interface Execution {
   outcome: string;
@@ -161,4 +163,46 @@ export interface Layout {
   positions: { nodeId: string; x: number; y: number }[];
   collapsedNodeIds: string[];
   viewport: { x: number; y: number; zoom: number };
+}
+
+export interface SymbolDefinition {
+  id: string;
+  declarationId?: string | null;
+  kind: string;
+  name: string;
+  ownerId?: string | null;
+  qualifiedName?: string | null;
+  signature?: string | null;
+  declaredType?: string | null;
+  resolvedType?: string | null;
+  external: boolean;
+  externalKey?: string | null;
+  sourceRange: SourceRange | null;
+}
+export interface SymbolReference {
+  id: string;
+  kind: string;
+  name: string;
+  sourceRange: SourceRange;
+  enclosingCallableId?: string | null;
+  resolution: string;
+  targetIds: string[];
+  resolvedType?: string | null;
+  dispatch: string;
+  runtimeTargetIds: string[];
+  reason?: string | null;
+}
+export interface SemanticModel {
+  schemaVersion: string;
+  environment: {
+    schemaVersion: string;
+    resolverVersion: string;
+    configVersion: string;
+    jdkVersion: string;
+    jdkVendor: string;
+    environmentHash: string;
+  };
+  symbols: SymbolDefinition[];
+  references: SymbolReference[];
+  limitations: string[];
 }

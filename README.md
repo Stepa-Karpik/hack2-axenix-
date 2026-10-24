@@ -1,6 +1,6 @@
 # Java Blueprints
 
-A local Java workbench that connects source code to a structured control-flow graph. Import a program, inspect a method, edit expressions or statements, review the generated diff, and compile or compare immutable revisions in isolated Java containers.
+A local Java workbench that connects source code to a structured control-flow graph and source symbol bindings. Import a program, navigate to declarations, edit expressions or statements, review the generated diff, and compile or compare immutable revisions in isolated Java containers.
 
 ## Preview
 
@@ -11,7 +11,7 @@ A local Java workbench that connects source code to a structured control-flow gr
 ## Workflow
 
 1. Create a project and import one or more `.java` files, then edit the imported source in the editor.
-2. Save and analyze the revision. Selecting a graph node reveals its exact source range and supported edit fields.
+2. Save and analyze the revision. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
 3. Change an expression or condition, insert a statement, or delete a supported statement from the graph. Empty methods accept an insertion at their entry node. Condition and loop templates provide editable starting points. The original head stays intact while the candidate compiles.
 4. Review the diff. A semantic change can be applied explicitly after compilation. A change marked as preserving behavior additionally requires a matching comparison for the exact two revisions.
 5. Run a single console input, or compare a versioned test suite. Download the selected canonical Java snapshot as a ZIP archive.
@@ -36,7 +36,7 @@ flowchart LR
 | --- | --- | --- |
 | Web | `apps/web` | Monaco editor, React Flow graph, proposals and reports |
 | API | `apps/server` | Local sessions, revision history, CAS, artifacts and durable jobs |
-| Program engine | `modules/program-engine` | Parsing, source bindings, graph construction and typed edits |
+| Program engine | `modules/program-engine` | Parsing, source/JDK symbol resolution, graph construction and typed edits |
 | Verification | `modules/verification` | Runner protocol and repeated comparison |
 | Runner controller | `apps/runner-controller` | Bounded compiler/runtime containers and cleanup |
 | Deployment | `infra` | Pinned base images and Compose networks |
@@ -110,7 +110,7 @@ pnpm test:web
 pnpm build
 ```
 
-The Java command runs parser/graph/edit tests, comparison tests and real PostgreSQL HTTP integration tests. Each backend integration run creates its own randomly named schema and removes that schema afterward. It checks structural edit anchors and source preservation, concurrent head updates, idempotent restoration with provenance, immutable storage, invalid drafts, strict import normalization, original artifact bytes, ZIP export content, scoped IDs, CSRF/origin checks, layout bindings and fenced job publication.
+The Java command runs parser/graph/edit tests, semantic binding tests, comparison tests and real PostgreSQL HTTP integration tests. Each backend integration run creates its own randomly named schema and removes that schema afterward. It checks lexical scope and shadowing, bounded overload resolution, source/JDK targets, analysis environment invalidation, structural edit anchors and source preservation, concurrent head updates, idempotent restoration and replay, immutable storage, invalid drafts, strict import normalization, original artifact bytes, ZIP export content, scoped IDs, CSRF/origin checks, layout bindings and fenced job publication.
 
 Docker execution integration tests are opt-in through `JB_RUNNER_INTEGRATION=true` and require a Linux controller. A Windows API/client can call that controller over authenticated HTTP; the controller's Docker subprocesses must run on Linux. Tests cover actual compilation, exact UTF-8 streams, three observations per side, intentional mismatches, compilation errors, timeout, output limits, cancellation and sandbox boundaries. Ordinary `test.ps1` does not claim to run those opt-in checks. See [the runner integration commands](infra/runner/README.md#repeat-the-execution-integration-checks) for the complete controller setup and invocation.
 
@@ -122,7 +122,7 @@ pnpm --filter @java-blueprints/web exec playwright install chromium
 pnpm --filter @java-blueprints/web exec playwright test
 ```
 
-These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
+These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, declaration navigation across files, stale semantic bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
 
 ## Data and API
 
@@ -131,6 +131,8 @@ The API lives under `/api/v1`. `GET /session` establishes a local cookie and ret
 Revisions retain canonical UTF-8 source with LF line endings and a SHA-256 bundle hash. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
 
 Graph nodes advertise `allowedOperations` and `insertionPositions`. The change endpoint accepts `replace_expression`, `insert_statement` and `delete_statement` with operation-specific payloads. Insertions use a bound statement or method entry, never a client-supplied source offset. Compilation validates the complete candidate before it becomes applicable. `POST /projects/{p}/revisions/{r}/restore` creates a new revision with `sourceRevisionId`, checks the current head, and starts a fresh analysis. Restoration does not inherit a previous revision's verification result.
+
+Analyses include a `semantics` model with analysis-scoped symbols and references, plus a `symbolEnvironmentHash` identifying the resolver configuration and JDK runtime. Source targets carry declaration-name ranges; JDK targets carry external keys without fabricated source locations. Each reference records an exact compile-time target, bounded candidates, or an unresolved reason. Virtual calls do not claim a unique runtime target. Updating the engine or resolver environment requires a fresh analysis for new edits; historical analysis and accepted idempotent responses remain readable.
 
 A comparison means **matched on the recorded tests**, not a proof of equivalence. It requires a nonempty suite, complete observations and stable exact stdout/stderr/exit results. Equal timeouts, OOM, truncated output, cancellation or unavailable execution never count as a match. A standalone run does not satisfy the verification gate for a behavior-preserving change.
 
@@ -158,6 +160,8 @@ The implemented slice supports source import/save/history/restore, JavaParser-ba
 
 Structural edits are limited to supported methods and actual block statement lists. A statement with internal comments cannot be deleted through the graph; adjacent comments and untouched source are retained. Opaque constructs and expression fragments are not structural edit anchors. Historical restoration is explicit; a general undo/redo stack and statement wrapping or reordering are not implemented.
 
-The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution is unsupported, and complexity is reported as unknown. General symbol renaming, structural extraction, class decomposition, automatic optimization, method harnesses and benchmarking are not implemented. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
+The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution covers a bounded subset of source classes/interfaces, fields, parameters, local variables, methods, constructors and platform JDK references. It uses only the in-memory source bundle and the platform classloader; application dependencies and filesystem classpaths are not searched. Local/anonymous classes, lambdas, unsupported type domains and unresolved dependencies can produce partial results. Overload inference is bounded, and access-control, alias, escape, effect and dominance proofs are not provided. Analysis budgets can reject oversized or deeply nested ASTs while retaining the source.
+
+Complexity remains unknown. General symbol renaming, structural extraction, class decomposition, automatic optimization, method harnesses and benchmarking are not implemented. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
 
 This deployment is a single-user local prototype. It has local session/CSRF controls, not public multi-tenant authentication. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.

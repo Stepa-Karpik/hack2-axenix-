@@ -425,17 +425,26 @@ public class Workspace {
           db.queryForList(
               "SELECT data::text FROM resources WHERE project_id=? AND kind='analysis' AND"
                   + " data->>'revisionId'=? AND data->>'analyzerVersion'=? AND"
-                  + " data->>'sourceMapVersion'=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                  + " data->>'sourceMapVersion'=? AND data->>'symbolEnvironmentHash'=?"
+                  + " ORDER BY created_at DESC,id DESC LIMIT 1",
               uuid(p),
               r,
               dev.javablueprints.engine.ProgramEngine.VERSION,
-              dev.javablueprints.engine.ProgramEngine.SOURCE_MAP_VERSION);
+              dev.javablueprints.engine.ProgramEngine.SOURCE_MAP_VERSION,
+              dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash());
       if (rows.isEmpty()) throw new ApiError(404, "ANALYSIS_NOT_READY", "No analysis for revision");
       result = decode(rows.getFirst().get("data").toString());
     }
     if (!r.equals(result.get("revisionId")))
       throw new ApiError(409, "ANALYSIS_CONFLICT", "Analysis belongs to another revision");
     return result;
+  }
+
+  void currentAnalysis(Map<String, Object> analysis) {
+    if (!dev.javablueprints.engine.ProgramEngine.VERSION.equals(analysis.get("analyzerVersion"))
+        || !dev.javablueprints.engine.ProgramEngine.SOURCE_MAP_VERSION.equals(analysis.get("sourceMapVersion"))
+        || !dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash().equals(analysis.get("symbolEnvironmentHash")))
+      throw new ApiError(409, "ANALYSIS_CONFLICT", "Command requires the current engine and symbol environment");
   }
 
   Map<String, Object> enqueue(String p, String type, Map<String, Object> input) {
