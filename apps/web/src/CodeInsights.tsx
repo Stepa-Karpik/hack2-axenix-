@@ -13,6 +13,7 @@ type Tab = (typeof tabs)[number][0];
 export default function CodeInsights({
   analysis,
   methodId,
+  file,
   focusKey,
   current,
   children,
@@ -22,6 +23,7 @@ export default function CodeInsights({
 }: {
   analysis: Analysis | null;
   methodId: string;
+  file: string;
   focusKey: number;
   current: boolean;
   children: ReactNode;
@@ -34,8 +36,15 @@ export default function CodeInsights({
   const quality = analysis?.quality;
   const metric = quality?.methods.find((m) => m.methodId === methodId);
   const method = analysis?.graph?.methods.find((m) => m.id === methodId);
-  const diagnostics = analysis?.diagnostics ?? [];
-  const optimizations = analysis?.optimizations ?? [];
+  const diagnostics = (analysis?.diagnostics ?? []).filter(
+    (item) => !item.sourceRange || item.sourceRange.filePath === file,
+  );
+  const optimizations = (analysis?.optimizations ?? []).filter(
+    (item) => item.sourceRange.filePath === file,
+  );
+  const findings = (quality?.findings ?? []).filter(
+    (item) => item.sourceRange.filePath === file,
+  );
   useEffect(() => {
     if (focusKey > 0) setTab("node");
   }, [focusKey]);
@@ -46,10 +55,13 @@ export default function CodeInsights({
     key === "problems"
       ? diagnostics.length
       : key === "recommendations"
-        ? (quality?.findings.length ?? 0) + optimizations.length
+        ? findings.length + optimizations.length
         : 0;
   return (
-    <div className="code-insights">
+    <div className="code-insights" data-source-file={file}>
+      <div className="small quiet" title={file}>
+        {file || "Выберите файл"}
+      </div>
       <div className="insight-tabs" role="tablist" aria-label="Раздел анализа">
         {tabs.map(([key, label], index) => (
           <button
@@ -145,7 +157,7 @@ export default function CodeInsights({
       >
         {!quality ? (
           <p className="insight-empty">Нужен актуальный анализ</p>
-        ) : quality.findings.length === 0 && optimizations.length === 0 ? (
+        ) : findings.length === 0 && optimizations.length === 0 ? (
           <p className="insight-empty">
             <Check size={16} /> Рекомендаций нет
           </p>
@@ -184,7 +196,7 @@ export default function CodeInsights({
                   </button>
                 </article>
               ))}
-              {quality.findings.map((f) => (
+              {findings.map((f) => (
                 <article
                   className="insight-finding"
                   key={f.id}

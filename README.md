@@ -39,6 +39,10 @@ Workspace preferences are independent of program revisions and graph-node positi
 
 Each method remembers its pan, zoom and unambiguous manually moved nodes across source saves and reanalysis. Automatic nodes reflow around retained positions after structural edits. The graph displays its source revision; the Console identifies output from an older revision even while that run is still waiting for input.
 
+Selecting a file also selects its graph and analysis. The Console and Tests panels retain separate latest results for each launch file; switching tabs or reloading restores the corresponding results. Their file, launch class and source revision remain visible. The browser stores result IDs only and rechecks their immutable source binding through the API. An ambiguous launch class exposes its report separately without assigning it to the open file.
+
+Java compilation checks the complete source bundle. A compiler error in another file can prevent the selected program and all of its tests from starting; the diagnostic filename identifies the broken source, not the launch class.
+
 **Share** opens project access settings and copies its URL. Owners can switch account projects between private and public access and grant friends viewer or editor roles. Collaborator presence and simultaneous collaborative editing are not implemented.
 
 Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
@@ -74,6 +78,10 @@ Interactive runs have a 120-second runtime limit, a 1 MiB combined output limit 
 The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
 
 ## Test inputs
+
+Run and comparison dialogs check the selected snapshots for known public-type/filename mismatches before submitting a job. Open the reported file to rename it explicitly; existing files are never overwritten. Compilation remains authoritative for other Java errors. Failed comparison reports retain their original diagnostics and provide source navigation and a retry action; editing the project does not rewrite an old result.
+
+The launch-class suggestion follows the open Java file. Without a prepared change, the original snapshot is suggested when its loaded sources have a matching launch hint; otherwise the current revision is used on both sides. Add expected outputs to check its results, or select distinct snapshots to compare behavior between versions. The original revision remains selectable outside the recent history page.
 
 The comparison dialog opens with a form editor. Add, name or remove cases, enter standard input, and add arguments as separate strings. An empty argument remains a real argument. Enable expected stdout, stderr or an exit code when a case has a known result; an enabled empty output expectation checks for exactly empty output.
 

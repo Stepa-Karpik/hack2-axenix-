@@ -1560,6 +1560,22 @@ class WorkspaceIntegrationTest {
   }
 
   @Test
+  void launchMetadataUsesImmutableSuiteAndNeverTheCompilerErrorFile() throws Exception {
+    String p = project(), foreign = project(), revision = id(), suite = id();
+    w.putResource(p, suite, "suite", map("entryPoint", "TaskForge", "cases", List.of()));
+    var run = w.enqueue(p, "run", map("revisionId", revision, "entryPoint", "TaskForge", "stdinUtf8", "private input"));
+    assertEquals(revision, run.get("revisionId"));
+    assertEquals("TaskForge", run.get("entryPoint"));
+    assertFalse(run.containsKey("input"));
+    var comparison = w.enqueue(p, "compare", map("candidateRevisionId", revision, "suiteVersionId", suite));
+    assertEquals(revision, comparison.get("revisionId"));
+    assertEquals("TaskForge", comparison.get("entryPoint"));
+    var crossProject = w.enqueue(foreign, "compare", map("candidateRevisionId", revision, "suiteVersionId", suite));
+    assertNull(crossProject.get("entryPoint"));
+    assertNull(w.enqueue(p, "analysis", map("revisionId", revision)).get("entryPoint"));
+  }
+
+  @Test
   void durableProgressIsScopedToTheLiveAttemptAndNeverPublishesVerification() throws Exception {
     String p=project(), foreign=project(), job=id(), attempt=id();
     w.db.update("INSERT INTO jobs(id,project_id,type,status,input,attempt_id,lease_until) VALUES(?,?,'compare','running','{}'::jsonb,?,now()+interval '45 seconds')",uuid(job),uuid(p),uuid(attempt));

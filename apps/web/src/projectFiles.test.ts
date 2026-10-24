@@ -10,7 +10,81 @@ import {
   matchingMethod,
   remapModels,
   publicJavaType,
+  javaFilenameIssues,
+  javaEntryHint,
 } from "./projectFiles.ts";
+test("Java filename checks cover the whole snapshot, packages and occupied rename targets", () => {
+  const files = [
+    {
+      path: "src/abc.java",
+      canonicalText: "package app; public class Main {}",
+    },
+    {
+      path: "src/Main.java",
+      canonicalText: "package app; public class Main {}",
+    },
+    { path: "notes.txt", canonicalText: "public class Ignore {}" },
+    {
+      path: "Nested.java",
+      canonicalText: "class Outer {public class Nested {}}",
+    },
+  ];
+  assert.deepEqual(javaFilenameIssues(files), [
+    {
+      path: "src/abc.java",
+      type: "Main",
+      target: "src/Main.java",
+      targetOccupied: true,
+    },
+  ]);
+  assert.equal(
+    javaFilenameIssues([files[0]], ["src/Main.java/empty"])[0].targetOccupied,
+    true,
+  );
+  assert.equal(javaFilenameIssues([files[0]])[0].targetOccupied, false);
+});
+test("entry hints use the declared public name rather than a mismatched filename", () => {
+  assert.equal(
+    javaEntryHint({
+      path: "Main.java",
+      canonicalText:
+        'public class Main {public static void main(String[] args){System.out.println("\\u007b");}}',
+    }),
+    "Main",
+  );
+  assert.equal(
+    javaEntryHint({
+      path: "Main.java",
+      canonicalText:
+        "// package wrong;\npackage app; public class Main {public static void main(String[] args){}}",
+    }),
+    "app.Main",
+  );
+  assert.equal(
+    javaEntryHint({
+      path: "abc.java",
+      canonicalText:
+        "package app; public class Main {public static void main(String[] args){}}",
+    }),
+    "app.Main",
+  );
+  assert.equal(
+    javaEntryHint({
+      path: "TaskForge.java",
+      canonicalText:
+        "public class TaskForge { public static void helper() {} }",
+    }),
+    undefined,
+  );
+  assert.equal(
+    javaEntryHint({
+      path: "notes.txt",
+      canonicalText:
+        "public class Main {public static void main(String[] args){}}",
+    }),
+    undefined,
+  );
+});
 test("filename hint detects only a real top-level public type", () => {
   assert.equal(
     publicJavaType(

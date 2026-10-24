@@ -7,7 +7,13 @@ import FriendsPage from "./FriendsPage";
 import SingleRunOutput from "./SingleRunOutput";
 import TestProgressView from "./TestProgressView";
 import CodeInsights from "./CodeInsights";
+import useFileRuns from "./useFileRuns";
 import TestCasesEditor from "./TestCasesEditor";
+import {
+  CompileErrorHelp,
+  SourceFilenameIssues,
+  useRunSources,
+} from "./RunSourceCheck";
 import { parseCases } from "./testCases";
 import { readPrepared, writePrepared, clearPrepared } from "./preparedProposal";
 import { useProjectList } from "./useProjectList";
@@ -71,6 +77,8 @@ import {
   matchingMethod,
   remapModels,
   publicJavaType,
+  javaFilenameIssues,
+  javaEntryHint,
 } from "./projectFiles";
 import type { FileSnapshot } from "./projectFiles";
 import FlowCanvas, {
@@ -480,8 +488,20 @@ function Workbench({
   const [file, setFile] = useState(initialView.file ?? "");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
-  const [methodId, setMethodId] = useState(initialView.methodId ?? "");
-  const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [requestedMethodId, setMethodId] = useState(initialView.methodId ?? "");
+  const fileMethods =
+    graph?.methods.filter((m) => m.sourceRange.filePath === file) ?? [];
+  const methodId =
+    fileMethods.find((m) => m.id === requestedMethodId)?.id ??
+    matchingMethod(fileMethods, methodSelections.current[file])?.id ??
+    fileMethods[0]?.id ??
+    "";
+  const [selectedNode, setSelected] = useState<GraphNode | null>(null);
+  const selected =
+    selectedNode?.methodId === methodId &&
+    (!selectedNode.sourceRange || selectedNode.sourceRange.filePath === file)
+      ? selectedNode
+      : null;
   const [inspectorFocus, setInspectorFocus] = useState(0);
   const [range, setRange] = useState<
     (SourceRange & { diagnosticRevisionId?: string }) | null
@@ -524,6 +544,11 @@ function Workbench({
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<"run" | "compare" | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const fileRuns = useFileRuns(projectId, file, job);
+  const runJob = fileRuns.run;
+  const testJob = fileRuns.comparison;
+  const runReport = runJob?.result?.report;
+  const testReport = testJob?.result?.report;
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const proposalEpoch = useRef(0);
   const restoredProposal = useRef<string | null>(null);
@@ -578,6 +603,17 @@ function Workbench({
       methodSelections.current[m.sourceRange.filePath] = methodIdentity(m);
     }
   }, [graph, methodId]);
+  useEffect(() => {
+    if (selectedNode && selectedNode.methodId !== methodId) setSelected(null);
+    setReferenceId((id) =>
+      analysis?.semantics?.references.some(
+        (r) => r.id === id && r.sourceRange.filePath === file,
+      )
+        ? id
+        : null,
+    );
+    setRange((old) => (old?.filePath === file ? old : null));
+  }, [file, methodId]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const dirty = revision
@@ -799,6 +835,7 @@ function Workbench({
       setSelected(null);
       setRange(null);
       void analyze(r);
+      return r;
     } catch (e) {
       if (mounted.current && openId === openGeneration.current)
         setError(message(e));
@@ -806,6 +843,32 @@ function Workbench({
       if (mounted.current && openId === openGeneration.current)
         setLoadingRevision(false);
     }
+  }
+  async function openRunSource(id: string, path: string) {
+    if (
+      busy ||
+      saving ||
+      loadingRevision ||
+      (job && ["queued", "running"].includes(job.status))
+    )
+      return;
+    if (dirty) {
+      setError(
+        "Сначала сохраните локальный черновик. Ошибка отчёта относится к сохранённой версии.",
+      );
+      return;
+    }
+    setDialog(null);
+    const snapshot = revision?.id === id ? revision : await openRevision(id);
+    if (
+      !snapshot ||
+      !mounted.current ||
+      !snapshot.files.some((file) => file.path === path)
+    )
+      return;
+    setFile(path);
+    setRange(null);
+    void workspace.reveal("code");
   }
   useEffect(() => {
     mounted.current = true;
@@ -1022,7 +1085,9 @@ function Workbench({
     currentBindings(analysis, revision?.id, dirty) && !loadingRevision;
   const references = analysis?.semantics?.references ?? [];
   const activeReference = bindingsActive
-    ? references.find((r) => r.id === referenceId)
+    ? references.find(
+        (r) => r.id === referenceId && r.sourceRange.filePath === file,
+      )
     : undefined;
   function pickReference(reference: SymbolReference) {
     if (!bindingsActive || busy || saving || loadingRevision) return;
@@ -1729,6 +1794,65 @@ function Workbench({
       )
     : [];
   const methodNodeIds = new Set(methodExecutionNodes.map((n) => n.id));
+  function resultContext(kind: "run" | "compare", visible?: Job) {
+    const other =
+      !visible && fileRuns.other?.type === kind ? fileRuns.other : undefined;
+    return (
+      <>
+        <div className="small quiet" data-testid="result-file-context">
+          {file || "Выберите файл"}
+          {visible?.entryPoint ? ` · ${visible.entryPoint}` : ""}
+          {visible?.revisionId ? ` · версия ${short(visible.revisionId)}` : ""}
+        </div>
+        {fileRuns.resolving && job?.type === kind && (
+          <p role="status">Определяем файл запуска…</p>
+        )}
+        {fileRuns.error && job?.type === kind && (
+          <div className="notice error" role="alert">
+            {fileRuns.error}{" "}
+            <button onClick={fileRuns.retry}>
+              Повторить загрузку результата
+            </button>
+            {job?.result?.report && (
+              <details>
+                <summary>
+                  Результат класса {job.entryPoint} · файл не определён
+                </summary>
+                <ReportView report={job.result.report} projectId={projectId} />
+              </details>
+            )}
+          </div>
+        )}
+        {other && (
+          <div className="notice" data-testid="other-file-result">
+            Последний {kind === "run" ? "запуск" : "прогон тестов"}:{" "}
+            {other.path} · {other.entry}.
+            <button
+              onClick={() => {
+                if (Object.hasOwn(files, other.path)) {
+                  setFile(other.path);
+                  setSelected(null);
+                  setRange(null);
+                  setReferenceId(null);
+                  workspace.reveal("code");
+                } else void openRunSource(other.revisionId, other.path);
+              }}
+            >
+              Открыть {other.path}
+            </button>
+          </div>
+        )}
+        {(visible?.result?.report?.outcome === "compile_error" ||
+          visible?.result?.report?.compileExecution?.outcome ===
+            "compile_error") && (
+          <p className="notice">
+            Компиляция всего проекта для {visible.entryPoint}. Ошибка может
+            находиться в другом файле.
+          </p>
+        )}
+      </>
+    );
+  }
   const panels = {
     project: (
       <aside className="sidebar">
@@ -1752,6 +1876,7 @@ function Workbench({
                 graph?.methods.find((m) => m.sourceRange.filePath === p)?.id ??
                 "",
             );
+            setSelected(null);
             setFile(p);
             workspace.reveal("code");
             setRange(null);
@@ -1894,9 +2019,13 @@ function Workbench({
       </div>
     ),
     graph: (
-      <section className="graph-pane" aria-label="Схема метода">
+      <section
+        className="graph-pane"
+        aria-label="Схема метода"
+        data-source-file={file}
+      >
         <div className="editor-caption">
-          <span>СХЕМА МЕТОДА</span>
+          <span title={file}>СХЕМА · {file.split("/").pop()}</span>
           <span>{method ? method.signature : "Выберите метод"}</span>
           {graph && (
             <span title={graph.revisionId}>
@@ -2083,6 +2212,12 @@ function Workbench({
               <div className="notice filename-notice">
                 Публичный класс {type} должен находиться в файле {type}.java.
                 <button
+                  disabled={
+                    readOnly ||
+                    inFlight ||
+                    Object.hasOwn(files, target) ||
+                    directoryPaths(files, directories).includes(target)
+                  }
                   onClick={() =>
                     void changePath("move", file, target).catch((e) =>
                       setError(message(e)),
@@ -2091,6 +2226,12 @@ function Workbench({
                 >
                   Переименовать в {type}.java
                 </button>
+                {Object.hasOwn(files, target) && (
+                  <span>
+                    {target} уже существует. Выберите другое имя класса или
+                    файла.
+                  </span>
+                )}
               </div>
             ) : null;
           })()}
@@ -2155,6 +2296,7 @@ function Workbench({
         )}
         <CodeInsights
           analysis={analysis}
+          file={file}
           methodId={methodId}
           focusKey={inspectorFocus}
           optimizationEnabled={!inFlight && !readOnly && !stale}
@@ -2546,43 +2688,49 @@ function Workbench({
       </aside>
     ),
     console: (
-      <div className="dock-content">
+      <div className="dock-content" data-source-file={file}>
+        {resultContext("run", runJob)}
         <>
-          {job?.type === "run" &&
+          {runJob?.type === "run" &&
             (dirty ||
-              ((job.revisionId ?? report?.revisionId) &&
-                (job.revisionId ?? report?.revisionId) !== revision?.id)) && (
+              ((runJob.revisionId ?? runReport?.revisionId) &&
+                (runJob.revisionId ?? runReport?.revisionId) !==
+                  revision?.id)) && (
               <div
                 className="notice"
                 role="status"
                 data-testid="run-source-provenance"
               >
-                {(job.revisionId ?? report?.revisionId)
-                  ? `Вывод запуска версии ${short(job.revisionId ?? report?.revisionId)}.`
+                {(runJob.revisionId ?? runReport?.revisionId)
+                  ? `Вывод запуска версии ${short(runJob.revisionId ?? runReport?.revisionId)}.`
                   : "Вывод запуска сохранённой версии."}
                 {dirty
                   ? " Локальный черновик ещё не запускался."
                   : " Это запуск предыдущей версии. Текущая версия кода отличается; запустите её для нового вывода."}
               </div>
             )}
-          {job?.type === "run" && ["queued", "running"].includes(job.status) ? (
+          {runJob?.type === "run" &&
+          ["queued", "running"].includes(runJob.status) ? (
             <LiveConsole
               projectId={projectId}
-              jobId={job.id}
-              live={job.live}
+              jobId={runJob.id}
+              live={runJob.live}
               readOnly={accessReadOnly}
             />
-          ) : report ? (
+          ) : runReport ? (
             <ReportView
-              report={report}
+              report={runReport}
               projectId={projectId}
-              cancelled={job?.status === "cancelled"}
+              cancelled={runJob?.status === "cancelled"}
             />
-          ) : job?.status === "cancelled" ? (
+          ) : runJob?.status === "cancelled" ? (
             <div className="output-empty">Запуск отменён</div>
-          ) : job?.error ? (
+          ) : runJob?.error ? (
             <div className="notice error">
-              {job.error.code} · {job.error.message}
+              {runJob.error.code} · {runJob.error.message}
+              <button onClick={fileRuns.retry}>
+                Повторить загрузку результата
+              </button>
             </div>
           ) : (
             !analysis?.diagnostics.length && (
@@ -2603,11 +2751,13 @@ function Workbench({
       </div>
     ),
     tests: (
-      <div className="dock-content">
-        {job?.type === "compare" &&
-        (!report?.testResults || ["queued", "running"].includes(job.status)) ? (
-          <TestProgressView job={job} />
-        ) : report?.testResults ? (
+      <div className="dock-content" data-source-file={file}>
+        {resultContext("compare", testJob)}
+        {testJob?.type === "compare" &&
+        (!testReport?.testResults ||
+          ["queued", "running"].includes(testJob.status)) ? (
+          <TestProgressView job={testJob} />
+        ) : testReport?.testResults ? (
           <>
             {proposal?.status === "ready" && exactMatched && (
               <div className="verified-change">
@@ -2616,8 +2766,36 @@ function Workbench({
                 </button>
               </div>
             )}
-            <ReportView report={report} projectId={projectId} />
+            {testReport.candidateRevisionId &&
+              (dirty || testReport.candidateRevisionId !== revision?.id) && (
+                <div
+                  className="notice"
+                  role="status"
+                  data-testid="test-source-provenance"
+                >
+                  Результат относится к предыдущей версии{" "}
+                  {short(testReport.candidateRevisionId)}. Текущий код
+                  отличается; запустите тесты заново.
+                </div>
+              )}
+            <ReportView
+              report={testReport}
+              projectId={projectId}
+              onOpenSource={(id, path) => void openRunSource(id, path)}
+              onRetry={
+                !accessReadOnly && !dirty
+                  ? () => setDialog("compare")
+                  : undefined
+              }
+            />
           </>
+        ) : testJob?.error ? (
+          <div className="notice error">
+            {testJob.error.code} · {testJob.error.message}
+            <button onClick={fileRuns.retry}>
+              Повторить загрузку результата
+            </button>
+          </div>
         ) : (
           <div className="output-empty">
             <span className="terminal-prompt">
@@ -3268,6 +3446,8 @@ function Workbench({
           revision={revision}
           proposal={proposal}
           historyRows={historyRows}
+          activePath={file}
+          onOpenSource={(id, path) => void openRunSource(id, path)}
           onClose={() => setDialog(null)}
           onStart={(j) => {
             setJob(j);
@@ -3287,6 +3467,8 @@ function RunDialog({
   revision,
   proposal,
   historyRows,
+  activePath,
+  onOpenSource,
   onClose,
   onStart,
   onError,
@@ -3296,18 +3478,19 @@ function RunDialog({
   revision: Revision;
   proposal: Proposal | null;
   historyRows: Revision[];
+  activePath: string;
+  onOpenSource: (revisionId: string, path: string) => void;
   onClose: () => void;
   onStart: (j: Job) => void;
   onError: (e: string) => void;
 }) {
-  const [entry, setEntry] = useState(() => {
-    const source = revision.files.find((f) =>
-      /static\s+void\s+main\s*\(/.test(f.canonicalText),
-    );
-    const name = source?.path.split("/").pop()?.replace(".java", "") ?? "";
-    const pkg = source?.canonicalText.match(/\bpackage\s+([\w.]+)\s*;/)?.[1];
-    return pkg ? pkg + "." + name : name;
-  });
+  const initialEntry =
+    javaEntryHint(
+      revision.files.find((source) => source.path === activePath),
+    ) ??
+    revision.files.map(javaEntryHint).find(Boolean) ??
+    "";
+  const [entry, setEntry] = useState(initialEntry);
   const [argv, setArgv] = useState("[]");
   const [stdin, setStdin] = useState("");
   const [cases, setCases] = useState(
@@ -3315,13 +3498,49 @@ function RunDialog({
   );
   const [caseFormError, setCaseFormError] = useState<string | null>(null);
   const [baseRevision, setBaseRevision] = useState(
-    proposal?.baseRevisionId ?? project.originalRevisionId ?? revision.id,
+    proposal?.baseRevisionId ??
+      (() => {
+        const original = historyRows.find(
+          (row) => row.id === project.originalRevisionId,
+        );
+        return initialEntry &&
+          (!original ||
+            !original.files.some(
+              (source) => javaEntryHint(source) === initialEntry,
+            ))
+          ? revision.id
+          : (project.originalRevisionId ?? revision.id);
+      })(),
   );
   const [candidate, setCandidate] = useState(
     proposal?.candidateRevisionId ?? revision.id,
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const sources = useRunSources(
+    project.id,
+    kind === "run"
+      ? [{ id: revision.id, label: "Версия" }]
+      : [
+          { id: baseRevision, label: "База" },
+          { id: candidate, label: "Кандидат" },
+        ],
+  );
+  const filenameProblems = sources.sources.flatMap(({ revision }) =>
+    javaFilenameIssues(revision.files, revision.directories),
+  );
+  const revisionChoices = [
+    ...new Map(
+      [
+        ...(project.originalRevisionId
+          ? [{ id: project.originalRevisionId }]
+          : []),
+        ...historyRows,
+        revision,
+        ...sources.sources.map((source) => source.revision),
+      ].map((row) => [row.id, row]),
+    ).values(),
+  ];
   const focus = useRef<HTMLInputElement>(null);
   const requestController = useRef<AbortController | null>(null);
   const dialogActive = useRef(true);
@@ -3335,6 +3554,7 @@ function RunDialog({
   }, []);
   async function submit() {
     if (requestController.current || !dialogActive.current) return;
+    if (!sources.ready || filenameProblems.length) return;
     const controller = new AbortController();
     requestController.current = controller;
     const current = () => dialogActive.current && !controller.signal.aborted;
@@ -3483,7 +3703,7 @@ function RunDialog({
                     value={baseRevision}
                     onChange={(e) => setBaseRevision(e.target.value)}
                   >
-                    {historyRows.map((r) => (
+                    {revisionChoices.map((r) => (
                       <option key={r.id} value={r.id}>
                         {short(r.id)}
                         {r.id === project.originalRevisionId
@@ -3500,7 +3720,7 @@ function RunDialog({
                     value={candidate}
                     onChange={(e) => setCandidate(e.target.value)}
                   >
-                    {historyRows.map((r) => (
+                    {revisionChoices.map((r) => (
                       <option key={r.id} value={r.id}>
                         {short(r.id)}
                         {r.id === project.headRevisionId ? " · текущая" : ""}
@@ -3518,6 +3738,24 @@ function RunDialog({
             </>
           )}
         </fieldset>
+        {!sources.ready && !sources.error && (
+          <p className="small quiet" role="status">
+            Проверяем файлы выбранных версий…
+          </p>
+        )}
+        <SourceFilenameIssues sources={sources.sources} onOpen={onOpenSource} />
+        {sources.error && (
+          <div className="notice error" role="alert">
+            {sources.error}{" "}
+            <button onClick={sources.retry}>Повторить проверку файлов</button>
+          </div>
+        )}
+        {kind === "compare" && baseRevision === candidate && (
+          <p className="small quiet">
+            Проверяется одна версия. Укажите ожидаемый вывод в тестах для
+            проверки результата.
+          </p>
+        )}
         {error && (
           <div className="notice error" role="alert">
             {error}
@@ -3530,7 +3768,12 @@ function RunDialog({
           <button
             className="primary"
             onClick={() => void submit()}
-            disabled={busy || (kind === "compare" && !!caseFormError)}
+            disabled={
+              busy ||
+              !sources.ready ||
+              filenameProblems.length > 0 ||
+              (kind === "compare" && !!caseFormError)
+            }
           >
             {busy ? "Отправка…" : kind === "run" ? "Запустить" : "Сравнить"}
           </button>
@@ -3543,10 +3786,14 @@ function ReportView({
   report,
   projectId,
   cancelled = false,
+  onOpenSource,
+  onRetry,
 }: {
   report: Report;
   projectId: string;
   cancelled?: boolean;
+  onOpenSource?: (revisionId: string, path: string) => void;
+  onRetry?: () => void;
 }) {
   const [sourceHash, setSourceHash] = useState<string | null>(null);
   useEffect(() => {
@@ -3622,6 +3869,21 @@ function ReportView({
       {report.inconclusiveReasons?.length ? (
         <p>{report.inconclusiveReasons.map(testReason).join(" · ")}</p>
       ) : null}
+      {report.outcome === "compile_error" && (
+        <CompileErrorHelp
+          projectId={projectId}
+          sources={[
+            ...(report.baseRevisionId
+              ? [{ id: report.baseRevisionId, label: "База" }]
+              : []),
+            ...(report.candidateRevisionId
+              ? [{ id: report.candidateRevisionId, label: "Кандидат" }]
+              : []),
+          ]}
+          onOpen={onOpenSource}
+          onRetry={onRetry}
+        />
+      )}
       {report.baseCompile && (
         <ExecutionView title="Компиляция базы" execution={report.baseCompile} />
       )}

@@ -507,7 +507,9 @@ public class Workspace {
     var rows =
         db.queryForList(
             "SELECT"
-                + " id::text,type,status,input->>'revisionId' AS source_revision_id,result::text,attempt_id::text,error::text,progress::text,cancel_requested_at,created_at,finished_at"
+                + " id::text,type,status,COALESCE(input->>'revisionId',input->>'candidateRevisionId') AS source_revision_id,"
+                + " COALESCE(input->>'entryPoint',(SELECT data->>'entryPoint' FROM resources WHERE project_id=jobs.project_id AND kind='suite' AND id::text=jobs.input->>'suiteVersionId')) AS entry_point,"
+                + " result::text,attempt_id::text,error::text,progress::text,cancel_requested_at,created_at,finished_at"
                 + " FROM jobs WHERE project_id=? AND id=?",
             uuid(p),
             uuid(j));
@@ -524,6 +526,8 @@ public class Workspace {
         row.get("type"),
         "revisionId",
         row.get("source_revision_id"),
+        "entryPoint",
+        row.get("entry_point"),
         "status",
         row.get("status"),
         "attemptId",

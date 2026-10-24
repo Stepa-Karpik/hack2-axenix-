@@ -1,4 +1,4 @@
-import type { Method } from "./types.ts";
+import type { Method, SourceFile } from "./types.ts";
 export interface FileSnapshot {
   files: Record<string, string>;
   directories: string[];
@@ -119,8 +119,7 @@ export function methodIdentity(method?: Method) {
       }
     : undefined;
 }
-// Filename hint only. Compilation remains the authority for Java validity.
-export function publicJavaType(source: string): string | undefined {
+function javaCode(source: string): string | undefined {
   if (/\\u+[\da-fA-F]{4}/.test(source)) return undefined;
   let code = "";
   for (let i = 0; i < source.length;) {
@@ -145,6 +144,12 @@ export function publicJavaType(source: string): string | undefined {
       code += " ";
     } else code += source[i++];
   }
+  return code;
+}
+// Filename hint only. Compilation remains the authority for Java validity.
+export function publicJavaType(source: string): string | undefined {
+  const code = javaCode(source);
+  if (code === undefined) return undefined;
   const tokens =
     code.match(/[\p{ID_Start}_$][\p{ID_Continue}$]*|[{}();]/gu) ?? [];
   let depth = 0,
@@ -170,6 +175,48 @@ export function publicJavaType(source: string): string | undefined {
       }
     }
   }
+}
+export function javaFilenameIssues(
+  files: readonly Pick<SourceFile, "path" | "canonicalText">[],
+  directories: readonly string[] = [],
+) {
+  const occupied = new Set([
+    ...files.map((file) => file.path),
+    ...directoryPaths(
+      Object.fromEntries(files.map((file) => [file.path, ""])),
+      [...directories],
+    ),
+  ]);
+  return files.flatMap((file) => {
+    const type =
+      file.path.endsWith(".java") && publicJavaType(file.canonicalText);
+    const target =
+      file.path.slice(0, file.path.lastIndexOf("/") + 1) + type + ".java";
+    return type && target !== file.path
+      ? [
+          {
+            path: file.path,
+            type,
+            target,
+            targetOccupied: occupied.has(target),
+          },
+        ]
+      : [];
+  });
+}
+
+// Editable launch hint; the isolated compiler/VM remains authoritative.
+export function javaEntryHint(
+  file?: Pick<SourceFile, "path" | "canonicalText">,
+) {
+  if (!file?.path.endsWith(".java")) return undefined;
+  const code = javaCode(file.canonicalText) ?? file.canonicalText;
+  if (!/static\s+(?:final\s+)?void\s+main\s*\(/.test(code)) return undefined;
+  const type =
+    publicJavaType(file.canonicalText) ??
+    file.path.split("/").pop()!.slice(0, -5);
+  const pkg = code.match(/\bpackage\s+([\p{ID_Continue}$.]+)\s*;/u)?.[1];
+  return pkg ? pkg + "." + type : type;
 }
 export function matchingMethod(
   methods: Method[],
