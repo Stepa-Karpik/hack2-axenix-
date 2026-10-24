@@ -196,7 +196,7 @@ class ConditionFlowTest {
     }
 
     @Test void opaqueDomainsDoNotGainConditionTestsOrEditableFlow() {
-        for(String statement:List.of("try{if(a()&&b())yes();}finally{}","switch(1){default:if(a()&&b())yes();}",
+        for(String statement:List.of("try{if(a()&&b())yes();}finally{}","switch(1){default -> {if(a()&&b())yes();}}",
                 "outer:while(a()&&b()){break outer;}","for(String s:new String[0]){if(a()&&b())yes();}")) {
             String source="class Main {void f(){"+statement+"}boolean a(){return true;}boolean b(){return true;}void yes(){}}";
             Analysis a=analyze(source);

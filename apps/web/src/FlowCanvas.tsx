@@ -26,6 +26,9 @@ import {
   executionNodes,
   routeFlowEdges,
   routeOrthogonal,
+  compactFlowLabel,
+  dispatchLabelPosition,
+  flowLabelTitle,
 } from "./flowLayout";
 import { api, projectPath } from "./api";
 type FlowData = {
@@ -34,6 +37,7 @@ type FlowData = {
   line: string;
   selected: boolean;
   executionRole?: GraphNode["executionRole"];
+  fullLabel?: string;
 };
 function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
   return (
@@ -45,6 +49,7 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
         " role-" +
         (data.executionRole ?? "unknown")
       }
+      title={data.fullLabel}
     >
       <Handle type="target" position={Position.Top} />
       {data.executionRole === "structural" ? (
@@ -78,6 +83,9 @@ export function kindName(kind: string) {
         loop_back: "Повтор цикла",
         IfStmt: "Если",
         condition_test: "Проверка",
+        SwitchStmt: "Выбор",
+        switch_selector: "Значение",
+        switch_case: "Ветка",
         WhileStmt: "Пока",
         ForStmt: "Цикл",
         DoStmt: "Повтор",
@@ -85,7 +93,7 @@ export function kindName(kind: string) {
         ExpressionStmt: "Действие",
         VariableDeclarationExpr: "Переменная",
         ThrowStmt: "Исключение",
-        BreakStmt: "Выход из цикла",
+        BreakStmt: "Выход",
         ContinueStmt: "Следующая итерация",
         condition: "Условие",
         if: "Условие",
@@ -112,7 +120,14 @@ function ShortcutEdge({
   style,
   label,
   data,
-}: EdgeProps<Edge<{ routeX: number; boxes: RouteBox[] }>>) {
+}: EdgeProps<
+  Edge<{
+    routeX: number;
+    boxes: RouteBox[];
+    fullLabel?: string;
+    labelAtTarget?: boolean;
+  }>
+>) {
   const routeX = data!.routeX;
   const route = useMemo(
     () =>
@@ -136,11 +151,12 @@ function ShortcutEdge({
     );
   const labelStart = route.points[Math.max(0, horizontal)],
     labelEnd = route.points[Math.max(1, horizontal + 1)];
-  const labelX =
+  const targetLabel = dispatchLabelPosition({ x: targetX, y: targetY });
+  const labelX = data?.labelAtTarget ? targetLabel.x :
     labelStart.x +
     Math.sign(labelEnd.x - labelStart.x) *
       Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
-  const labelY = labelStart.y;
+  const labelY = data?.labelAtTarget ? targetLabel.y : labelStart.y;
   return (
     <>
       <g
@@ -162,11 +178,7 @@ function ShortcutEdge({
         <EdgeLabelRenderer>
           <span
             className="shortcut-label"
-            title={
-              route.complete
-                ? undefined
-                : "Маршрут ограничен: обход узлов не гарантирован"
-            }
+            title={flowLabelTitle(data?.fullLabel, route.complete)}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             }}
@@ -232,7 +244,10 @@ export default function FlowCanvas({
               ? "да"
               : e.kind === "false"
                 ? "нет"
-                : (e.label ?? undefined),
+                : e.label
+                  ? compactFlowLabel(e.label)
+                  : undefined,
+          data: { fullLabel: e.label ?? undefined },
           markerEnd: { type: MarkerType.ArrowClosed, color: "#9aa18f" },
           style: { stroke: "#aeb6a1", strokeWidth: 1.3 },
           labelStyle: { fontSize: 10, fill: "#7a8370" },
@@ -271,18 +286,21 @@ export default function FlowCanvas({
           data: {
             kind: n.kind,
             executionRole: n.executionRole,
+            fullLabel: n.label,
             label:
-              n.executionRole === "structural"
-                ? kindName(n.kind)
-                : n.kind === "entry"
-                  ? "Начало"
-                  : n.kind === "normal_exit"
-                    ? "Завершение"
-                    : n.kind === "exceptional_exit"
-                      ? "Исключение"
-                      : n.kind === "loop_back"
-                        ? "Повтор цикла"
-                        : n.label.split("\n")[0].slice(0, 110),
+              n.kind === "switch_case"
+                ? compactFlowLabel(n.label, 26)
+                : n.executionRole === "structural"
+                  ? kindName(n.kind)
+                  : n.kind === "entry"
+                    ? "Начало"
+                    : n.kind === "normal_exit"
+                      ? "Завершение"
+                      : n.kind === "exceptional_exit"
+                        ? "Исключение"
+                        : n.kind === "loop_back"
+                          ? "Повтор цикла"
+                          : n.label.split("\n")[0].slice(0, 110),
             line: n.sourceRange ? `L${n.sourceRange.startLine}` : "",
             selected: false,
           },
@@ -338,15 +356,20 @@ export default function FlowCanvas({
       width: node.measured?.width ?? 280,
       height: node.measured?.height ?? 85,
     }));
-    return edges.map((edge) =>
-      routes.has(edge.id)
+    return edges.map((edge) => {
+      return routes.has(edge.id)
         ? {
             ...edge,
             type: "shortcut",
-            data: { routeX: routes.get(edge.id)!, boxes },
+            data: {
+              ...edge.data,
+              routeX: routes.get(edge.id)!,
+              boxes,
+              labelAtTarget: edge.kind === "case" || edge.kind === "default",
+            },
           }
-        : edge,
-    );
+        : edge;
+    });
   }, [nodes, edges]);
   useEffect(() => {
     const element = container.current;

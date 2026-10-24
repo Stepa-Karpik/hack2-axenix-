@@ -122,7 +122,7 @@ class StructuralEditTest {
     @Test void rejectsUnsupportedInsertedControlWithoutWideningOpaqueScope() {
         SourceBundle b = bundle("class Main {void f(){}}");
         Analysis a = engine.inspect(b);
-        for (String statement : List.of("try{}finally{}", "switch(1){default:break;}", "outer: while(true){break outer;}",
+        for (String statement : List.of("try{}finally{}", "switch(1){default -> {}}", "outer: while(true){break outer;}",
                 "for(String s : new String[0]){}", "Runnable r = () -> {};", "class Local {}")) {
             fails("UNSUPPORTED_OPERATION", () -> insert(b, a, node(a, "entry", null), "body_end", statement));
         }

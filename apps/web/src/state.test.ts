@@ -295,3 +295,32 @@ test("dragged departure and approach obstacles are bypassed within router budget
   assert.deepEqual(limited.points[0], { x: 0, y: 0 });
   assert.deepEqual(limited.points.at(-1), { x: 0, y: 290 });
 });
+
+test("switch dispatch preserves raw captions and separates ten target labels", async () => {
+  const { compactFlowLabel, routeFlowEdges, dispatchLabelPosition, flowLabelTitle } =
+    await import("./flowLayout.ts");
+  const raw = "1, /* colon: && || */ 2";
+  assert.equal(compactFlowLabel(raw), raw);
+  const fullRaw = raw.repeat(30);
+  assert.equal(flowLabelTitle(fullRaw, true), fullRaw);
+  assert.ok(flowLabelTitle(fullRaw, false).startsWith(fullRaw + "\n"));
+  assert.ok(flowLabelTitle(fullRaw, false).includes("обход узлов не гарантирован"));
+  const caption = compactFlowLabel('"😀'.repeat(30), 16);
+  assert.equal(Array.from(caption).length, 16);
+  assert.equal(caption.endsWith("…"), true);
+  const targets = Array.from({ length: 10 }, (_, index) => ({
+    id: "case" + index, position: { x: index * 320, y: 290 },
+  }));
+  const edges = targets.map((target, index) => ({
+    id: "edge" + index, source: "selector", target: target.id,
+    kind: index === 9 ? "default" : "case", label: index === 0 ? raw : String(index),
+  }));
+  const routes = routeFlowEdges([{ id: "selector", position: { x: 0, y: 0 } }, ...targets], edges);
+  assert.equal(routes.size, 10);
+  assert.equal(edges[0].label, raw);
+  const labels = targets.map(target => dispatchLabelPosition(target.position));
+  assert.equal(labels.length, 10);
+  for (let i = 0; i < labels.length; i++)
+    for (let j = i + 1; j < labels.length; j++)
+      assert.ok(Math.abs(labels[i].x - labels[j].x) >= 240 || Math.abs(labels[i].y - labels[j].y) >= 24);
+});

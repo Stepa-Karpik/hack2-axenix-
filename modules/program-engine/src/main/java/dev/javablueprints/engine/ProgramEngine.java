@@ -9,10 +9,7 @@ import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
-import com.github.javaparser.ast.expr.Expression;
-import com.github.javaparser.ast.expr.BinaryExpr;
-import com.github.javaparser.ast.expr.EnclosedExpr;
-import com.github.javaparser.ast.expr.UnaryExpr;
+import com.github.javaparser.ast.expr.*;
 import com.github.javaparser.ast.stmt.*;
 import dev.javablueprints.engine.EngineModel.*;
 
@@ -24,9 +21,11 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.4.0";
+    public static final String VERSION = "engine-0.5.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
+    private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
+    private static final int MAX_SWITCH_LABELS_PER_METHOD = 4096;
     public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
     public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
@@ -170,11 +169,42 @@ public final class ProgramEngine {
     }
 
     private static boolean unsupportedFlow(Node body) {
-        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt
+        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt sw && !supportedSwitch(sw)
                 || s instanceof LabeledStmt || s instanceof SynchronizedStmt || s instanceof ForEachStmt
                 || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
                 || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
                 || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
+    }
+
+    private static boolean supportedSwitch(SwitchStmt statement) {
+        int defaults = 0;
+        for (SwitchEntry entry : statement.getEntries()) {
+            if (entry.getType() != SwitchEntry.Type.STATEMENT_GROUP || entry.getGuard().isPresent()) return false;
+            if (entry.isDefault()) {
+                if (++defaults > 1 || !entry.getLabels().isEmpty()) return false;
+            } else if (entry.getLabels().isEmpty()) return false;
+            if (entry.getLabels().stream().anyMatch(label -> !label.findAll(AnnotationExpr.class).isEmpty() || !constantLabelShape(label))) return false;
+        }
+        return true;
+    }
+
+    /** Syntactic constant-expression shapes only; the isolated compiler decides validity/value. */
+    private static boolean constantLabelShape(Expression expression) {
+        if (expression instanceof NullLiteralExpr) return false;
+        if (expression instanceof LiteralExpr || expression instanceof NameExpr) return true;
+        if (expression instanceof FieldAccessExpr field) return constantLabelShape(field.getScope());
+        if (expression instanceof EnclosedExpr enclosed) return constantLabelShape(enclosed.getInner());
+        if (expression instanceof UnaryExpr unary) {
+            return switch (unary.getOperator()) {
+                case PLUS, MINUS, LOGICAL_COMPLEMENT, BITWISE_COMPLEMENT -> constantLabelShape(unary.getExpression());
+                default -> false;
+            };
+        }
+        if (expression instanceof BinaryExpr binary) return constantLabelShape(binary.getLeft()) && constantLabelShape(binary.getRight());
+        if (expression instanceof CastExpr cast) return constantLabelShape(cast.getExpression());
+        if (expression instanceof ConditionalExpr conditional) return constantLabelShape(conditional.getCondition())
+                && constantLabelShape(conditional.getThenExpr()) && constantLabelShape(conditional.getElseExpr());
+        return false;
     }
 
     private static boolean isLoop(Node node) {
@@ -183,18 +213,27 @@ public final class ProgramEngine {
 
     private static void validateJumps(Statement inserted, BlockStmt destination) {
         for (Statement jump : inserted.findAll(Statement.class).stream().filter(s -> s instanceof BreakStmt || s instanceof ContinueStmt).toList()) {
-            boolean loop = false;
+            boolean found = false, boundary = false;
             Node cursor = jump;
             while (cursor != inserted) {
                 cursor = cursor.getParentNode().orElseThrow();
-                if (isLoop(cursor)) { loop = true; break; }
+                if (jumpBoundary(cursor)) { boundary = true; break; }
+                if (jumpTarget(jump, cursor)) { found = true; break; }
             }
-            for (cursor = destination; !loop && cursor != null; cursor = cursor.getParentNode().orElse(null)) {
-                if (cursor instanceof CallableDeclaration<?>) break;
-                if (isLoop(cursor)) loop = true;
+            for (cursor = destination; !found && !boundary && cursor != null; cursor = cursor.getParentNode().orElse(null)) {
+                if (jumpBoundary(cursor)) break;
+                if (jumpTarget(jump, cursor)) found = true;
             }
-            if (!loop) throw failure("INVALID_EDIT", "break/continue requires an enclosing supported loop");
+            if (!found) throw failure("INVALID_EDIT", jump instanceof BreakStmt
+                    ? "break requires an enclosing supported loop or switch" : "continue requires an enclosing supported loop");
         }
+    }
+    private static boolean jumpTarget(Statement jump, Node target) {
+        return isLoop(target) || jump instanceof BreakStmt && target instanceof SwitchStmt sw && supportedSwitch(sw);
+    }
+    private static boolean jumpBoundary(Node node) {
+        return node instanceof CallableDeclaration<?> || node instanceof TypeDeclaration<?> || node instanceof LambdaExpr
+                || node instanceof ObjectCreationExpr creation && creation.getAnonymousClassBody().isPresent();
     }
 
     private Expression condition(Node node) {
@@ -286,8 +325,9 @@ public final class ProgramEngine {
         builder.declarations.addAll(semantic.declarations());
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
-                new Capability("control_flow", "partial", "Structured if/while/do/for, return/throw and unlabeled loop jumps; exceptional calls and opaque constructs are not complete CFG"),
+                new Capability("control_flow", "partial", "Structured if/while/do/for and traditional colon switch, return/throw, nearest loop/switch break and enclosing-loop continue; exceptional calls and opaque constructs are not complete CFG"),
                 new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion &&/||/!/parentheses in supported if/while/do/for conditions, at most 4096 tests/method; other subexpressions are atomic tests. Calls, unboxing and exceptional completion are not modeled; opaque methods remain unsupported"),
+                new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
@@ -409,9 +449,13 @@ public final class ProgramEngine {
         Builder(SourceBundle bundle, String analysisId) { this.bundle = bundle; this.analysisId = analysisId; }
         String id() { return analysisId + ":" + (++sequence); }
         String node(Node ast, String kind, String parent) {
+            return node(ast, kind, parent, null);
+        }
+        String node(Node ast, String kind, String parent, String caption) {
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
-            if (!opaqueMethod && !"condition_test".equals(kind) && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
+            boolean readOnly = "condition_test".equals(kind) || "switch_selector".equals(kind) || "switch_case".equals(kind);
+            if (!opaqueMethod && !readOnly && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
                 fieldRanges = Map.of("expression", map.range(expression));
             } else if (!opaqueMethod && condition(ast) != null) {
                 fieldRanges = Map.of("condition", map.range(condition(ast)));
@@ -428,36 +472,52 @@ public final class ProgramEngine {
                 if (!containsComment(ast)) operations.add("delete_statement");
                 positions = List.of("before", "after");
             }
-            String text = ast == null || "entry".equals(kind) ? kind : map.source.substring(map.range(ast).startOffset(), map.range(ast).endOffset());
+            String text = caption != null ? caption : ast == null || "entry".equals(kind) ? kind : raw(ast);
             if (text.length() > 180) text = text.substring(0, 177) + "...";
             nodes.add(new GraphNode(id, bundle.revisionId(), analysisId, methodId, kind, text,
                     ast == null ? null : map.range(ast), id, parent, ast == null, fields, fieldRanges, operations, positions, executionRole(ast, kind)));
             if (ast != null) { bindings.put(id, ast); astIds.put(ast, id); }
             return id;
         }
+        String raw(Node ast) {
+            SourceRange range = map.range(ast);
+            return map.source.substring(range.startOffset(), range.endOffset());
+        }
+        String rawLabels(SwitchEntry entry) {
+            if (entry.isDefault()) return "default";
+            SourceRange first = map.range(entry.getLabels().getFirst().orElseThrow());
+            SourceRange last = map.range(entry.getLabels().getLast().orElseThrow());
+            return map.source.substring(first.startOffset(), last.endOffset());
+        }
         String executionRole(Node ast, String kind) {
             if ("condition_test".equals(kind)) return "condition_test";
             if ("expression".equals(kind)) return "ast_projection";
             if (ast == null) return "synthetic";
-            if ("entry".equals(kind) || "block".equals(kind) || ast instanceof IfStmt || ast instanceof WhileStmt
-                    || ast instanceof DoStmt || ast instanceof ForStmt || "opaque".equals(kind)) return "structural";
+            if ("entry".equals(kind) || "block".equals(kind) || "switch_case".equals(kind) || ast instanceof IfStmt || ast instanceof WhileStmt
+                    || ast instanceof DoStmt || ast instanceof ForStmt || ast instanceof SwitchStmt || "opaque".equals(kind)) return "structural";
             return "statement";
         }
         void edge(String source, String target, String kind) {
-            if (source != null && target != null) edges.add(new Edge(id(), source, target, kind, null, null));
+            edge(source, target, kind, null);
+        }
+        void edge(String source, String target, String kind, String label) {
+            if (source != null && target != null) edges.add(new Edge(id(), source, target, kind, label, null));
         }
         void method(CallableDeclaration<?> callable, BlockStmt body, String declaration, String fqName, SourceMap sourceMap) {
             methodId = id(); map = sourceMap; astIds.clear();
             boolean conditionLimit = conditionLimitExceeded(body);
-            opaqueMethod = unsupportedFlow(body) || conditionLimit;
+            boolean switchLimit = switchLimitExceeded(body);
+            opaqueMethod = unsupportedFlow(body) || conditionLimit || switchLimit;
             root = node(body, "entry", null);
             normalExit = node(null, "normal_exit", null);
             exceptionalExit = node(null, "exceptional_exit", null);
             String first;
             if (opaqueMethod) {
                 first = node(body, "opaque", root);
-                diagnostics.add(new Diagnostic(id(), "warning", conditionLimit ? "CONDITION_FLOW_LIMIT" : "UNSUPPORTED_CONTROL_FLOW",
-                        conditionLimit ? "Method preserved; condition-flow test budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure", map.range(body)));
+                String code = conditionLimit ? "CONDITION_FLOW_LIMIT" : switchLimit ? "SWITCH_FLOW_LIMIT" : "UNSUPPORTED_CONTROL_FLOW";
+                String reason = conditionLimit ? "Method preserved; condition-flow test budget exceeded"
+                        : switchLimit ? "Method preserved; switch entry/label budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure";
+                diagnostics.add(new Diagnostic(id(), "warning", code, reason, map.range(body)));
                 edge(first, normalExit, "normal"); edge(first, exceptionalExit, "throw");
             } else first = flow(body, normalExit, null, null, root);
             edge(root, first, "normal");
@@ -478,6 +538,15 @@ public final class ProgramEngine {
                     total += conditionAtoms(expression);
                     if (total > MAX_CONDITION_TESTS_PER_METHOD) return true;
                 }
+            }
+            return false;
+        }
+        boolean switchLimitExceeded(BlockStmt body) {
+            int entries = 0, labels = 0;
+            for (SwitchStmt statement : body.findAll(SwitchStmt.class)) {
+                entries += statement.getEntries().size();
+                for (SwitchEntry entry : statement.getEntries()) labels += entry.getLabels().size();
+                if (entries > MAX_SWITCH_ENTRIES_PER_METHOD || labels > MAX_SWITCH_LABELS_PER_METHOD) return true;
             }
             return false;
         }
@@ -519,6 +588,31 @@ public final class ProgramEngine {
                 String init = current;
                 for (int i = loop.getInitialization().size() - 1; i >= 0; i--) { String step = node(loop.getInitialization().get(i), "for_init", current); edge(step, init, "normal"); init = step; }
                 return init;
+            } else if (stmt instanceof SwitchStmt statement) {
+                String selector = node(statement.getSelector(), "switch_selector", current);
+                List<String> entryIds = new ArrayList<>();
+                List<String> labels = new ArrayList<>();
+                for (SwitchEntry entry : statement.getEntries()) {
+                    String label = rawLabels(entry);
+                    labels.add(label);
+                    entryIds.add(node(entry, "switch_case", current, entry.isDefault() ? "default:" : "case " + label + ":"));
+                }
+                String cursor = next;
+                for (int i = statement.getEntries().size() - 1; i >= 0; i--) {
+                    String first = cursor;
+                    List<Statement> body = statement.getEntry(i).getStatements();
+                    for (int j = body.size() - 1; j >= 0; j--) first = flow(body.get(j), first, next, continueTarget, entryIds.get(i));
+                    edge(entryIds.get(i), first, "normal");
+                    cursor = entryIds.get(i);
+                }
+                boolean hasDefault = false;
+                for (int i = 0; i < statement.getEntries().size(); i++) {
+                    boolean fallback = statement.getEntry(i).isDefault();
+                    hasDefault |= fallback;
+                    edge(selector, entryIds.get(i), fallback ? "default" : "case", labels.get(i));
+                }
+                if (!hasDefault) edge(selector, next, "default", "нет совпадения");
+                edge(current, selector, "normal");
             } else if (stmt instanceof ReturnStmt) edge(current, normalExit, "return");
             else if (stmt instanceof ThrowStmt) edge(current, exceptionalExit, "throw");
             else if (stmt instanceof BreakStmt) edge(current, breakTarget, "break");

@@ -127,6 +127,10 @@ export function routeFlowEdges(
       target = byId.get(edge.target);
     if (!source || !target) continue;
     const distance = target.position.y - source.position.y;
+    if (edge.kind === "case" || edge.kind === "default") {
+      routes.set(edge.id, target.position.x < source.position.x ? left : right);
+      continue;
+    }
     if (distance <= 0 || distance > 146)
       routes.set(edge.id, edge.kind === "true" ? right : left);
   }
@@ -157,11 +161,12 @@ export function routeOrthogonal(
   end: RoutePoint,
   lane: number,
   boxes: RouteBox[],
+  departure = 22,
 ) {
   const initial = [
     start,
-    { x: start.x, y: start.y + 22 },
-    { x: lane, y: start.y + 22 },
+    { x: start.x, y: start.y + departure },
+    { x: lane, y: start.y + departure },
     { x: lane, y: end.y - 22 },
     { x: end.x, y: end.y - 22 },
     end,
@@ -243,4 +248,21 @@ export function routeOrthogonal(
     for (const box of collisions) relevant.set(box.id, box);
   }
   return { points: initial, complete: false };
+}
+
+export function compactFlowLabel(label: string, limit = 32) {
+  const characters = Array.from(label);
+  return characters.length > limit
+    ? characters.slice(0, limit - 1).join("") + "…"
+    : label;
+}
+
+export function dispatchLabelPosition(target: { x: number; y: number }) {
+  return { x: target.x, y: target.y - 16 };
+}
+
+export function flowLabelTitle(fullLabel: string | undefined, complete: boolean) {
+  if (complete) return fullLabel;
+  return [fullLabel, "Маршрут ограничен: обход узлов не гарантирован"]
+    .filter(Boolean).join("\n");
 }

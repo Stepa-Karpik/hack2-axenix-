@@ -61,6 +61,8 @@ public class ApiController {
             map("status", "partial", "scope", "normal_short_circuit_conditions", "exceptionalFlow", "unknown"),
             "control_flow",
             map("status", "partial", "exceptionalFlow", "unknown"),
+            "switch_flow",
+            map("status", "partial", "scope", "traditional_statement_switch", "exceptionalFlow", "unknown"),
             "runner",
             map("available", worker.available(), "profileId", "java21-v1"),
             "limits",

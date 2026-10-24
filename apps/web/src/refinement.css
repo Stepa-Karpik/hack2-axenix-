@@ -1420,6 +1420,10 @@ select:focus-visible,
   color: var(--quiet);
 }
 .shortcut-label {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   position: absolute;
   pointer-events: none;
   color: var(--muted-strong);
@@ -1427,4 +1431,11 @@ select:focus-visible,
   padding: 2px 4px;
   border-radius: 3px;
   font-size: 10px;
+}
+
+.blueprint-node.switch_case .node-label {
+  margin-right: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

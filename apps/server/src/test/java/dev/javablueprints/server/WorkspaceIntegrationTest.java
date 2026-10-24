@@ -769,7 +769,123 @@ class WorkspaceIntegrationTest {
     assertEquals(409, post("/projects/" + p + "/changes", edit, id(), null).status);
     assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
     assertNotEquals(aid, analyzeRevision(p, revision).get("id"));
-    assertEquals("engine-0.4.0", w.analysis(p, revision, null).get("analyzerVersion"));
+    assertEquals(dev.javablueprints.engine.ProgramEngine.VERSION, w.analysis(p, revision, null).get("analyzerVersion"));
+  }
+
+  List<String> switchTrace(dev.javablueprints.engine.EngineModel.Graph graph, String methodName, String dispatchLabel) {
+    var method = graph.methods().stream().filter(m -> m.fullyQualifiedName().endsWith("." + methodName)).findFirst().orElseThrow();
+    var nodes = graph.nodes().stream().collect(java.util.stream.Collectors.toMap(dev.javablueprints.engine.EngineModel.GraphNode::id, n -> n));
+    var trace = new ArrayList<String>();
+    String current = method.entryNodeId();
+    for (int step = 0; step < 40; step++) {
+      var node = nodes.get(current);
+      assertNotNull(node);
+      assertEquals(method.id(), node.methodId());
+      assertNotEquals("ast_projection", node.executionRole());
+      if (node.kind().equals("normal_exit")) return trace;
+      if (node.executionRole().equals("statement")) trace.add(node.label());
+      String from = current;
+      var outgoing = graph.edges().stream().filter(e -> e.source().equals(from)).toList();
+      if (node.kind().equals("switch_selector")) {
+        current = outgoing.stream().filter(e -> dispatchLabel.equals("default") ? e.kind().equals("default")
+            : e.kind().equals("case") && dispatchLabel.equals(e.label())).findFirst().orElseThrow().target();
+      } else {
+        assertEquals(1, outgoing.size(), "This fixture has one continuation except selector dispatch");
+        current = outgoing.getFirst().target();
+      }
+    }
+    throw new AssertionError("Switch fixture trace did not terminate");
+  }
+
+  @Test
+  void switchGraphRoundTripsWithSelectorOnceFallthroughAndReadonlyDispatchNodes() throws Exception {
+    String p = project();
+    String source = "// 😀\nclass Main {int choose(int x){int result=0;switch(x){case 1:result+=1;case 2:result+=2;break;default:result=9;}return result;}}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var analysis = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
+    var reply = send("GET", "/projects/" + p + "/revisions/" + revision + "/graph?analysisId=" + analysis.id(), null, null, null, null);
+    assertEquals(200, reply.status, reply.body.toString());
+    var graph = w.convert(obj(reply), dev.javablueprints.engine.EngineModel.Graph.class);
+    assertEquals(analysis.graph(), graph);
+    assertEquals(List.of("int result=0;", "x", "result+=1;", "result+=2;", "break;", "return result;"), switchTrace(graph, "choose", "1"));
+    assertEquals(List.of("int result=0;", "x", "result+=2;", "break;", "return result;"), switchTrace(graph, "choose", "2"));
+    assertEquals(List.of("int result=0;", "x", "result=9;", "return result;"), switchTrace(graph, "choose", "default"));
+    var selector = graph.nodes().stream().filter(n -> n.kind().equals("switch_selector")).findFirst().orElseThrow();
+    assertEquals("statement", selector.executionRole());
+    assertEquals("x", source.substring(selector.sourceRange().startOffset(), selector.sourceRange().endOffset()));
+    var readonly = graph.nodes().stream().filter(n -> n.kind().equals("switch_selector") || n.kind().equals("switch_case")).toList();
+    for (var node : readonly) {
+      assertTrue(node.allowedOperations().isEmpty());
+      assertTrue(node.editableFields().isEmpty());
+      assertTrue(node.editableFieldRanges().isEmpty());
+      assertTrue(node.insertionPositions().isEmpty());
+      if (node.kind().equals("switch_case")) {
+        assertEquals("structural", node.executionRole());
+        String entry = source.substring(node.sourceRange().startOffset(), node.sourceRange().endOffset());
+        assertTrue(entry.startsWith("case") || entry.startsWith("default"));
+      }
+    }
+    for (var node : List.of(selector, readonly.stream().filter(n -> n.kind().equals("switch_case")).findFirst().orElseThrow())) {
+      String key = id();
+      var body = map("baseRevisionId", revision, "analysisId", analysis.id(), "methodId", node.methodId(), "nodeId", node.id(),
+          "operation", node.kind().equals("switch_selector") ? "replace_expression" : "delete_statement",
+          "payload", node.kind().equals("switch_selector") ? map("field", "expression", "source", "2") : Map.of(), "intent", "semantic_edit");
+      var submitted = post("/projects/" + p + "/changes", body, key, null);
+      assertEquals(202, submitted.status, submitted.body.toString());
+      var failed = waitJob(p, str(obj(submitted), "jobId"));
+      assertEquals("failed", failed.get("status"));
+      assertEquals("UNSUPPORTED_OPERATION", ((Map<?, ?>) failed.get("error")).get("code"));
+      var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+      assertEquals("rejected", proposal.get("status"));
+      assertFalse(proposal.containsKey("candidateRevisionId"));
+      assertEquals(obj(submitted), obj(post("/projects/" + p + "/changes", body, key, null)), "Replay retains accepted response and creates no second job");
+    }
+    assertEquals(1, w.revisions(p, 100).size());
+    assertEquals(2, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=? AND type='change'", Integer.class, uuid(p)));
+    assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
+    var capabilities = obj(send("GET", "/capabilities", null, null, null, null));
+    assertEquals("partial", ((Map<?, ?>) capabilities.get("switch_flow")).get("status"));
+    assertEquals("traditional_statement_switch", ((Map<?, ?>) capabilities.get("switch_flow")).get("scope"));
+    assertEquals("unknown", ((Map<?, ?>) capabilities.get("switch_flow")).get("exceptionalFlow"));
+  }
+
+  @Test
+  void oldSwitchAnalysisIsHistoricalOnlyAndSourceProjectionEditRegeneratesGraph() throws Exception {
+    String p = project();
+    String source = "class Main {int choose(int x){switch(x){case 1:return 1;}return 0;}}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var fixture = new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    var old = w.decode(w.encode(fixture));
+    old.put("analyzerVersion", "engine-0.4.0");
+    w.putResource(p, fixture.id(), "analysis", old);
+    assertEquals(old, obj(send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis?analysisId=" + fixture.id(), null, null, null, null)));
+    assertEquals(404, send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null).status);
+    var stale = map("baseRevisionId", revision, "analysisId", fixture.id(), "methodId", "m", "nodeId", "n", "operation", "replace_expression", "payload", map("field", "expression", "source", "2"), "intent", "semantic_edit");
+    assertEquals(409, post("/projects/" + p + "/changes", stale, id(), null).status);
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    var current = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertEquals("engine-0.5.0", current.analyzerVersion());
+    assertEquals(List.of("x", "return 0;"), switchTrace(current.graph(), "choose", "default"), "No-match bypasses first case when default is absent");
+    var selector = current.graph().nodes().stream().filter(n -> n.kind().equals("switch_selector")).findFirst().orElseThrow();
+    var projection = current.graph().nodes().stream().filter(n -> n.kind().equals("expression") && n.sourceRange().equals(selector.sourceRange())).findFirst().orElseThrow();
+    assertEquals("ast_projection", projection.executionRole());
+    assertTrue(projection.allowedOperations().contains("replace_expression"));
+    var body = map("baseRevisionId", revision, "analysisId", current.id(), "methodId", projection.methodId(), "nodeId", projection.id(), "operation", "replace_expression", "payload", map("field", "expression", "source", "2"), "intent", "semantic_edit");
+    var submitted = post("/projects/" + p + "/changes", body, id(), null);
+    assertEquals(202, submitted.status, submitted.body.toString());
+    assertEquals("succeeded", waitJob(p, str(obj(submitted), "jobId")).get("status"));
+    var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+    assertEquals("rejected", proposal.get("status"));
+    assertEquals("unavailable", ((Map<?, ?>) proposal.get("checks")).get("compileStatus"));
+    String candidateId = str(proposal, "candidateRevisionId");
+    var changed = w.convert(analyzeRevision(p, candidateId), dev.javablueprints.engine.EngineModel.Analysis.class);
+    var changedSelector = changed.graph().nodes().stream().filter(n -> n.kind().equals("switch_selector")).findFirst().orElseThrow();
+    assertEquals("(2)", changedSelector.label());
+    assertNotEquals(selector.id(), changedSelector.id());
+    assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
+    assertEquals(current.graph(), w.convert(w.analysis(p, revision, current.id()).get("graph"), dev.javablueprints.engine.EngineModel.Graph.class));
+    assertEquals(revision, w.project(p).get("headRevisionId"));
+    assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidateId, "proposalId", proposal.get("id")), id(), revision).status);
   }
 
   @Test
