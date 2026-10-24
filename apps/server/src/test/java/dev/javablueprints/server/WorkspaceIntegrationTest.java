@@ -1,5 +1,7 @@
 package dev.javablueprints.server;
 
+import dev.javablueprints.engine.EngineModel.Analysis;
+
 import static dev.javablueprints.server.Workspace.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -662,6 +664,32 @@ class WorkspaceIntegrationTest {
     var reply = send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null);
     assertEquals(200, reply.status, reply.body.toString());
     return obj(reply);
+  }
+
+  @Test
+  void qualityFactsRemainBoundToTheirAnalysisAndOldSnapshotsStayReadable() throws Exception {
+    String p=project();
+    String source="class Main { void large(){\nint n=0;\n"+"n++;\n".repeat(41)+"} }";
+    String revision=str(obj(post("/projects/"+p+"/revisions",sources(source),id(),"empty")),"id");
+    var a=analyzeRevision(p,revision);
+    var quality=(Map<?,?>)a.get("quality");
+    assertEquals("quality-v1",quality.get("schemaVersion"));
+    var metrics=(List<Map<String,Object>>)quality.get("methods");
+    var findings=(List<Map<String,Object>>)quality.get("findings");
+    assertEquals(1,metrics.size()); assertEquals(1,findings.size());
+    assertEquals(metrics.getFirst().get("methodId"),findings.getFirst().get("methodId"));
+    assertEquals("LONG_METHOD",findings.getFirst().get("code"));
+    assertEquals("unknown",metrics.getFirst().get("asymptotic"));
+    var typed=w.convert(a,Analysis.class);
+    assertEquals(1,typed.quality().methods().size());
+    var old=new LinkedHashMap<>(a); String oldId=id();
+    old.put("id",oldId);old.put("analyzerVersion","engine-0.8.0");old.remove("quality");
+    w.putResource(p,oldId,"analysis",old);
+    var historical=obj(send("GET","/projects/"+p+"/revisions/"+revision+"/analysis?analysisId="+oldId,null,null,null,null));
+    assertFalse(historical.containsKey("quality"));
+    assertTrue(w.convert(historical,Analysis.class).quality().methods().isEmpty());
+    assertEquals(a.get("id"),w.analysis(p,revision,null).get("id"));
+    assertEquals(revision,w.project(p).get("headRevisionId"));
   }
 
   @Test

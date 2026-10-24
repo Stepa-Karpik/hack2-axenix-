@@ -182,7 +182,7 @@ test("syntax diagnostics reveal their current source line without trusting a sta
   await editor.focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.insertText("// new draft\n");
-  await diagnostics.first().click();
+  await expect(diagnostics.first()).toBeDisabled();
   await expect(page.locator(".code-binding")).toHaveCount(0);
   expect((await head(page.request, base)).id).toBe(saved.id);
 });

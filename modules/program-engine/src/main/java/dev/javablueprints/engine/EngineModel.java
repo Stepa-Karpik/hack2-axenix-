@@ -77,10 +77,21 @@ public final class EngineModel {
                            String compileStatus, String symbolStatus, String sourceMapVersion,
                            List<Diagnostic> diagnostics, List<Capability> coverage,
                            List<Declaration> declarations, Graph graph, String symbolEnvironmentHash,
-                           SemanticModel semantics) {
+                           SemanticModel semantics, QualityModel quality) {
         public Analysis {
             diagnostics = List.copyOf(diagnostics); coverage = List.copyOf(coverage); declarations = List.copyOf(declarations);
             semantics = semantics == null ? SemanticModel.empty() : semantics;
+            quality = quality == null ? QualityModel.empty() : quality;
+        }
+        public Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
+                        String parserVersion, String languageLevel, String parseStatus,
+                        String compileStatus, String symbolStatus, String sourceMapVersion,
+                        List<Diagnostic> diagnostics, List<Capability> coverage,
+                        List<Declaration> declarations, Graph graph, String symbolEnvironmentHash,
+                        SemanticModel semantics) {
+            this(id, revisionId, bundleHash, analyzerVersion, parserVersion, languageLevel, parseStatus,
+                    compileStatus, symbolStatus, sourceMapVersion, diagnostics, coverage, declarations,
+                    graph, symbolEnvironmentHash, semantics, null);
         }
         public Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
                         String parserVersion, String languageLevel, String parseStatus,
@@ -91,6 +102,19 @@ public final class EngineModel {
                     compileStatus, symbolStatus, sourceMapVersion, diagnostics, coverage, declarations, graph, null, null);
         }
     }
+    public record QualityModel(String schemaVersion, List<MethodMetrics> methods,
+                               List<CodeFinding> findings, boolean findingsTruncated) {
+        public QualityModel { methods = List.copyOf(methods); findings = List.copyOf(findings); }
+        public static QualityModel empty() { return new QualityModel("quality-v1", List.of(), List.of(), false); }
+    }
+    /** Lexical/structural facts, not inferred runtime cost or a semantic-equivalence proof. */
+    public record MethodMetrics(String methodId, String declarationId, String entryNodeId, SourceRange sourceRange,
+                                int bodyLines, int codeLines, int statements, int branchingScore,
+                                int maxNesting, int loops, int maxLoopNesting, int calls,
+                                String asymptotic, String asymptoticReason) {}
+    public record CodeFinding(String id, String methodId, String nodeId, String severity, String code,
+                              String title, String explanation, String recommendation, String expectedEffect,
+                              int observed, int threshold, SourceRange sourceRange) {}
     public record SymbolEnvironment(String schemaVersion, String resolverVersion, String configVersion,
                                     String jdkVersion, String jdkVendor, String environmentHash) {}
     public record SemanticModel(String schemaVersion, SymbolEnvironment environment, List<Symbol> symbols,

@@ -1310,3 +1310,163 @@
     transition: none;
   }
 }
+
+.code-insights [role="tabpanel"][hidden] {
+  display: none;
+}
+.insight-node > .wide {
+  width: calc(100% - 36px);
+  margin: 0 18px;
+}
+.insight-node > .subtle {
+  background: var(--subtle);
+  border-color: var(--line);
+  color: var(--muted-strong);
+}
+.insight-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  margin: 0 10px 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.insight-tabs button {
+  min-width: 0;
+  justify-content: center;
+  gap: 5px;
+  font-size: 11px;
+  min-height: 30px;
+  padding: 5px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.insight-tabs button[aria-selected="true"] {
+  background: var(--selected);
+  color: var(--green);
+}
+.insight-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.insight-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 30px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.method-metrics,
+.insight-findings {
+  padding: 0 14px 12px;
+  min-width: 0;
+}
+.method-metrics h3 {
+  font:
+    500 12px/1.5 Consolas,
+    monospace;
+  margin: 8px 0 4px;
+  overflow-wrap: anywhere;
+}
+.metric-location {
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 3px 0;
+  font:
+    10px/1.5 Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+}
+.method-metrics dl {
+  margin: 16px 0;
+}
+.method-metrics dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.method-metrics dt,
+.metric-complexity > span {
+  color: var(--muted);
+}
+.method-metrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.metric-complexity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.metric-complexity strong {
+  font-weight: 500;
+}
+.metric-complexity p,
+.metric-scope {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+.metric-scope {
+  padding-top: 14px;
+}
+.insight-finding {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.finding-location {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}
+.finding-location strong {
+  flex: 1;
+  font-weight: 500;
+}
+.finding-location > span,
+.finding-source {
+  color: var(--muted);
+  font-size: 10px;
+}
+.finding-source {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 6px 0;
+}
+.insight-finding details {
+  font-size: 11px;
+  line-height: 1.6;
+}
+.insight-finding summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.insight-finding p {
+  margin: 8px 0;
+}
+.insight-stale {
+  margin: 12px 14px;
+  color: var(--muted);
+  font-size: 11px;
+}

@@ -64,6 +64,14 @@ Progress records the exact source revisions and suite version. Reloading reconne
 
 Per-case time includes all six executions and their container setup. Total time also includes compilation. The worker has a ten-minute overall job budget in addition to individual execution limits; an unfinished suite remains inconclusive. Progress is persisted under the current job attempt and lease. A restart can retain recorded progress, but cannot resume the interrupted executions.
 
+## Code insights
+
+The Analysis panel separates node editing, parser/coverage problems, recommendations and method metrics. Selecting a graph block opens its editor. Metrics follow the chosen method; recommendation headings navigate to their bound source location. Unsaved changes disable navigation through the older analysis.
+
+Metrics include physical and code-token body lines, statement nodes, control nesting, loops and call sites. Nested declaration and lambda bodies are excluded from the enclosing method. The branching score is syntactic: one plus `if`, loops, conditional expressions, short-circuit operators, non-default switch groups and catch clauses. It is neither a complete CFG complexity measure nor a runtime estimate. Metric labels expose their definitions in tooltips.
+
+Recommendations flag methods with at least 40 code-token lines, nesting of at least four control structures, nested loops, or a branching score of at least ten. They show the observed count, threshold, source location and a suggested review step. At most 400 findings are returned per analysis. These heuristics do not prove a defect, authorize a refactor or predict a speedup. Asymptotic time remains unknown until bounds and call costs can be established.
+
 ## Architecture
 
 ```mermaid

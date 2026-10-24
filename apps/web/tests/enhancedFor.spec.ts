@@ -38,13 +38,11 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
   await page
     .getByLabel("Название проекта")
     .fill("Enhanced for UI " + Date.now());
-  await page
-    .locator("input[type=file]")
-    .setInputFiles({
-      name: "Main.java",
-      mimeType: "text/x-java-source",
-      buffer: Buffer.from(source),
-    });
+  await page.locator("input[type=file]").setInputFiles({
+    name: "Main.java",
+    mimeType: "text/x-java-source",
+    buffer: Buffer.from(source),
+  });
   await expect(page.locator(".blueprint-node.entry")).toBeVisible({
     timeout: 30000,
   });
@@ -56,7 +54,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.8.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.9.0");
   let layoutWrites = 0;
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().endsWith("/layout"))

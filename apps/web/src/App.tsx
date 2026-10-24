@@ -1,5 +1,6 @@
 import SingleRunOutput from "./SingleRunOutput";
 import TestProgressView from "./TestProgressView";
+import CodeInsights from "./CodeInsights";
 import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
@@ -381,6 +382,7 @@ function Workbench({
   const [graph, setGraph] = useState<Graph | null>(null);
   const [methodId, setMethodId] = useState(initialView.methodId ?? "");
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [inspectorFocus, setInspectorFocus] = useState(0);
   const [range, setRange] = useState<
     (SourceRange & { diagnosticRevisionId?: string }) | null
   >(null);
@@ -879,6 +881,7 @@ function Workbench({
   }
   function pickNode(n: GraphNode) {
     if (stale || busy || saving || loadingRevision) return;
+    setInspectorFocus((value) => value + 1);
     setSelected(n);
     setReferenceId(
       bindingsActive && n.sourceRange
@@ -1776,355 +1779,356 @@ function Workbench({
     ),
     analysis: (
       <aside className="inspector">
-        <div className="analysis-summary">
-          <strong>
-            <Check size={21} />
-            {stale
-              ? "Есть изменения"
-              : analysis?.parseStatus === "valid"
-                ? "Синтаксис проверен"
-                : "Проверка исходника"}
-          </strong>
-          <dl>
-            <dt>Узлы</dt>
-            <dd>{methodExecutionNodes.length || "—"}</dd>
-            <dt>Связи</dt>
-            <dd>
-              {graph?.edges.filter(
-                (e) =>
-                  methodNodeIds.has(e.source) && methodNodeIds.has(e.target),
-              ).length ?? "—"}
-            </dd>
-          </dl>
-        </div>
-        {!!analysis?.diagnostics.length && (
-          <details
-            className="analysis-diagnostics"
-            open={analysis?.diagnostics.some((d) => d.severity === "error")}
-          >
-            <summary>Диагностика · {analysis.diagnostics.length}</summary>{" "}
-            {(analysis?.diagnostics ?? []).map((d) => (
-              <button
-                className="diagnostic"
-                key={d.id}
-                onClick={() => {
-                  if (d.sourceRange) {
-                    setRange({
-                      ...d.sourceRange,
-                      diagnosticRevisionId: analysis.revisionId,
-                    });
-                    setFile(d.sourceRange.filePath);
-                    setMode("split");
-                  }
-                }}
+        <CodeInsights
+          analysis={analysis}
+          methodId={methodId}
+          focusKey={inspectorFocus}
+          current={
+            !!analysis &&
+            analysis.revisionId === revision?.id &&
+            !dirty &&
+            !loadingRevision
+          }
+          onNavigate={(target, targetMethod) => {
+            if (
+              !analysis ||
+              analysis.revisionId !== revision?.id ||
+              dirty ||
+              loadingRevision
+            )
+              return;
+            setRange({ ...target, diagnosticRevisionId: analysis.revisionId });
+            setFile(target.filePath);
+            setSelected(null);
+            const enclosing =
+              targetMethod ??
+              graph?.methods.find(
+                (m) =>
+                  m.sourceRange.filePath === target.filePath &&
+                  m.sourceRange.startOffset <= target.startOffset &&
+                  target.endOffset <= m.sourceRange.endOffset,
+              )?.id;
+            if (enclosing) setMethodId(enclosing);
+            setMode("split");
+          }}
+        >
+          <div className="analysis-summary">
+            <strong>
+              <Check size={21} />
+              {stale
+                ? "Есть изменения"
+                : analysis?.parseStatus === "valid"
+                  ? "Синтаксис проверен"
+                  : "Проверка исходника"}
+            </strong>
+            <dl>
+              <dt>Узлы</dt>
+              <dd>{methodExecutionNodes.length || "—"}</dd>
+              <dt>Связи</dt>
+              <dd>
+                {graph?.edges.filter(
+                  (e) =>
+                    methodNodeIds.has(e.source) && methodNodeIds.has(e.target),
+                ).length ?? "—"}
+              </dd>
+            </dl>
+          </div>
+          {selected ? (
+            <>
+              <div
+                className={
+                  "inspector-selection" +
+                  (isIterationProtocol(selected) ? " iteration-protocol" : "")
+                }
               >
-                <span className="diagnostic-symbol">
-                  {d.severity === "error" ? "!" : "△"}
+                <span className="eyebrow">
+                  {selected.executionRole === "ast_projection"
+                    ? "Исходник"
+                    : kindName(selected.kind)}
                 </span>
-                <span>
-                  {d.code === "UNSUPPORTED_CONTROL_FLOW"
-                    ? "Этот метод пока доступен только для просмотра схемы. Его код сохранён и может выполняться."
-                    : d.message}
+                {!isIterationProtocol(selected) && (
+                  <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>
+                )}
+                <span className="quiet small">
+                  {selected.sourceRange
+                    ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
+                    : "Служебный узел"}
                 </span>
-                <code>
-                  {d.sourceRange
-                    ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
-                    : d.code}
-                </code>
-              </button>
-            ))}
-          </details>
-        )}
-        {selected ? (
-          <>
+              </div>
+              {selected.sourceRange && (
+                <button
+                  className="wide subtle"
+                  onClick={() => {
+                    setRange(selected.sourceRange);
+                    setMode("split");
+                  }}
+                >
+                  Перейти к коду <Icon name="external" size={14} />
+                </button>
+              )}
+              {operations.length > 0 ? (
+                <div className="expression-form">
+                  <label htmlFor="node-operation">Действие</label>
+                  <select
+                    id="node-operation"
+                    value={operation}
+                    disabled={inFlight || stale || historical}
+                    onChange={(e) => setOperation(e.target.value)}
+                  >
+                    {operations.map((op) => (
+                      <option key={op} value={op}>
+                        {operationLabels[op]}
+                      </option>
+                    ))}
+                  </select>
+                  {operation === "replace_expression" &&
+                    editRange(selected) && (
+                      <>
+                        <label htmlFor="expression">
+                          {selected.editableFields[0] === "condition"
+                            ? "Условие"
+                            : "Выражение"}
+                        </label>
+                        <textarea
+                          id="expression"
+                          value={expression}
+                          onChange={(e) => setExpression(e.target.value)}
+                          rows={5}
+                          spellCheck={false}
+                          disabled={inFlight || stale || historical}
+                        />
+                      </>
+                    )}
+                  {operation === "replace_statement" && (
+                    <>
+                      <label htmlFor="statement-source">Код блока</label>
+                      <textarea
+                        id="statement-source"
+                        rows={6}
+                        value={statement}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setStatement(e.target.value)}
+                        spellCheck={false}
+                      />
+                    </>
+                  )}
+                  {operation === "insert_statement" && (
+                    <>
+                      <label htmlFor="insert-position">Позиция</label>
+                      <select
+                        id="insert-position"
+                        value={position}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setPosition(e.target.value)}
+                      >
+                        {positions.map((p) => (
+                          <option key={p} value={p}>
+                            {(
+                              {
+                                before: "Перед узлом",
+                                after: "После узла",
+                                body_start: "В начале метода",
+                                body_end: "В конце метода",
+                              } as Record<string, string>
+                            )[p] ?? p}
+                          </option>
+                        ))}
+                      </select>
+                      <label htmlFor="statement-template">Шаблон</label>
+                      <select
+                        id="statement-template"
+                        value={template}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => {
+                          setTemplate(e.target.value);
+                          setStatement(statementTemplates[e.target.value]);
+                        }}
+                      >
+                        <option value="statement">Оператор</option>
+                        <option value="condition">Условие</option>
+                        <option value="loop">Цикл</option>
+                      </select>
+                      <label htmlFor="statement-source">Java оператор</label>
+                      <textarea
+                        id="statement-source"
+                        value={statement}
+                        rows={6}
+                        spellCheck={false}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setStatement(e.target.value)}
+                      />
+                    </>
+                  )}
+                  {operation === "delete_statement" && (
+                    <p className="small quiet">Удаление выбранного оператора</p>
+                  )}
+                  {operation === "move_statement" && (
+                    <>
+                      <label htmlFor="move-target">
+                        Относительно оператора
+                      </label>
+                      <select
+                        id="move-target"
+                        value={targetNodeId}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => {
+                          setTargetNodeId(e.target.value);
+                          const next = targets.find(
+                            (n) => n.id === e.target.value,
+                          );
+                          setMovePosition(
+                            selected && next && graph
+                              ? (movePositions(selected, next, graph)[0] ?? "")
+                              : "",
+                          );
+                        }}
+                      >
+                        <option value="">Выберите оператор</option>
+                        {targets.map((n) => (
+                          <option key={n.id} value={n.id}>
+                            {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
+                          </option>
+                        ))}
+                      </select>
+                      <label htmlFor="move-position">Позиция перемещения</label>
+                      <select
+                        id="move-position"
+                        value={movePosition}
+                        disabled={inFlight || stale || historical || !target}
+                        onChange={(e) => setMovePosition(e.target.value)}
+                      >
+                        {!moveOptions.length && (
+                          <option value="">Нет доступной позиции</option>
+                        )}
+                        {moveOptions.map((p) => (
+                          <option key={p} value={p}>
+                            {p === "before"
+                              ? "Перед оператором"
+                              : "После оператора"}
+                          </option>
+                        ))}
+                      </select>
+                      {!targets.length && (
+                        <p className="small quiet">
+                          В этом блоке нет доступных операторов для перемещения.
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {(operation === "wrap_if" || operation === "wrap_while") && (
+                    <>
+                      <label htmlFor="wrap-condition">Условие</label>
+                      <textarea
+                        id="wrap-condition"
+                        value={wrapCondition}
+                        rows={3}
+                        spellCheck={false}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setWrapCondition(e.target.value)}
+                      />
+                    </>
+                  )}
+                  {operation === "add_else" && (
+                    <>
+                      <label htmlFor="else-source">Тело ветки else</label>
+                      <textarea
+                        id="else-source"
+                        value={elseSource}
+                        rows={6}
+                        spellCheck={false}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setElseSource(e.target.value)}
+                      />
+                    </>
+                  )}
+                  {operation === "remove_else" && (
+                    <p className="small quiet">
+                      Удалить все операторы ветки else
+                    </p>
+                  )}
+                  <label htmlFor="change-intent">Цель изменения</label>
+                  <select
+                    id="change-intent"
+                    value={intent}
+                    disabled={inFlight || stale || historical}
+                    onChange={(e) => setIntent(e.target.value)}
+                  >
+                    <option value="semantic_edit">Изменить логику</option>
+                    <option value="preserve_behavior">
+                      Сохранить поведение
+                    </option>
+                  </select>
+                  <button
+                    className="primary wide"
+                    disabled={
+                      inFlight ||
+                      stale ||
+                      historical ||
+                      !operations.includes(operation) ||
+                      !changePayload
+                    }
+                    onClick={() => void prepare()}
+                  >
+                    {busy ? "Проверка…" : "Подготовить изменение"}
+                  </button>
+                  {stale && (
+                    <p className="small quiet">
+                      Сначала сохраните и исправьте исходник.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="inspector-note">Нет доступных действий</p>
+              )}
+            </>
+          ) : (
             <div
               className={
-                "inspector-selection" +
-                (isIterationProtocol(selected) ? " iteration-protocol" : "")
+                "inspector-placeholder " +
+                (activeReference ? "symbol-selected" : "")
               }
             >
-              <span className="eyebrow">
-                {selected.executionRole === "ast_projection"
-                  ? "Исходник"
-                  : kindName(selected.kind)}
+              <span>
+                <Icon name="workflow" size={27} />
               </span>
-              {!isIterationProtocol(selected) && (
-                <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>
-              )}
-              <span className="quiet small">
-                {selected.sourceRange
-                  ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
-                  : "Служебный узел"}
-              </span>
+              <p>Выберите узел</p>
             </div>
-            {selected.sourceRange && (
-              <button
-                className="wide subtle"
-                onClick={() => {
-                  setRange(selected.sourceRange);
-                  setMode("split");
-                }}
-              >
-                Перейти к коду <Icon name="external" size={14} />
-              </button>
-            )}
-            {operations.length > 0 ? (
-              <div className="expression-form">
-                <label htmlFor="node-operation">Действие</label>
-                <select
-                  id="node-operation"
-                  value={operation}
-                  disabled={inFlight || stale || historical}
-                  onChange={(e) => setOperation(e.target.value)}
-                >
-                  {operations.map((op) => (
-                    <option key={op} value={op}>
-                      {operationLabels[op]}
-                    </option>
-                  ))}
-                </select>
-                {operation === "replace_expression" && editRange(selected) && (
-                  <>
-                    <label htmlFor="expression">
-                      {selected.editableFields[0] === "condition"
-                        ? "Условие"
-                        : "Выражение"}
-                    </label>
-                    <textarea
-                      id="expression"
-                      value={expression}
-                      onChange={(e) => setExpression(e.target.value)}
-                      rows={5}
-                      spellCheck={false}
-                      disabled={inFlight || stale || historical}
-                    />
-                  </>
-                )}
-                {operation === "replace_statement" && (
-                  <>
-                    <label htmlFor="statement-source">Код блока</label>
-                    <textarea
-                      id="statement-source"
-                      rows={6}
-                      value={statement}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => setStatement(e.target.value)}
-                      spellCheck={false}
-                    />
-                  </>
-                )}
-                {operation === "insert_statement" && (
-                  <>
-                    <label htmlFor="insert-position">Позиция</label>
-                    <select
-                      id="insert-position"
-                      value={position}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => setPosition(e.target.value)}
-                    >
-                      {positions.map((p) => (
-                        <option key={p} value={p}>
-                          {(
-                            {
-                              before: "Перед узлом",
-                              after: "После узла",
-                              body_start: "В начале метода",
-                              body_end: "В конце метода",
-                            } as Record<string, string>
-                          )[p] ?? p}
-                        </option>
-                      ))}
-                    </select>
-                    <label htmlFor="statement-template">Шаблон</label>
-                    <select
-                      id="statement-template"
-                      value={template}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => {
-                        setTemplate(e.target.value);
-                        setStatement(statementTemplates[e.target.value]);
-                      }}
-                    >
-                      <option value="statement">Оператор</option>
-                      <option value="condition">Условие</option>
-                      <option value="loop">Цикл</option>
-                    </select>
-                    <label htmlFor="statement-source">Java оператор</label>
-                    <textarea
-                      id="statement-source"
-                      value={statement}
-                      rows={6}
-                      spellCheck={false}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => setStatement(e.target.value)}
-                    />
-                  </>
-                )}
-                {operation === "delete_statement" && (
-                  <p className="small quiet">Удаление выбранного оператора</p>
-                )}
-                {operation === "move_statement" && (
-                  <>
-                    <label htmlFor="move-target">Относительно оператора</label>
-                    <select
-                      id="move-target"
-                      value={targetNodeId}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => {
-                        setTargetNodeId(e.target.value);
-                        const next = targets.find(
-                          (n) => n.id === e.target.value,
-                        );
-                        setMovePosition(
-                          selected && next && graph
-                            ? (movePositions(selected, next, graph)[0] ?? "")
-                            : "",
-                        );
-                      }}
-                    >
-                      <option value="">Выберите оператор</option>
-                      {targets.map((n) => (
-                        <option key={n.id} value={n.id}>
-                          {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
-                        </option>
-                      ))}
-                    </select>
-                    <label htmlFor="move-position">Позиция перемещения</label>
-                    <select
-                      id="move-position"
-                      value={movePosition}
-                      disabled={inFlight || stale || historical || !target}
-                      onChange={(e) => setMovePosition(e.target.value)}
-                    >
-                      {!moveOptions.length && (
-                        <option value="">Нет доступной позиции</option>
-                      )}
-                      {moveOptions.map((p) => (
-                        <option key={p} value={p}>
-                          {p === "before"
-                            ? "Перед оператором"
-                            : "После оператора"}
-                        </option>
-                      ))}
-                    </select>
-                    {!targets.length && (
-                      <p className="small quiet">
-                        В этом блоке нет доступных операторов для перемещения.
-                      </p>
-                    )}
-                  </>
-                )}
-                {(operation === "wrap_if" || operation === "wrap_while") && (
-                  <>
-                    <label htmlFor="wrap-condition">Условие</label>
-                    <textarea
-                      id="wrap-condition"
-                      value={wrapCondition}
-                      rows={3}
-                      spellCheck={false}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => setWrapCondition(e.target.value)}
-                    />
-                  </>
-                )}
-                {operation === "add_else" && (
-                  <>
-                    <label htmlFor="else-source">Тело ветки else</label>
-                    <textarea
-                      id="else-source"
-                      value={elseSource}
-                      rows={6}
-                      spellCheck={false}
-                      disabled={inFlight || stale || historical}
-                      onChange={(e) => setElseSource(e.target.value)}
-                    />
-                  </>
-                )}
-                {operation === "remove_else" && (
-                  <p className="small quiet">
-                    Удалить все операторы ветки else
-                  </p>
-                )}
-                <label htmlFor="change-intent">Цель изменения</label>
-                <select
-                  id="change-intent"
-                  value={intent}
-                  disabled={inFlight || stale || historical}
-                  onChange={(e) => setIntent(e.target.value)}
-                >
-                  <option value="semantic_edit">Изменить логику</option>
-                  <option value="preserve_behavior">Сохранить поведение</option>
-                </select>
-                <button
-                  className="primary wide"
-                  disabled={
-                    inFlight ||
-                    stale ||
-                    historical ||
-                    !operations.includes(operation) ||
-                    !changePayload
-                  }
-                  onClick={() => void prepare()}
-                >
-                  {busy ? "Проверка…" : "Подготовить изменение"}
-                </button>
-                {stale && (
-                  <p className="small quiet">
-                    Сначала сохраните и исправьте исходник.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="inspector-note">Нет доступных действий</p>
-            )}
-          </>
-        ) : (
-          <div
-            className={
-              "inspector-placeholder " +
-              (activeReference ? "symbol-selected" : "")
-            }
-          >
-            <span>
-              <Icon name="workflow" size={27} />
-            </span>
-            <p>Выберите узел</p>
-          </div>
-        )}
+          )}
 
-        {symbolPanel}
-        <div className="inspector-section">
-          <div className="panel-caption">
-            ВЫРАЖЕНИЯ <span>{expressions.length}</span>
-          </div>
-          <div className="expression-list">
-            {expressions.map((n) => (
-              <button
-                key={n.id}
-                className={selected?.id === n.id ? "active" : ""}
-                onClick={() => pickNode(n)}
-                disabled={stale}
-              >
-                <span>{n.sourceRange?.startLine}</span>
-                <code>{n.label.split("\n")[0].slice(0, 85)}</code>
-              </button>
-            ))}
-          </div>
-        </div>
-        {graph && (
-          <details className="node-access">
-            <summary>Все узлы метода</summary>
-            {graph.nodes
-              .filter((n) => n.methodId === methodId)
-              .map((n) => (
-                <button key={n.id} onClick={() => pickNode(n)}>
-                  {isIterationProtocol(n)
-                    ? nodeCaption(n)
-                    : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
+          {symbolPanel}
+          <div className="inspector-section">
+            <div className="panel-caption">
+              ВЫРАЖЕНИЯ <span>{expressions.length}</span>
+            </div>
+            <div className="expression-list">
+              {expressions.map((n) => (
+                <button
+                  key={n.id}
+                  className={selected?.id === n.id ? "active" : ""}
+                  onClick={() => pickNode(n)}
+                  disabled={stale}
+                >
+                  <span>{n.sourceRange?.startLine}</span>
+                  <code>{n.label.split("\n")[0].slice(0, 85)}</code>
                 </button>
               ))}
-          </details>
-        )}
+            </div>
+          </div>
+          {graph && (
+            <details className="node-access">
+              <summary>Все узлы метода</summary>
+              {graph.nodes
+                .filter((n) => n.methodId === methodId)
+                .map((n) => (
+                  <button key={n.id} onClick={() => pickNode(n)}>
+                    {isIterationProtocol(n)
+                      ? nodeCaption(n)
+                      : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
+                  </button>
+                ))}
+            </details>
+          )}
+        </CodeInsights>
       </aside>
     ),
     console: (

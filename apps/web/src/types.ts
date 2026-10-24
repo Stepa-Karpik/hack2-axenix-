@@ -92,6 +92,42 @@ export interface Analysis {
   sourceMapVersion: string;
   symbolEnvironmentHash?: string;
   semantics?: SemanticModel | null;
+  quality?: {
+    schemaVersion: string;
+    methods: MethodMetrics[];
+    findings: CodeFinding[];
+    findingsTruncated: boolean;
+  } | null;
+}
+export interface MethodMetrics {
+  methodId: string;
+  declarationId: string;
+  entryNodeId: string;
+  sourceRange: SourceRange;
+  bodyLines: number;
+  codeLines: number;
+  statements: number;
+  branchingScore: number;
+  maxNesting: number;
+  loops: number;
+  maxLoopNesting: number;
+  calls: number;
+  asymptotic: string;
+  asymptoticReason: string;
+}
+export interface CodeFinding {
+  id: string;
+  methodId: string;
+  nodeId: string;
+  severity: string;
+  code: string;
+  title: string;
+  explanation: string;
+  recommendation: string;
+  expectedEffect: string;
+  observed: number;
+  threshold: number;
+  sourceRange: SourceRange;
 }
 export interface Execution {
   outcome: string;

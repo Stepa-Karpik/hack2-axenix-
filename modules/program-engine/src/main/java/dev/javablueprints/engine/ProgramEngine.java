@@ -21,7 +21,9 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.8.0";
+    // Runtime read prevents javac inlining an older engine version into incremental server builds.
+    public static final String VERSION = analyzerVersion();
+    private static String analyzerVersion() { return "engine-0.9.0"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -486,6 +488,12 @@ public final class ProgramEngine {
                     return builder.maps.get(path).range(node);
                 }, builder.declarationBindings);
         builder.declarations.addAll(semantic.declarations());
+        QualityModel quality = builder.invalid ? QualityModel.empty() : QualityAnalyzer.inspect(id,
+                builder.declarationBindings, graph.methods(), node -> {
+                    CompilationUnit unit = node.findCompilationUnit().orElseThrow();
+                    String path = builder.units.entrySet().stream().filter(e -> e.getValue() == unit).findFirst().orElseThrow().getKey();
+                    return builder.maps.get(path).range(node);
+                });
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
                 new Capability("control_flow", "partial", "Structured if/while/do/for, enhanced-for normal iteration abstraction and traditional colon switch, return/throw, nearest loop/switch break and enclosing-loop continue; exceptional calls, iteration protocol details and opaque constructs are not complete CFG"),
@@ -498,10 +506,11 @@ public final class ProgramEngine {
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
                 new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
+                new Capability("code_insights", builder.invalid ? "not_requested" : "passed", "Lexical body lines, structural statements/nesting/branching/calls; bounded recommendations are heuristic reading aids, not runtime cost or safe automatic refactoring"),
                 new Capability("OPT-MEMBERSHIP-001", "unsupported", "Alias, escape, dominance and effect proof not implemented"));
         Analysis analysis = new Analysis(id, bundle.revisionId(), bundleHash(bundle), VERSION, "3.28.2", "JAVA_21",
                 builder.invalid ? "invalid" : "valid", "not_requested", builder.invalid ? "not_requested" : "partial", SOURCE_MAP_VERSION,
-                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model());
+                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model(), quality);
         return new Parsed(analysis, builder.bindings, builder.maps);
     }
 
