@@ -1388,3 +1388,43 @@ select:focus-visible,
   margin-left: 18px;
   margin-right: 18px;
 }
+.blueprint-node.role-structural {
+  position: relative;
+  min-width: 0;
+  padding: 8px 12px;
+  width: 174px;
+  min-height: 42px;
+  border-style: dashed;
+  background: var(--surface-hover);
+}
+.blueprint-node.role-structural .node-label {
+  padding-top: 0;
+  text-align: center;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.blueprint-node.condition_test {
+  border-color: var(--line);
+  border-left: 3px solid #94ad67;
+}
+.blueprint-node.condition_test .node-meta {
+  color: var(--quiet);
+}
+
+.structural-line {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  font-size: 9px;
+  color: var(--quiet);
+}
+.shortcut-label {
+  position: absolute;
+  pointer-events: none;
+  color: var(--muted-strong);
+  background: var(--surface);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}

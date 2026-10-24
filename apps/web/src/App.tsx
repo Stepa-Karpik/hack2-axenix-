@@ -1591,7 +1591,11 @@ function Workbench({
           {selected ? (
             <>
               <div className="inspector-selection">
-                <span className="eyebrow">{kindName(selected.kind)}</span>
+                <span className="eyebrow">
+                  {selected.executionRole === "ast_projection"
+                    ? "Исходник"
+                    : kindName(selected.kind)}
+                </span>
                 <h2>{selected.label.split("\n")[0].slice(0, 120)}</h2>
                 <span className="quiet small">
                   {selected.sourceRange

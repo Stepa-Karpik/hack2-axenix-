@@ -185,3 +185,113 @@ test("semantic references use exact scoped identities and bounded source navigat
     false,
   );
 });
+
+test("condition flow layout keeps branches disjoint without executing AST projections", async () => {
+  const { executionNodes, arrangeFlow } = await import("./flowLayout.ts");
+  const node = (id, role = "statement", kind = "ExpressionStmt") => ({
+    id,
+    executionRole: role,
+    kind,
+  });
+  const nodes = [
+    node("entry", "synthetic", "entry"),
+    node("header", "structural", "IfStmt"),
+    node("a", "condition_test", "condition_test"),
+    node("b", "condition_test", "condition_test"),
+    node("yes"),
+    node("no"),
+    node("join"),
+    node("projection", "ast_projection"),
+  ];
+  const edge = (source, target, kind = "normal") => ({ source, target, kind });
+  const edges = [
+    edge("entry", "header"),
+    edge("header", "a"),
+    edge("a", "b", "true"),
+    edge("a", "no", "false"),
+    edge("b", "yes", "true"),
+    edge("b", "no", "false"),
+    edge("yes", "join"),
+    edge("no", "join"),
+    edge("join", "header", "loop"),
+    edge("projection", "a"),
+  ];
+  const visible = executionNodes(nodes, edges);
+  assert.equal(
+    visible.some((n) => n.id === "projection"),
+    false,
+  );
+  assert.equal(
+    executionNodes([node("old", null), node("other")], [edge("old", "other")])
+      .length,
+    2,
+  );
+  const positions = arrangeFlow(visible, edges);
+  assert.equal(positions.size, visible.length);
+  for (const [a, p] of positions)
+    for (const [b, q] of positions)
+      if (a !== b)
+        assert.ok(
+          Math.abs(p.y - q.y) >= 145 || Math.abs(p.x - q.x) >= 320,
+          a + " overlaps " + b,
+        );
+  assert.deepEqual(arrangeFlow(visible, edges), positions);
+  assert.ok(positions.get("b").y > positions.get("a").y);
+  assert.ok(positions.get("join").y > positions.get("no").y);
+});
+
+test("shortcut and loop lanes bypass every node column", async () => {
+  const { routeFlowEdges } = await import("./flowLayout.ts");
+  const nodes = [
+    { id: "a", position: { x: 0, y: 0 } },
+    { id: "b", position: { x: 0, y: 145 } },
+    { id: "c", position: { x: 0, y: 290 } },
+  ];
+  const edges = [
+    { id: "next", source: "a", target: "b", kind: "false" },
+    { id: "skip", source: "a", target: "c", kind: "true" },
+    { id: "back", source: "c", target: "a", kind: "loop" },
+  ];
+  const routes = routeFlowEdges(nodes, edges);
+  assert.equal(routes.has("next"), false);
+  assert.ok(
+    routes.get("skip") >
+      Math.max(...nodes.map((node) => node.position.x + 280)),
+  );
+  assert.ok(
+    routes.get("back") < Math.min(...nodes.map((node) => node.position.x)),
+  );
+});
+
+test("dragged departure and approach obstacles are bypassed within router budget", async () => {
+  const { routeOrthogonal, segmentHitsBox } = await import("./flowLayout.ts");
+  for (const obstacleY of [80, 250]) {
+    const boxes = [
+      { id: "A", x: 320, y: 0, width: 280, height: 74 },
+      { id: "C", x: 320, y: 290, width: 280, height: 74 },
+      { id: "B", x: 0, y: obstacleY, width: 280, height: 74 },
+    ];
+    const result = routeOrthogonal(
+      { x: 460, y: 74 },
+      { x: 460, y: 290 },
+      -40,
+      boxes,
+    );
+    assert.equal(result.complete, true);
+    assert.ok(
+      result.points
+        .slice(1)
+        .every((point, index) =>
+          boxes.every(
+            (box) => !segmentHitsBox(result.points[index], point, box),
+          ),
+        ),
+    );
+  }
+  const limited = routeOrthogonal({ x: 0, y: 0 }, { x: 0, y: 290 }, -40, [
+    { id: "overlap", x: -100, y: -100, width: 1000, height: 1000 },
+  ]);
+  assert.equal(limited.complete, false);
+  assert.deepEqual(limited.points[0], { x: 0, y: 0 });
+  assert.deepEqual(limited.points.at(-1), { x: 0, y: 290 });
+});

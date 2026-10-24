@@ -674,6 +674,104 @@ class WorkspaceIntegrationTest {
     assertEquals(404, send("GET", "/projects/" + foreign + "/revisions/" + foreignRevision + "/analysis?analysisId=" + aid, null, null, null, null).status);
   }
 
+  List<String> normalConditionTrace(dev.javablueprints.engine.EngineModel.Graph graph, String methodName,
+      Map<String, Boolean> atomValues) {
+    var method = graph.methods().stream().filter(m -> m.fullyQualifiedName().endsWith("." + methodName)).findFirst().orElseThrow();
+    var nodes = graph.nodes().stream().collect(java.util.stream.Collectors.toMap(dev.javablueprints.engine.EngineModel.GraphNode::id, n -> n));
+    var trace = new ArrayList<String>();
+    String current = method.entryNodeId();
+    for (int step = 0; step < 40; step++) {
+      var node = nodes.get(current);
+      assertNotNull(node);
+      assertEquals(method.id(), node.methodId());
+      assertNotEquals("ast_projection", node.executionRole(), "Source projection cannot run as a second instruction");
+      if (node.kind().equals("normal_exit")) return trace;
+      if (node.executionRole().equals("condition_test") || node.executionRole().equals("statement")) trace.add(node.label());
+      String from = current;
+      var outgoing = graph.edges().stream().filter(e -> e.source().equals(from)).toList();
+      if (node.executionRole().equals("condition_test")) {
+        assertTrue(atomValues.containsKey(node.label()), "Every visited atom has an independent fixture value");
+        String branch = atomValues.get(node.label()) ? "true" : "false";
+        current = outgoing.stream().filter(e -> e.kind().equals(branch)).findFirst().orElseThrow().target();
+      } else {
+        assertEquals(1, outgoing.size(), "Non-test anchor/statement has one normal continuation in this fixture");
+        current = outgoing.getFirst().target();
+      }
+    }
+    throw new AssertionError("Normal trace did not terminate");
+  }
+
+  @Test
+  void shortCircuitGraphRoundTripsAndConditionCandidateRegeneratesItsOwnPaths() throws Exception {
+    String p = project();
+    String source = "// 😀\nclass Main {int decide(boolean left, boolean right){if(left && right)return 1;return 0;}}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var a = analyzeRevision(p, revision);
+    var original = w.convert(a, dev.javablueprints.engine.EngineModel.Analysis.class);
+    var graphReply = send("GET", "/projects/" + p + "/revisions/" + revision + "/graph?analysisId=" + original.id(), null, null, null, null);
+    assertEquals(200, graphReply.status, graphReply.body.toString());
+    var graph = w.convert(obj(graphReply), dev.javablueprints.engine.EngineModel.Graph.class);
+    assertEquals(original.graph(), graph, "Graph role/range/ID data survives immutable persistence and HTTP");
+    assertEquals(List.of("left", "return 0;"), normalConditionTrace(graph, "decide", Map.of("left", false)));
+    assertEquals(List.of("left", "right", "return 0;"), normalConditionTrace(graph, "decide", Map.of("left", true, "right", false)));
+    assertEquals(List.of("left", "right", "return 1;"), normalConditionTrace(graph, "decide", Map.of("left", true, "right", true)));
+    for (var atom : graph.nodes().stream().filter(n -> n.kind().equals("condition_test")).toList()) {
+      assertEquals("condition_test", atom.executionRole());
+      assertTrue(atom.editableFields().isEmpty());
+      assertTrue(atom.allowedOperations().isEmpty());
+      assertEquals(atom.label(), source.substring(atom.sourceRange().startOffset(), atom.sourceRange().endOffset()));
+    }
+    var header = graph.nodes().stream().filter(n -> n.kind().equals("IfStmt")).findFirst().orElseThrow();
+    assertEquals("structural", header.executionRole());
+    assertTrue(header.allowedOperations().contains("replace_expression"));
+    var body = map("baseRevisionId", revision, "analysisId", original.id(), "methodId", header.methodId(), "nodeId", header.id(), "operation", "replace_expression", "payload", map("field", "condition", "source", "left || right"), "intent", "semantic_edit");
+    var submitted = post("/projects/" + p + "/changes", body, id(), null);
+    assertEquals(202, submitted.status, submitted.body.toString());
+    assertEquals("succeeded", waitJob(p, str(obj(submitted), "jobId")).get("status"));
+    var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+    assertEquals("rejected", proposal.get("status"));
+    assertEquals("unavailable", ((Map<?, ?>) proposal.get("checks")).get("compileStatus"));
+    String candidate = str(proposal, "candidateRevisionId");
+    var candidateAnalysis = w.convert(analyzeRevision(p, candidate), dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertEquals(List.of("left", "return 1;"), normalConditionTrace(candidateAnalysis.graph(), "decide", Map.of("left", true)));
+    assertEquals(List.of("left", "right", "return 1;"), normalConditionTrace(candidateAnalysis.graph(), "decide", Map.of("left", false, "right", true)));
+    assertEquals(List.of("left", "right", "return 0;"), normalConditionTrace(candidateAnalysis.graph(), "decide", Map.of("left", false, "right", false)));
+    assertEquals(revision, w.project(p).get("headRevisionId"));
+    assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
+    assertEquals(graph, w.convert(w.analysis(p, revision, original.id()).get("graph"), dev.javablueprints.engine.EngineModel.Graph.class));
+    var originalIds = graph.nodes().stream().map(dev.javablueprints.engine.EngineModel.GraphNode::id).collect(java.util.stream.Collectors.toSet());
+    assertTrue(candidateAnalysis.graph().nodes().stream().noneMatch(n -> originalIds.contains(n.id())), "Candidate graph has its own bindings");
+    assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidate, "proposalId", proposal.get("id")), id(), revision).status);
+    var capabilities = obj(send("GET", "/capabilities", null, null, null, null));
+    assertEquals("partial", ((Map<?, ?>) capabilities.get("condition_flow")).get("status"));
+    assertEquals("normal_short_circuit_conditions", ((Map<?, ?>) capabilities.get("condition_flow")).get("scope"));
+    assertEquals("partial", ((Map<?, ?>) capabilities.get("control_flow")).get("status"));
+    assertEquals("unknown", ((Map<?, ?>) capabilities.get("control_flow")).get("exceptionalFlow"));
+  }
+
+  @Test
+  void legacyGraphExecutionRoleIsUnknownAndOldEngineCannotAuthorizeCurrentEdits() throws Exception {
+    String p = project();
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(code), id(), "empty")), "id");
+    var old = w.decode(w.encode(new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))))));
+    old.put("analyzerVersion", "engine-0.3.0");
+    var graph = (Map<String, Object>) old.get("graph");
+    ((List<Map<String, Object>>) graph.get("nodes")).forEach(n -> n.remove("executionRole"));
+    String aid = str(old, "id");
+    w.putResource(p, aid, "analysis", old);
+    var explicit = send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis?analysisId=" + aid, null, null, null, null);
+    assertEquals(200, explicit.status);
+    assertEquals(old, obj(explicit));
+    var mapped = w.convert(obj(explicit), dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertTrue(mapped.graph().nodes().stream().allMatch(n -> n.executionRole() == null), "Absent legacy role must not become executable");
+    assertEquals(404, send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null).status);
+    var edit = map("baseRevisionId", revision, "analysisId", aid, "methodId", "m", "nodeId", "n", "operation", "replace_expression", "payload", map("field", "expression", "source", "2"), "intent", "semantic_edit");
+    assertEquals(409, post("/projects/" + p + "/changes", edit, id(), null).status);
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    assertNotEquals(aid, analyzeRevision(p, revision).get("id"));
+    assertEquals("engine-0.4.0", w.analysis(p, revision, null).get("analyzerVersion"));
+  }
+
   @Test
   void symbolEnvironmentFencesCacheAndCommandsWhileHistoricalJsonRemainsReadable() throws Exception {
     String p = project();

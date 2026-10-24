@@ -44,7 +44,7 @@ public final class EngineModel {
                             String kind, String label, SourceRange sourceRange, String astBinding,
                             String parentId, boolean synthetic, List<String> editableFields,
                             Map<String, SourceRange> editableFieldRanges, List<String> allowedOperations,
-                            List<String> insertionPositions) {
+                            List<String> insertionPositions, String executionRole) {
         public GraphNode {
             editableFields = List.copyOf(editableFields);
             editableFieldRanges = editableFieldRanges == null ? Map.of() : Map.copyOf(editableFieldRanges);
@@ -56,7 +56,15 @@ public final class EngineModel {
                          String parentId, boolean synthetic, List<String> editableFields,
                          Map<String, SourceRange> editableFieldRanges) {
             this(id, revisionId, analysisId, methodId, kind, label, sourceRange, astBinding,
-                    parentId, synthetic, editableFields, editableFieldRanges, List.of(), List.of());
+                    parentId, synthetic, editableFields, editableFieldRanges, List.of(), List.of(), null);
+        }
+        public GraphNode(String id, String revisionId, String analysisId, String methodId,
+                         String kind, String label, SourceRange sourceRange, String astBinding,
+                         String parentId, boolean synthetic, List<String> editableFields,
+                         Map<String, SourceRange> editableFieldRanges, List<String> allowedOperations,
+                         List<String> insertionPositions) {
+            this(id, revisionId, analysisId, methodId, kind, label, sourceRange, astBinding,
+                    parentId, synthetic, editableFields, editableFieldRanges, allowedOperations, insertionPositions, null);
         }
     }
     public record Edge(String id, String source, String target, String kind, String label, String completionContext) {}

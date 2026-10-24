@@ -7,35 +7,60 @@ import {
   Position,
   MarkerType,
   applyNodeChanges,
+  BaseEdge,
+  EdgeLabelRenderer,
 } from "@xyflow/react";
 import type {
   Node,
   NodeProps,
   NodeChange,
+  Edge,
+  EdgeProps,
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import type { RouteBox } from "./flowLayout";
 import type { Graph, GraphNode, Layout } from "./types";
+import {
+  arrangeFlow,
+  executionNodes,
+  routeFlowEdges,
+  routeOrthogonal,
+} from "./flowLayout";
 import { api, projectPath } from "./api";
 type FlowData = {
   label: string;
   kind: string;
   line: string;
   selected: boolean;
+  executionRole?: GraphNode["executionRole"];
 };
 function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
   return (
     <div
       className={
-        "blueprint-node " + (data.selected ? "selected " : "") + data.kind
+        "blueprint-node " +
+        (data.selected ? "selected " : "") +
+        data.kind +
+        " role-" +
+        (data.executionRole ?? "unknown")
       }
     >
       <Handle type="target" position={Position.Top} />
-      <div className="node-meta">
-        <span>{kindName(data.kind)}</span>
-        <span>{data.line}</span>
-      </div>
-      <div className="node-label">{data.label}</div>
+      {data.executionRole === "structural" ? (
+        <>
+          <div className="node-label">{data.label}</div>
+          <span className="structural-line">{data.line}</span>
+        </>
+      ) : (
+        <>
+          <div className="node-meta">
+            <span>{kindName(data.kind)}</span>
+            <span>{data.line}</span>
+          </div>
+          <div className="node-label">{data.label}</div>
+        </>
+      )}
       <Handle type="source" position={Position.Bottom} />
     </div>
   );
@@ -51,7 +76,8 @@ export function kindName(kind: string) {
         for_init: "Инициализация",
         for_update: "Обновление",
         loop_back: "Повтор цикла",
-        IfStmt: "Условие",
+        IfStmt: "Если",
+        condition_test: "Проверка",
         WhileStmt: "Пока",
         ForStmt: "Цикл",
         DoStmt: "Повтор",
@@ -74,6 +100,85 @@ export function kindName(kind: string) {
     )[kind] ?? kind
   );
 }
+function ShortcutEdge({
+  id,
+  source,
+  target,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  markerEnd,
+  style,
+  label,
+  data,
+}: EdgeProps<Edge<{ routeX: number; boxes: RouteBox[] }>>) {
+  const routeX = data!.routeX;
+  const route = useMemo(
+    () =>
+      routeOrthogonal(
+        { x: sourceX, y: sourceY },
+        { x: targetX, y: targetY },
+        routeX,
+        data!.boxes,
+      ),
+    [sourceX, sourceY, targetX, targetY, routeX, data],
+  );
+  const path = route.points
+    .map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`)
+    .join(" ");
+  const horizontal = route.points
+    .slice(1)
+    .findIndex(
+      (point, index) =>
+        point.y === route.points[index].y &&
+        Math.abs(point.x - route.points[index].x) > 24,
+    );
+  const labelStart = route.points[Math.max(0, horizontal)],
+    labelEnd = route.points[Math.max(1, horizontal + 1)];
+  const labelX =
+    labelStart.x +
+    Math.sign(labelEnd.x - labelStart.x) *
+      Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
+  const labelY = labelStart.y;
+  return (
+    <>
+      <g
+        data-shortcut-source={source}
+        data-shortcut-target={target}
+        data-route-status={route.complete ? "clear" : "limited"}
+      >
+        {!route.complete && (
+          <title>Маршрут ограничен: обход узлов не гарантирован</title>
+        )}
+        <BaseEdge
+          id={id}
+          path={path}
+          markerEnd={markerEnd}
+          style={route.complete ? style : { ...style, strokeDasharray: "4 4" }}
+        />
+      </g>
+      {label && (
+        <EdgeLabelRenderer>
+          <span
+            className="shortcut-label"
+            title={
+              route.complete
+                ? undefined
+                : "Маршрут ограничен: обход узлов не гарантирован"
+            }
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            }}
+          >
+            {label}
+          </span>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+const edgeTypes = { shortcut: ShortcutEdge };
 const nodeTypes = { blueprint: BlueprintNode };
 export default function FlowCanvas({
   graph,
@@ -93,8 +198,12 @@ export default function FlowCanvas({
   const [nodes, setNodes] = useState<Node<FlowData>[]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutError, setLayoutError] = useState("");
-  const flow = useRef<Pick<ReactFlowInstance, "setViewport"> | null>(null);
+  const flow = useRef<Pick<
+    ReactFlowInstance<Node<FlowData>>,
+    "setViewport" | "getViewport"
+  > | null>(null);
   const container = useRef<HTMLDivElement>(null);
+  const viewportWidth = useRef(0);
   const scope = `${projectId}/${graph.revisionId}/${graph.analysisId}/${methodId}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -109,8 +218,8 @@ export default function FlowCanvas({
     [graph, methodId],
   );
   const ids = useMemo(
-    () => new Set(methodNodes.map((n) => n.id)),
-    [methodNodes],
+    () => new Set(executionNodes(methodNodes, graph.edges).map((n) => n.id)),
+    [methodNodes, graph.edges],
   );
   const edges = useMemo(
     () =>
@@ -119,8 +228,11 @@ export default function FlowCanvas({
         .map((e) => ({
           ...e,
           label:
-            e.label ??
-            (e.kind === "true" ? "да" : e.kind === "false" ? "нет" : undefined),
+            e.kind === "true"
+              ? "да"
+              : e.kind === "false"
+                ? "нет"
+                : (e.label ?? undefined),
           markerEnd: { type: MarkerType.ArrowClosed, color: "#9aa18f" },
           style: { stroke: "#aeb6a1", strokeWidth: 1.3 },
           labelStyle: { fontSize: 10, fill: "#7a8370" },
@@ -146,51 +258,8 @@ export default function FlowCanvas({
     };
   }, [projectId, graph, methodId]);
   useEffect(() => {
-    const connected = new Set(edges.flatMap((e) => [e.source, e.target]));
-    const visible = methodNodes.filter(
-      (n) => connected.has(n.id) || n.kind === "entry" || n.kind === "exit",
-    );
-    const forward = new Map<string, typeof edges>();
-    const seen = new Set<string>();
-    const active = new Set<string>();
-    const visit = (id: string) => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      active.add(id);
-      for (const edge of edges.filter((e) => e.source === id)) {
-        if (active.has(edge.target)) continue;
-        forward.set(id, [...(forward.get(id) ?? []), edge]);
-        visit(edge.target);
-      }
-      active.delete(id);
-    };
-    const entry = visible.find((n) => n.kind === "entry");
-    if (entry) visit(entry.id);
-    const positions = new Map<string, { x: number; y: number }>();
-    if (entry) positions.set(entry.id, { x: 0, y: 0 });
-    for (let pass = 0; pass < visible.length; pass++) {
-      let changed = false;
-      for (const [id, children] of forward) {
-        const source = positions.get(id);
-        if (!source) continue;
-        children.forEach((edge, index) => {
-          const old = positions.get(edge.target);
-          const next = {
-            x:
-              source.x +
-              (children.length > 1
-                ? (index - (children.length - 1) / 2) * 280
-                : 0),
-            y: source.y + 135,
-          };
-          if (!old || old.y < next.y) {
-            positions.set(edge.target, next);
-            changed = true;
-          }
-        });
-      }
-      if (!changed) break;
-    }
+    const visible = executionNodes(methodNodes, edges);
+    const positions = arrangeFlow(visible, edges);
     setNodes(
       visible.map((n, i) => {
         const pos = layout?.positions.find((p) => p.nodeId === n.id) ??
@@ -201,16 +270,19 @@ export default function FlowCanvas({
           position: { x: pos.x, y: pos.y },
           data: {
             kind: n.kind,
+            executionRole: n.executionRole,
             label:
-              n.kind === "entry"
-                ? "Начало"
-                : n.kind === "normal_exit"
-                  ? "Завершение"
-                  : n.kind === "exceptional_exit"
-                    ? "Исключение"
-                    : n.kind === "loop_back"
-                      ? "Повтор цикла"
-                      : n.label.split("\n")[0].slice(0, 110),
+              n.executionRole === "structural"
+                ? kindName(n.kind)
+                : n.kind === "entry"
+                  ? "Начало"
+                  : n.kind === "normal_exit"
+                    ? "Завершение"
+                    : n.kind === "exceptional_exit"
+                      ? "Исключение"
+                      : n.kind === "loop_back"
+                        ? "Повтор цикла"
+                        : n.label.split("\n")[0].slice(0, 110),
             line: n.sourceRange ? `L${n.sourceRange.startLine}` : "",
             selected: false,
           },
@@ -218,10 +290,22 @@ export default function FlowCanvas({
       }),
     );
     requestAnimationFrame(() =>
-      flow.current?.setViewport({
-        x: (container.current?.clientWidth ?? 500) / 2 - 90,
-        y: 35,
-        zoom: 0.85,
+      requestAnimationFrame(() => {
+        if (scopeRef.current !== scope) return;
+        viewportWidth.current = container.current?.clientWidth ?? 500;
+        if (layout?.positions.length)
+          void flow.current?.setViewport(layout.viewport);
+        else {
+          const entry = visible.find((node) => node.kind === "entry");
+          const entryPosition = entry ? positions.get(entry.id) : undefined;
+          void flow.current?.setViewport({
+            x:
+              (container.current?.clientWidth ?? 500) / 2 -
+              ((entryPosition?.x ?? 0) + 87) * 0.85,
+            y: 35 - (entryPosition?.y ?? 0) * 0.85,
+            zoom: 0.85,
+          });
+        }
       }),
     );
   }, [methodNodes, edges, layout]);
@@ -246,6 +330,43 @@ export default function FlowCanvas({
       }),
     [selected, methodNodes],
   );
+  const renderedEdges = useMemo(() => {
+    const routes = routeFlowEdges(nodes, edges);
+    const boxes = nodes.map((node) => ({
+      id: node.id,
+      ...node.position,
+      width: node.measured?.width ?? 280,
+      height: node.measured?.height ?? 85,
+    }));
+    return edges.map((edge) =>
+      routes.has(edge.id)
+        ? {
+            ...edge,
+            type: "shortcut",
+            data: { routeX: routes.get(edge.id)!, boxes },
+          }
+        : edge,
+    );
+  }, [nodes, edges]);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    viewportWidth.current = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const next = element.clientWidth;
+      const width = viewportWidth.current;
+      viewportWidth.current = next;
+      if (width && next && width !== next && flow.current) {
+        const viewport = flow.current.getViewport();
+        void flow.current.setViewport({
+          ...viewport,
+          x: viewport.x + (next - width) / 2,
+        });
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const changes = useCallback(
     (c: NodeChange<Node<FlowData>>[]) =>
       setNodes((ns) => applyNodeChanges(c, ns)),
@@ -266,7 +387,7 @@ export default function FlowCanvas({
             layoutVersion: layout.layoutVersion,
             positions: nodes.map((n) => ({ nodeId: n.id, ...n.position })),
             collapsedNodeIds: layout.collapsedNodeIds,
-            viewport: layout.viewport,
+            viewport: flow.current?.getViewport() ?? layout.viewport,
           },
         },
       );
@@ -288,6 +409,7 @@ export default function FlowCanvas({
       <ReactFlow
         onInit={(instance) => {
           flow.current = instance;
+          viewportWidth.current = container.current?.clientWidth ?? 500;
           void instance.setViewport({
             x: (container.current?.clientWidth ?? 500) / 2 - 90,
             y: 35,
@@ -295,7 +417,8 @@ export default function FlowCanvas({
           });
         }}
         nodes={nodes}
-        edges={edges}
+        edges={renderedEdges}
+        edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         onNodesChange={changes}
         onNodeDragStop={() => void saveLayout()}

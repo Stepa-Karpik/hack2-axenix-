@@ -10,6 +10,9 @@ import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.BinaryExpr;
+import com.github.javaparser.ast.expr.EnclosedExpr;
+import com.github.javaparser.ast.expr.UnaryExpr;
 import com.github.javaparser.ast.stmt.*;
 import dev.javablueprints.engine.EngineModel.*;
 
@@ -21,8 +24,9 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.3.0";
+    public static final String VERSION = "engine-0.4.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
+    private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
     public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
@@ -283,6 +287,7 @@ public final class ProgramEngine {
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
                 new Capability("control_flow", "partial", "Structured if/while/do/for, return/throw and unlabeled loop jumps; exceptional calls and opaque constructs are not complete CFG"),
+                new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion &&/||/!/parentheses in supported if/while/do/for conditions, at most 4096 tests/method; other subexpressions are atomic tests. Calls, unboxing and exceptional completion are not modeled; opaque methods remain unsupported"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
@@ -406,7 +411,7 @@ public final class ProgramEngine {
         String node(Node ast, String kind, String parent) {
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
-            if (!opaqueMethod && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
+            if (!opaqueMethod && !"condition_test".equals(kind) && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
                 fieldRanges = Map.of("expression", map.range(expression));
             } else if (!opaqueMethod && condition(ast) != null) {
                 fieldRanges = Map.of("condition", map.range(condition(ast)));
@@ -426,23 +431,33 @@ public final class ProgramEngine {
             String text = ast == null || "entry".equals(kind) ? kind : map.source.substring(map.range(ast).startOffset(), map.range(ast).endOffset());
             if (text.length() > 180) text = text.substring(0, 177) + "...";
             nodes.add(new GraphNode(id, bundle.revisionId(), analysisId, methodId, kind, text,
-                    ast == null ? null : map.range(ast), id, parent, ast == null, fields, fieldRanges, operations, positions));
+                    ast == null ? null : map.range(ast), id, parent, ast == null, fields, fieldRanges, operations, positions, executionRole(ast, kind)));
             if (ast != null) { bindings.put(id, ast); astIds.put(ast, id); }
             return id;
+        }
+        String executionRole(Node ast, String kind) {
+            if ("condition_test".equals(kind)) return "condition_test";
+            if ("expression".equals(kind)) return "ast_projection";
+            if (ast == null) return "synthetic";
+            if ("entry".equals(kind) || "block".equals(kind) || ast instanceof IfStmt || ast instanceof WhileStmt
+                    || ast instanceof DoStmt || ast instanceof ForStmt || "opaque".equals(kind)) return "structural";
+            return "statement";
         }
         void edge(String source, String target, String kind) {
             if (source != null && target != null) edges.add(new Edge(id(), source, target, kind, null, null));
         }
         void method(CallableDeclaration<?> callable, BlockStmt body, String declaration, String fqName, SourceMap sourceMap) {
             methodId = id(); map = sourceMap; astIds.clear();
-            opaqueMethod = unsupportedFlow(body);
+            boolean conditionLimit = conditionLimitExceeded(body);
+            opaqueMethod = unsupportedFlow(body) || conditionLimit;
             root = node(body, "entry", null);
             normalExit = node(null, "normal_exit", null);
             exceptionalExit = node(null, "exceptional_exit", null);
             String first;
             if (opaqueMethod) {
                 first = node(body, "opaque", root);
-                diagnostics.add(new Diagnostic(id(), "warning", "UNSUPPORTED_CONTROL_FLOW", "Method preserved; precise flow and graph edits unavailable for this control structure", map.range(body)));
+                diagnostics.add(new Diagnostic(id(), "warning", conditionLimit ? "CONDITION_FLOW_LIMIT" : "UNSUPPORTED_CONTROL_FLOW",
+                        conditionLimit ? "Method preserved; condition-flow test budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure", map.range(body)));
                 edge(first, normalExit, "normal"); edge(first, exceptionalExit, "throw");
             } else first = flow(body, normalExit, null, null, root);
             edge(root, first, "normal");
@@ -455,6 +470,25 @@ public final class ProgramEngine {
             methods.add(new Method(methodId, declaration, fqName, callable.getSignature().asString(), map.range(callable),
                     root, List.of(normalExit, exceptionalExit)));
         }
+        boolean conditionLimitExceeded(BlockStmt body) {
+            int total = 0;
+            for (Statement statement : body.findAll(Statement.class)) {
+                Expression expression = condition(statement);
+                if (expression != null) {
+                    total += conditionAtoms(expression);
+                    if (total > MAX_CONDITION_TESTS_PER_METHOD) return true;
+                }
+            }
+            return false;
+        }
+        int conditionAtoms(Expression expression) {
+            if (expression instanceof EnclosedExpr enclosed) return conditionAtoms(enclosed.getInner());
+            if (expression instanceof UnaryExpr unary && unary.getOperator() == UnaryExpr.Operator.LOGICAL_COMPLEMENT) return conditionAtoms(unary.getExpression());
+            if (expression instanceof BinaryExpr binary && (binary.getOperator() == BinaryExpr.Operator.AND || binary.getOperator() == BinaryExpr.Operator.OR)) {
+                return conditionAtoms(binary.getLeft()) + conditionAtoms(binary.getRight());
+            }
+            return 1;
+        }
         String flow(Statement stmt, String next, String breakTarget, String continueTarget, String parent) {
             if (stmt instanceof BlockStmt block) {
                 String blockId = node(block, "block", parent), cursor = next;
@@ -464,21 +498,24 @@ public final class ProgramEngine {
             }
             String current = node(stmt, stmt.getClass().getSimpleName(), parent);
             if (stmt instanceof IfStmt branch) {
-                edge(current, flow(branch.getThenStmt(), next, breakTarget, continueTarget, current), "true");
-                edge(current, branch.getElseStmt().map(s -> flow(s, next, breakTarget, continueTarget, current)).orElse(next), "false");
+                String yes = flow(branch.getThenStmt(), next, breakTarget, continueTarget, current);
+                String no = branch.getElseStmt().map(s -> flow(s, next, breakTarget, continueTarget, current)).orElse(next);
+                edge(current, conditionFlow(branch.getCondition(), yes, no, current), "normal");
             } else if (stmt instanceof WhileStmt loop) {
                 String back = node(null, "loop_back", current); edge(back, current, "loop");
-                edge(current, flow(loop.getBody(), back, next, current, current), "true"); edge(current, next, "false");
+                String body = flow(loop.getBody(), back, next, current, current);
+                edge(current, conditionFlow(loop.getCondition(), body, next, current), "normal");
             } else if (stmt instanceof DoStmt loop) {
                 String back = node(null, "loop_back", current);
                 String body = flow(loop.getBody(), current, next, current, current);
-                edge(current, back, "true"); edge(back, body, "loop"); edge(current, next, "false"); return body;
+                edge(back, body, "loop");
+                edge(current, conditionFlow(loop.getCondition(), back, next, current), "normal"); return body;
             } else if (stmt instanceof ForStmt loop) {
                 String back = node(null, "loop_back", current); edge(back, current, "loop");
                 String update = back;
                 for (int i = loop.getUpdate().size() - 1; i >= 0; i--) { String step = node(loop.getUpdate().get(i), "for_update", current); edge(step, update, "normal"); update = step; }
-                edge(current, flow(loop.getBody(), update, next, update, current), "true");
-                if (loop.getCompare().isPresent()) edge(current, next, "false");
+                String body = flow(loop.getBody(), update, next, update, current);
+                edge(current, loop.getCompare().map(compare -> conditionFlow(compare, body, next, current)).orElse(body), "normal");
                 String init = current;
                 for (int i = loop.getInitialization().size() - 1; i >= 0; i--) { String step = node(loop.getInitialization().get(i), "for_init", current); edge(step, init, "normal"); init = step; }
                 return init;
@@ -488,6 +525,26 @@ public final class ProgramEngine {
             else if (stmt instanceof ContinueStmt) edge(current, continueTarget, "continue");
             else edge(current, next, "normal");
             return current;
+        }
+        /** Normal-completion decision paths only; atoms retain their original Java evaluation. */
+        String conditionFlow(Expression expression, String yes, String no, String parent) {
+            if (expression instanceof EnclosedExpr enclosed) return conditionFlow(enclosed.getInner(), yes, no, parent);
+            if (expression instanceof UnaryExpr unary && unary.getOperator() == UnaryExpr.Operator.LOGICAL_COMPLEMENT) {
+                return conditionFlow(unary.getExpression(), no, yes, parent);
+            }
+            if (expression instanceof BinaryExpr binary) {
+                if (binary.getOperator() == BinaryExpr.Operator.AND) {
+                    String right = conditionFlow(binary.getRight(), yes, no, parent);
+                    return conditionFlow(binary.getLeft(), right, no, parent);
+                }
+                if (binary.getOperator() == BinaryExpr.Operator.OR) {
+                    String right = conditionFlow(binary.getRight(), yes, no, parent);
+                    return conditionFlow(binary.getLeft(), yes, right, parent);
+                }
+            }
+            String test = node(expression, "condition_test", parent);
+            edge(test, yes, "true"); edge(test, no, "false");
+            return test;
         }
     }
 }

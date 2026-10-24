@@ -39,6 +39,13 @@ export interface GraphNode {
   label: string;
   sourceRange: SourceRange | null;
   synthetic: boolean;
+  executionRole?:
+    | "structural"
+    | "statement"
+    | "condition_test"
+    | "ast_projection"
+    | "synthetic"
+    | null;
   editableFields: string[];
   allowedOperations?: string[];
   insertionPositions?: string[];
