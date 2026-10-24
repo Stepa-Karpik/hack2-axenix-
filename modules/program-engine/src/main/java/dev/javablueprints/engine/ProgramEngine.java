@@ -19,17 +19,20 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.10.1"; }
+    private static String analyzerVersion() { return "engine-0.11.0"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
     private static final int MAX_SWITCH_LABELS_PER_METHOD = 4096;
     private static final int MAX_FOREACH_LOOPS_PER_METHOD = 1024;
+    private static final int MAX_FLOW_NODES_PER_METHOD = 8192;
+    private static final int MAX_FLOW_EDGES_PER_METHOD = 24576;
     public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
     public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
@@ -346,7 +349,7 @@ public final class ProgramEngine {
     }
 
     private static boolean unsupportedFlow(Node body) {
-        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt sw && !supportedSwitch(sw)
+        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt t && !t.getResources().isEmpty() || s instanceof SwitchStmt sw && !supportedSwitch(sw)
                 || s instanceof LabeledStmt || s instanceof SynchronizedStmt
                 || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
                 || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
@@ -516,8 +519,9 @@ public final class ProgramEngine {
                 });
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
-                new Capability("control_flow", "partial", "Structured if/while/do/for, enhanced-for normal iteration abstraction and traditional colon switch, return/throw, nearest loop/switch break and enclosing-loop continue; exceptional calls, iteration protocol details and opaque constructs are not complete CFG"),
-                new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion &&/||/!/parentheses in supported if/while/do/for conditions, at most 4096 tests/method; other subexpressions are atomic tests. Calls, unboxing and exceptional completion are not modeled; opaque methods remain unsupported"),
+                new Capability("control_flow", "partial", "Structured conditions/loops/colon switch and ordinary try/catch/finally with pending abrupt completion; calls/expressions are atomic, exception types conservative, resource protocols and opaque constructs are not complete CFG"),
+                new Capability("exception_flow", builder.invalid ? "not_requested" : "partial", "Ordinary try/catch/finally: ordered runtime-type predicates, multi-catch, nested context-specific cleanup, return/throw/break/continue including overrides. Potential atomic-expression exceptions conservative, no interprocedural type proof. Try-with-resources remains opaque. Expansion bounded to8192 nodes/24576edges per method"),
+                new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Short-circuit &&/||/!/parentheses in supported if/while/do/for conditions, at most4096 tests/method; each atom evaluated once. In try-containing methods conservative exceptional exits (including unboxing) target active handler, otherwise normal-only projection. Opaque methods unsupported"),
                 new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
                 new Capability("enhanced_for_flow", builder.invalid ? "not_requested" : "partial", "Normal iteration abstraction, source evaluated once, synthetic check/bind/advance; at most 1024 enhanced-for loops per method. Advance means continuation, not Iterator.next; array/Iterable protocol details and exceptional flow are unknown. Type validity requires isolated compilation"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
@@ -535,6 +539,16 @@ public final class ProgramEngine {
     }
 
     private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps, Map<String,MembershipOptimization.Plan> optimizations) {}
+    private record FlowContext(Supplier<String> returned, Supplier<String> thrown, Supplier<String> broken,
+                               Supplier<String> continued, String tag, boolean exceptions) {
+        FlowContext jumps(String breakTarget, String continueTarget) {
+            return new FlowContext(returned, thrown, () -> breakTarget, () -> continueTarget, tag, exceptions);
+        }
+        FlowContext tagged(String value) { return new FlowContext(returned, thrown, broken, continued, value, exceptions); }
+    }
+    private static final class FlowLimit extends RuntimeException {
+        FlowLimit() { super(null, null, false, false); }
+    }
     private static boolean boundedAst(Node root) {
         record AtDepth(Node node, int depth) {}
         Deque<AtDepth> pending = new ArrayDeque<>(); pending.push(new AtDepth(root, 0));
@@ -641,15 +655,20 @@ public final class ProgramEngine {
         private SourceMap map;
         private String root;
         private boolean opaqueMethod;
+        private boolean buildingFlow;
+        private int methodNodeStart;
+        private int methodEdgeStart;
+        private String completionContext;
         Builder(SourceBundle bundle, String analysisId) { this.bundle = bundle; this.analysisId = analysisId; }
         String id() { return analysisId + ":" + (++sequence); }
         String node(Node ast, String kind, String parent) {
             return node(ast, kind, parent, null);
         }
         String node(Node ast, String kind, String parent, String caption) {
+            if (buildingFlow && nodes.size() - methodNodeStart >= MAX_FLOW_NODES_PER_METHOD) throw new FlowLimit();
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
-            boolean readOnly = "condition_test".equals(kind) || "switch_selector".equals(kind) || "switch_case".equals(kind) || "foreach_source".equals(kind);
+            boolean readOnly = Set.of("condition_test", "switch_selector", "switch_case", "foreach_source", "catch_test", "catch_entry", "finally_entry", "try_entry").contains(kind);
             if (!opaqueMethod && !readOnly && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
                 fieldRanges = Map.of("expression", map.range(expression));
             } else if (!opaqueMethod && condition(ast) != null) {
@@ -691,21 +710,29 @@ public final class ProgramEngine {
             return map.source.substring(first.startOffset(), last.endOffset());
         }
         String executionRole(Node ast, String kind) {
-            if ("condition_test".equals(kind)) return "condition_test";
+            if ("condition_test".equals(kind) || "catch_test".equals(kind)) return "condition_test";
             if ("expression".equals(kind)) return "ast_projection";
             if (ast == null) return "synthetic";
             if ("entry".equals(kind) || "block".equals(kind) || "switch_case".equals(kind) || ast instanceof IfStmt || ast instanceof WhileStmt
-                    || ast instanceof DoStmt || ast instanceof ForStmt || ast instanceof ForEachStmt || ast instanceof SwitchStmt || "opaque".equals(kind)) return "structural";
+                    || ast instanceof DoStmt || ast instanceof ForStmt || ast instanceof ForEachStmt || ast instanceof SwitchStmt
+                    || Set.of("opaque", "try_entry", "catch_entry", "finally_entry").contains(kind)) return "structural";
             return "statement";
         }
         void edge(String source, String target, String kind) {
             edge(source, target, kind, null);
         }
         void edge(String source, String target, String kind, String label) {
-            if (source != null && target != null) edges.add(new Edge(id(), source, target, kind, label, null));
+            edge(source, target, kind, label, completionContext, "exact", null);
+        }
+        void edge(String source, String target, String kind, String label, String context, String certainty, String reason) {
+            if (source != null && target != null) {
+                if (buildingFlow && edges.size() - methodEdgeStart >= MAX_FLOW_EDGES_PER_METHOD) throw new FlowLimit();
+                edges.add(new Edge(id(), source, target, kind, label, context, certainty, reason));
+            }
         }
         void method(CallableDeclaration<?> callable, BlockStmt body, String declaration, String fqName, SourceMap sourceMap) {
-            methodId = id(); map = sourceMap; astIds.clear();
+            methodId = id(); map = sourceMap; astIds.clear(); completionContext = null;
+            methodNodeStart = nodes.size(); methodEdgeStart = edges.size();
             boolean conditionLimit = conditionLimitExceeded(body);
             boolean switchLimit = switchLimitExceeded(body);
             boolean iterationLimit = body.findAll(ForEachStmt.class).size() > MAX_FOREACH_LOOPS_PER_METHOD;
@@ -722,8 +749,23 @@ public final class ProgramEngine {
                         : iterationLimit ? "Method preserved; enhanced-for iteration budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure";
                 diagnostics.add(new Diagnostic(id(), "warning", code, reason, map.range(body)));
                 edge(first, normalExit, "normal"); edge(first, exceptionalExit, "throw");
-            } else first = flow(body, normalExit, null, null, root);
+            } else {
+                buildingFlow = true;
+                try { first = flow(body, normalExit, null, null, root); }
+                catch (FlowLimit limit) {
+                    Set<String> discarded = new HashSet<>();
+                    nodes.subList(methodNodeStart, nodes.size()).forEach(n -> discarded.add(n.id()));
+                    nodes.subList(methodNodeStart, nodes.size()).clear(); edges.subList(methodEdgeStart, edges.size()).clear();
+                    discarded.forEach(bindings::remove); astIds.clear(); opaqueMethod = true; buildingFlow = false; completionContext = null;
+                    root = node(body, "entry", null); normalExit = node(null, "normal_exit", null); exceptionalExit = node(null, "exceptional_exit", null);
+                    first = node(body, "opaque", root);
+                    diagnostics.add(new Diagnostic(id(), "warning", "EXCEPTION_FLOW_LIMIT", "Method preserved; context-specific control-flow expansion exceeded its node/edge budget", map.range(body)));
+                    edge(first, normalExit, "normal", null, null, "conservative", "Opaque method may complete normally");
+                    edge(first, exceptionalExit, "throw", null, null, "conservative", "Opaque method may complete exceptionally");
+                } finally { buildingFlow = false; completionContext = null; }
+            }
             edge(root, first, "normal");
+            if (!opaqueMethod && !body.findAll(TryStmt.class).isEmpty()) pruneUnreachableFlow();
             // Expressions are selectable source-bound AST projections, not additional executable CFG statements.
             for (Expression expression : body.findAll(Expression.class)) {
                 Node ancestor = expression.getParentNode().orElse(null);
@@ -732,6 +774,27 @@ public final class ProgramEngine {
             }
             methods.add(new Method(methodId, declaration, fqName, callable.getSignature().asString(), map.range(callable),
                     root, List.of(normalExit, exceptionalExit)));
+        }
+        void pruneUnreachableFlow() {
+            Set<String> keep = new HashSet<>(List.of(root));
+            Map<String,List<String>> successors = new HashMap<>();
+            for (int i = methodEdgeStart; i < edges.size(); i++) {
+                Edge e = edges.get(i); successors.computeIfAbsent(e.source(), ignored -> new ArrayList<>()).add(e.target());
+            }
+            Deque<String> pending = new ArrayDeque<>(); pending.add(root);
+            while (!pending.isEmpty()) for (String target : successors.getOrDefault(pending.remove(), List.of())) if (keep.add(target)) pending.add(target);
+            Map<String,GraphNode> current = new HashMap<>();
+            nodes.subList(methodNodeStart, nodes.size()).forEach(n -> current.put(n.id(), n));
+            for (String id : List.copyOf(keep)) {
+                GraphNode n = current.get(id);
+                while (n != null && n.parentId() != null && keep.add(n.parentId())) n = current.get(n.parentId());
+            }
+            keep.add(normalExit); keep.add(exceptionalExit);
+            Set<String> discarded = new HashSet<>(current.keySet()); discarded.removeAll(keep);
+            nodes.subList(methodNodeStart, nodes.size()).removeIf(n -> discarded.contains(n.id()));
+            edges.subList(methodEdgeStart, edges.size()).removeIf(e -> discarded.contains(e.source()) || discarded.contains(e.target()));
+            discarded.forEach(bindings::remove); astIds.clear();
+            for (GraphNode n : nodes.subList(methodNodeStart, nodes.size())) if (bindings.containsKey(n.id())) astIds.put(bindings.get(n.id()), n.id());
         }
         boolean conditionLimitExceeded(BlockStmt body) {
             int total = 0;
@@ -762,34 +825,51 @@ public final class ProgramEngine {
             return 1;
         }
         String flow(Statement stmt, String next, String breakTarget, String continueTarget, String parent) {
+            boolean exceptions = !stmt.findAll(TryStmt.class).isEmpty();
+            return flow(stmt, next, new FlowContext(() -> normalExit, () -> exceptionalExit,
+                    () -> breakTarget, () -> continueTarget, null, exceptions), parent);
+        }
+        String flow(Statement stmt, String next, FlowContext context, String parent) {
+            String previous = completionContext; completionContext = context.tag();
+            try { return statementFlow(stmt, next, context, parent); }
+            finally { completionContext = previous; }
+        }
+        String statementFlow(Statement stmt, String next, FlowContext context, String parent) {
             if (stmt instanceof BlockStmt block) {
                 String blockId = node(block, "block", parent), cursor = next;
                 List<Statement> children = block.getStatements();
-                for (int i = children.size() - 1; i >= 0; i--) cursor = flow(children.get(i), cursor, breakTarget, continueTarget, blockId);
+                for (int i = children.size() - 1; i >= 0; i--) cursor = flow(children.get(i), cursor, context, blockId);
                 return cursor;
             }
+            if (stmt instanceof TryStmt statement) return tryFlow(statement, next, context, parent);
             String current = node(stmt, stmt.getClass().getSimpleName(), parent);
             if (stmt instanceof IfStmt branch) {
-                String yes = flow(branch.getThenStmt(), next, breakTarget, continueTarget, current);
-                String no = branch.getElseStmt().map(s -> flow(s, next, breakTarget, continueTarget, current)).orElse(next);
-                edge(current, conditionFlow(branch.getCondition(), yes, no, current), "normal");
+                String yes = flow(branch.getThenStmt(), next, context, current);
+                String no = branch.getElseStmt().map(s -> flow(s, next, context, current)).orElse(next);
+                edge(current, conditionFlow(branch.getCondition(), yes, no, current, context), "normal");
             } else if (stmt instanceof WhileStmt loop) {
                 String back = node(null, "loop_back", current); edge(back, current, "loop");
-                String body = flow(loop.getBody(), back, next, current, current);
-                edge(current, conditionFlow(loop.getCondition(), body, next, current), "normal");
+                String body = flow(loop.getBody(), back, context.jumps(next, current), current);
+                edge(current, conditionFlow(loop.getCondition(), body, next, current, context), "normal");
             } else if (stmt instanceof DoStmt loop) {
                 String back = node(null, "loop_back", current);
-                String body = flow(loop.getBody(), current, next, current, current);
+                String body = flow(loop.getBody(), current, context.jumps(next, current), current);
                 edge(back, body, "loop");
-                edge(current, conditionFlow(loop.getCondition(), back, next, current), "normal"); return body;
+                edge(current, conditionFlow(loop.getCondition(), back, next, current, context), "normal"); return body;
             } else if (stmt instanceof ForStmt loop) {
                 String back = node(null, "loop_back", current); edge(back, current, "loop");
                 String update = back;
-                for (int i = loop.getUpdate().size() - 1; i >= 0; i--) { String step = node(loop.getUpdate().get(i), "for_update", current); edge(step, update, "normal"); update = step; }
-                String body = flow(loop.getBody(), update, next, update, current);
-                edge(current, loop.getCompare().map(compare -> conditionFlow(compare, body, next, current)).orElse(body), "normal");
+                for (int i = loop.getUpdate().size() - 1; i >= 0; i--) {
+                    Expression expression = loop.getUpdate().get(i);
+                    String step = node(expression, "for_update", current); edge(step, update, "normal"); mayThrow(step, expression, context); update = step;
+                }
+                String body = flow(loop.getBody(), update, context.jumps(next, update), current);
+                edge(current, loop.getCompare().map(compare -> conditionFlow(compare, body, next, current, context)).orElse(body), "normal");
                 String init = current;
-                for (int i = loop.getInitialization().size() - 1; i >= 0; i--) { String step = node(loop.getInitialization().get(i), "for_init", current); edge(step, init, "normal"); init = step; }
+                for (int i = loop.getInitialization().size() - 1; i >= 0; i--) {
+                    Expression expression = loop.getInitialization().get(i);
+                    String step = node(expression, "for_init", current); edge(step, init, "normal"); mayThrow(step, expression, context); init = step;
+                }
                 return init;
             } else if (stmt instanceof ForEachStmt loop) {
                 String source = node(loop.getIterable(), "foreach_source", current);
@@ -798,11 +878,15 @@ public final class ProgramEngine {
                 String advance = node(null, "foreach_advance", current);
                 // Common normal iteration only: advance is continuation, not an Iterator method.
                 edge(advance, check, "loop");
-                String body = flow(loop.getBody(), advance, next, advance, current);
+                String body = flow(loop.getBody(), advance, context.jumps(next, advance), current);
                 edge(current, source, "normal");
                 edge(source, check, "normal");
                 edge(check, bind, "true"); edge(check, next, "false");
                 edge(bind, body, "normal");
+                mayThrow(source, loop.getIterable(), context);
+                possibleException(check, context, "Array/Iterable iteration may fail; concrete protocol and runtime exception type are not inferred");
+                possibleException(bind, context, "Element binding may cast or unbox; runtime exception type is not inferred");
+                possibleException(advance, context, "Iterator advancement may fail; concrete protocol and runtime exception type are not inferred");
             } else if (stmt instanceof SwitchStmt statement) {
                 String selector = node(statement.getSelector(), "switch_selector", current);
                 List<String> entryIds = new ArrayList<>();
@@ -816,7 +900,8 @@ public final class ProgramEngine {
                 for (int i = statement.getEntries().size() - 1; i >= 0; i--) {
                     String first = cursor;
                     List<Statement> body = statement.getEntry(i).getStatements();
-                    for (int j = body.size() - 1; j >= 0; j--) first = flow(body.get(j), first, next, continueTarget, entryIds.get(i));
+                    FlowContext branchContext = new FlowContext(context.returned(), context.thrown(), () -> next, context.continued(), context.tag(), context.exceptions());
+                    for (int j = body.size() - 1; j >= 0; j--) first = flow(body.get(j), first, branchContext, entryIds.get(i));
                     edge(entryIds.get(i), first, "normal");
                     cursor = entryIds.get(i);
                 }
@@ -828,31 +913,109 @@ public final class ProgramEngine {
                 }
                 if (!hasDefault) edge(selector, next, "default", "нет совпадения");
                 edge(current, selector, "normal");
-            } else if (stmt instanceof ReturnStmt) edge(current, normalExit, "return");
-            else if (stmt instanceof ThrowStmt) edge(current, exceptionalExit, "throw");
-            else if (stmt instanceof BreakStmt) edge(current, breakTarget, "break");
-            else if (stmt instanceof ContinueStmt) edge(current, continueTarget, "continue");
-            else edge(current, next, "normal");
+                possibleException(selector, context, "Selector evaluation, unboxing or null selector may fail; runtime exception type is not inferred");
+            } else if (stmt instanceof ReturnStmt returned) {
+                edge(current, context.returned().get(), "return");
+                returned.getExpression().ifPresent(expression -> mayThrow(current, expression, context));
+            } else if (stmt instanceof ThrowStmt) edge(current, context.thrown().get(), "throw", "исключение");
+            else if (stmt instanceof BreakStmt) edge(current, context.broken().get(), "break");
+            else if (stmt instanceof ContinueStmt) edge(current, context.continued().get(), "continue");
+            else {
+                edge(current, next, "normal");
+                if (stmt instanceof ExpressionStmt expression) mayThrow(current, expression.getExpression(), context);
+                else if (!(stmt instanceof EmptyStmt)) possibleException(current, context, "Atomic statement evaluation may fail; runtime exception type is not inferred");
+            }
             return current;
         }
-        /** Normal-completion decision paths only; atoms retain their original Java evaluation. */
-        String conditionFlow(Expression expression, String yes, String no, String parent) {
-            if (expression instanceof EnclosedExpr enclosed) return conditionFlow(enclosed.getInner(), yes, no, parent);
+        String tryFlow(TryStmt statement, String next, FlowContext outer, String parent) {
+            String entry = node(statement, "try_entry", parent, "try");
+            Finalizer cleanup = new Finalizer(statement.getFinallyBlock().orElse(null), outer, entry);
+            FlowContext handler = new FlowContext(() -> cleanup.to("return", outer.returned()),
+                    () -> cleanup.to("throw", outer.thrown()), () -> cleanup.to("break", outer.broken()),
+                    () -> cleanup.to("continue", outer.continued()), outer.tag(), true);
+            String after = cleanup.to("normal", () -> next);
+            LazyTarget dispatch = new LazyTarget(() -> inContext(outer.tag(), () -> {
+                String cursor = handler.thrown().get();
+                for (int i = statement.getCatchClauses().size() - 1; i >= 0; i--) {
+                    CatchClause clause = statement.getCatchClauses().get(i);
+                    String type = raw(clause.getParameter().getType());
+                    String test = node(clause.getParameter(), "catch_test", entry, "исключение instanceof " + type);
+                    String caught = node(clause, "catch_entry", entry, "catch (" + raw(clause.getParameter()) + ")");
+                    edge(caught, flow(clause.getBody(), after, handler, caught), "catch", type);
+                    edge(test, caught, "true", type); edge(test, cursor, "false", "другой тип");
+                    cursor = test;
+                }
+                return cursor;
+            }));
+            FlowContext body = new FlowContext(handler.returned(), dispatch, handler.broken(), handler.continued(), outer.tag(), true);
+            edge(entry, flow(statement.getTryBlock(), after, body, entry), "normal");
+            return entry;
+        }
+        String inContext(String tag, Supplier<String> build) {
+            String previous = completionContext; completionContext = tag;
+            try { return build.get(); }
+            finally { completionContext = previous; }
+        }
+        private final class LazyTarget implements Supplier<String> {
+            private final Supplier<String> factory;
+            private String value;
+            private boolean built;
+            LazyTarget(Supplier<String> factory) { this.factory = factory; }
+            public String get() { if (!built) { value = factory.get(); built = true; } return value; }
+        }
+        private final class Finalizer {
+            private final BlockStmt body;
+            private final FlowContext outer;
+            private final String parent;
+            private final Map<String,String> copies = new HashMap<>();
+            Finalizer(BlockStmt body, FlowContext outer, String parent) { this.body = body; this.outer = outer; this.parent = parent; }
+            String to(String completion, Supplier<String> continuation) {
+                String target = continuation.get();
+                if (body == null || target == null) return target;
+                String key = completion + ":" + target;
+                if (copies.containsKey(key)) return copies.get(key);
+                String tag = parent + ":" + key;
+                String title = switch (completion) {
+                    case "return" -> "возврат"; case "throw" -> "исключение";
+                    case "break" -> "выход из цикла"; case "continue" -> "следующая итерация";
+                    default -> "продолжение";
+                };
+                String entry = node(body, "finally_entry", parent, "finally · " + title);
+                copies.put(key, entry);
+                String resume = node(null, "finally_resume", entry, "Продолжить: " + title);
+                edge(resume, target, "resume", title, tag, "exact", "Resume the saved completion only when finally completes normally");
+                String first = flow(body, resume, outer.tagged(tag), entry);
+                edge(entry, first, "finally", title, tag, "exact", "Execute cleanup before resuming the saved completion");
+                return entry;
+            }
+        }
+        void mayThrow(String source, Expression expression, FlowContext context) {
+            if (expression instanceof LiteralExpr || expression instanceof ThisExpr || expression instanceof SuperExpr || expression instanceof ClassExpr) return;
+            if (expression instanceof VariableDeclarationExpr declaration && declaration.getVariables().stream().allMatch(v -> v.getInitializer().isEmpty() || v.getInitializer().orElseThrow() instanceof LiteralExpr)) return;
+            possibleException(source, context, "Atomic Java expression may throw (including calls, dereference, casts, arithmetic or unboxing); runtime type is not inferred");
+        }
+        void possibleException(String source, FlowContext context, String reason) {
+            if (context.exceptions()) edge(source, context.thrown().get(), "exception", "возможно исключение", context.tag(), "conservative", reason);
+        }
+        /** Each atom is evaluated once; exceptional completion goes to the current handler chain. */
+        String conditionFlow(Expression expression, String yes, String no, String parent, FlowContext context) {
+            if (expression instanceof EnclosedExpr enclosed) return conditionFlow(enclosed.getInner(), yes, no, parent, context);
             if (expression instanceof UnaryExpr unary && unary.getOperator() == UnaryExpr.Operator.LOGICAL_COMPLEMENT) {
-                return conditionFlow(unary.getExpression(), no, yes, parent);
+                return conditionFlow(unary.getExpression(), no, yes, parent, context);
             }
             if (expression instanceof BinaryExpr binary) {
                 if (binary.getOperator() == BinaryExpr.Operator.AND) {
-                    String right = conditionFlow(binary.getRight(), yes, no, parent);
-                    return conditionFlow(binary.getLeft(), right, no, parent);
+                    String right = conditionFlow(binary.getRight(), yes, no, parent, context);
+                    return conditionFlow(binary.getLeft(), right, no, parent, context);
                 }
                 if (binary.getOperator() == BinaryExpr.Operator.OR) {
-                    String right = conditionFlow(binary.getRight(), yes, no, parent);
-                    return conditionFlow(binary.getLeft(), yes, right, parent);
+                    String right = conditionFlow(binary.getRight(), yes, no, parent, context);
+                    return conditionFlow(binary.getLeft(), yes, right, parent, context);
                 }
             }
             String test = node(expression, "condition_test", parent);
             edge(test, yes, "true"); edge(test, no, "false");
+            if (!(expression instanceof BooleanLiteralExpr)) possibleException(test, context, "Atomic condition evaluation or unboxing may throw; runtime type is not inferred");
             return test;
         }
     }

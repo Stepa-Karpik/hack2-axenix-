@@ -18,10 +18,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class ApiController {
   final Workspace w;
   final JobWorker worker;
+  final Accounts accounts;
 
-  ApiController(Workspace w, JobWorker worker) {
+  ApiController(Workspace w, JobWorker worker, Accounts accounts) {
     this.w = w;
     this.worker = worker;
+    this.accounts = accounts;
   }
 
   Map<String, Object> ok(Object data) {
@@ -60,7 +62,9 @@ public class ApiController {
             "condition_flow",
             map("status", "partial", "scope", "normal_short_circuit_conditions", "exceptionalFlow", "unknown"),
             "control_flow",
-            map("status", "partial", "exceptionalFlow", "unknown"),
+            map("status", "partial", "exceptionalFlow", "structured_conservative"),
+            "exception_flow",
+            map("status", "partial", "scope", "ordinary_try_catch_finally", "catchDispatch", "ordered_runtime_type_predicates", "finallyCompletion", "context_specific", "expressionExceptions", "conservative", "tryWithResources", "unsupported"),
             "switch_flow",
             map("status", "partial", "scope", "traditional_statement_switch", "exceptionalFlow", "unknown"),
             "enhanced_for_flow",
@@ -75,16 +79,15 @@ public class ApiController {
 
   @GetMapping("/session")
   Object session(HttpServletRequest req) {
-    var s = req.getSession(true);
-    if (s.getAttribute("csrf") == null) s.setAttribute("csrf", id());
-    return ok(map("mode", "local", "csrfToken", s.getAttribute("csrf"), "localOwnerId", "local"));
+    return ok(accounts.session(req));
   }
 
   @GetMapping("/projects")
   Object projects(@RequestParam(defaultValue = "20") int limit,
       @RequestParam(defaultValue = "") String q,
-      @RequestParam(required = false) String before) {
-    return ok(w.projects(limit(limit), q, before));
+      @RequestParam(required = false) String before,
+      @RequestParam(defaultValue = "default") String scope) {
+    return ok(w.projects(limit(limit), q, before, scope));
   }
 
   @PostMapping("/projects")
@@ -92,7 +95,7 @@ public class ApiController {
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
     fields(b, "name");
-    return mutation("projects", key, b, 201, () -> w.createProject(str(b, "name")));
+    return mutation(Workspace.currentActor()==null?"projects":"projects:"+Workspace.currentActor(), key, b, 201, () -> w.createProject(str(b, "name")));
   }
 
   @GetMapping("/projects/{p}")

@@ -8,6 +8,12 @@ export class ApiError extends Error {
   }
 }
 let csrf: string | undefined;
+let csrfEpoch = 0;
+export function setSessionCsrf(token: string) {
+  csrfEpoch++;
+  csrf = token;
+  sessionPromise = undefined;
+}
 let sessionPromise: Promise<void> | undefined;
 export async function api<T>(
   path: string,
@@ -22,13 +28,17 @@ export async function api<T>(
 ): Promise<T> {
   const method = options.method ?? "GET";
   if (method !== "GET" && !csrf) {
-    sessionPromise ??= api<{ csrfToken: string }>("/session")
-      .then((session) => {
-        csrf = session.csrfToken;
-      })
-      .finally(() => {
-        sessionPromise = undefined;
-      });
+    if (!sessionPromise) {
+      const epoch = csrfEpoch;
+      const pending = api<{ csrfToken: string }>("/session")
+        .then((session) => {
+          if (epoch === csrfEpoch) csrf = session.csrfToken;
+        })
+        .finally(() => {
+          if (sessionPromise === pending) sessionPromise = undefined;
+        });
+      sessionPromise = pending;
+    }
     await sessionPromise;
   }
   const headers: Record<string, string> = {};
@@ -75,8 +85,11 @@ export async function api<T>(
     method !== "GET" &&
     !csrfRetried
   ) {
-    csrf = undefined;
-    sessionPromise = undefined;
+    if (csrf === headers["X-CSRF-Token"]) {
+      csrfEpoch++;
+      csrf = undefined;
+      sessionPromise = undefined;
+    }
     return api<T>(path, { ...options, key: headers["Idempotency-Key"] }, true);
   }
   if (!response.ok)
@@ -85,6 +98,11 @@ export async function api<T>(
       json.error?.code ?? "NETWORK_ERROR",
       json.error?.message ?? `HTTP ${response.status}`,
     );
+  if (
+    (path === "/auth/login" || path === "/auth/logout") &&
+    typeof json.data?.csrfToken === "string"
+  )
+    setSessionCsrf(json.data.csrfToken);
   return json.data as T;
 }
 export const projectPath = (id: string) =>

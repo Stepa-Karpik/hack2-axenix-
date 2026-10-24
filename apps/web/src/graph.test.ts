@@ -8,7 +8,123 @@ import {
   segmentHitsBox,
   visualKind,
   arrangeFlow,
+  flowPorts,
+  routePort,
+  branchLabelPosition,
 } from "./flowLayout.ts";
+
+test("short condition branches leave toward their real targets without an exterior detour", () => {
+  const source = { id: "check", x: 0, y: 0, width: 264, height: 84 };
+  const targets = [
+    { id: "return", x: -160, y: 128, width: 264, height: 84 },
+    { id: "action", x: 160, y: 128, width: 264, height: 84 },
+  ];
+  const boxes = [source, ...targets];
+  const original = JSON.stringify(boxes);
+  targets.forEach((target, index) => {
+    // Reversing yes/no never reverses geometry or changes edge provenance.
+    for (const kind of ["true", "false"]) {
+      const ports = flowPorts(source, target, kind);
+      assert.equal(ports.sourceSide, index === 0 ? "left" : "right");
+      const start = routePort(source, ports.sourceSide);
+      const end = routePort(target, ports.targetSide);
+      const label = branchLabelPosition(start, ports.sourceSide);
+      const obstacles = [
+        ...boxes,
+        { id: "label", x: label.x - 15, y: label.y - 9, width: 30, height: 18 },
+      ];
+      const route = routeOrthogonal(
+        start,
+        end,
+        2000,
+        obstacles,
+        22,
+        ports.sourceSide,
+        22,
+        ports.targetSide,
+        true,
+      );
+      assert.equal(route.complete, true);
+      assert.deepEqual(route.points[1], {
+        x: start.x + (index === 0 ? -22 : 22),
+        y: start.y,
+      });
+      assert.ok(Math.max(...route.points.map((p) => p.x)) <= 424);
+      assert.ok(Math.min(...route.points.map((p) => p.x)) >= -28);
+      route.points
+        .slice(1)
+        .forEach((p, i) =>
+          assert.ok(
+            obstacles.every((box) => !segmentHitsBox(route.points[i], p, box)),
+          ),
+        );
+    }
+  });
+  assert.equal(JSON.stringify(boxes), original);
+});
+
+test("same-level nodes accept side entry and upward loops keep an exterior corridor", () => {
+  const source = { id: "source", x: 0, y: 0, width: 264, height: 84 };
+  const target = { id: "target", x: 360, y: 0, width: 264, height: 84 };
+  const ports = flowPorts(source, target, "normal");
+  assert.deepEqual(ports, { sourceSide: "right", targetSide: "left" });
+  const route = routeOrthogonal(
+    routePort(source, ports.sourceSide),
+    routePort(target, ports.targetSide),
+    2000,
+    [source, target],
+    22,
+    ports.sourceSide,
+    22,
+    ports.targetSide,
+    true,
+  );
+  assert.equal(route.complete, true);
+  assert.deepEqual(route.points.at(-2), { x: 338, y: 42 });
+  assert.ok(route.points.every((p) => p.y === 42));
+  assert.deepEqual(flowPorts({ ...source, y: 320 }, source, "loop"), {
+    sourceSide: "left",
+    targetSide: "left",
+  });
+});
+
+test("compact obstacle routing minimizes canvas distance rather than grid hops", () => {
+  const source = { id: "source", x: 0, y: 0, width: 264, height: 84 };
+  const target = { id: "target", x: 500, y: 200, width: 264, height: 84 };
+  const boxes = [
+    source,
+    target,
+    { id: "across", x: 310, y: 10, width: 70, height: 100 },
+    { id: "below", x: 260, y: 130, width: 100, height: 30 },
+  ];
+  const route = routeOrthogonal(
+    { x: 264, y: 42 },
+    { x: 632, y: 200 },
+    2000,
+    boxes,
+    22,
+    "right",
+    22,
+    "top",
+    true,
+  );
+  assert.equal(route.complete, true);
+  const length = route.points
+    .slice(1)
+    .reduce(
+      (sum, p, i) =>
+        sum +
+        Math.abs(p.x - route.points[i].x) +
+        Math.abs(p.y - route.points[i].y),
+      0,
+    );
+  assert.ok(length <= 550, `Unnecessary route length: ${length}`);
+  route.points
+    .slice(1)
+    .forEach((p, i) =>
+      assert.ok(boxes.every((box) => !segmentHitsBox(route.points[i], p, box))),
+    );
+});
 
 test("loop exits lay out below repeated descendants without fabricating execution edges", () => {
   const node = (id, kind, parentId = null) => ({ id, kind, parentId });

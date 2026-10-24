@@ -31,6 +31,12 @@ services:
       JB_RUNNER_CONTROLLER_URL: http://runner:8091
       JB_RUNNER_CONTROLLER_TOKEN: ${JB_RUNNER_CONTROLLER_TOKEN:?Set JB_RUNNER_CONTROLLER_TOKEN}
       JB_ALLOWED_ORIGINS: http://localhost:5174,http://127.0.0.1:5174
+      JB_SMTP_HOST: ${JB_SMTP_HOST:-}
+      JB_SMTP_PORT: ${JB_SMTP_PORT:-465}
+      JB_SMTP_USERNAME: ${JB_SMTP_USERNAME:-}
+      JB_SMTP_PASSWORD: ${JB_SMTP_PASSWORD:-}
+      JB_SMTP_FROM: ${JB_SMTP_FROM:-}
+      JB_PUBLIC_URL: ${JB_PUBLIC_URL:-http://127.0.0.1:5174}
     read_only: true
     tmpfs: ['/tmp:size=64m,mode=1777']
     security_opt: [no-new-privileges:true]

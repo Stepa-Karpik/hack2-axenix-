@@ -155,25 +155,6 @@
   background: var(--node-accent);
   border: 2px solid var(--surface);
 }
-.flow-area .graph-port {
-  position: absolute;
-  padding: 1px 5px;
-  color: var(--muted-strong);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-size: 9px;
-  line-height: 14px;
-  pointer-events: none;
-}
-.flow-area .graph-port-true {
-  top: calc(100% + 7px);
-  left: calc(50% + 8px);
-}
-.flow-area .graph-port-false {
-  left: calc(100% + 7px);
-  top: calc(50% + 8px);
-}
 .flow-area .graph-loop-area {
   width: 100%;
   height: 100%;
@@ -206,15 +187,18 @@
   padding: 2px 6px;
   border-radius: 5px;
 }
+.flow-area .shortcut-label.branch-label {
+  box-sizing: border-box;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  text-align: center;
+  font-size: 9px;
+  line-height: 16px;
+}
 .flow-area .react-flow__edge-path {
   stroke-linejoin: round;
 }
 [data-theme="dark"] .flow-area .react-flow__edge-path {
-  stroke: #8c9d94 !important;
-}
-[data-theme="dark"]
-  .flow-area
-  g[data-route-returning="true"]
-  .react-flow__edge-path {
-  stroke: var(--graph-violet) !important;
+  stroke: currentColor;
 }

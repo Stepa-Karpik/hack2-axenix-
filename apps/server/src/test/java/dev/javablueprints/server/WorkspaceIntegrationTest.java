@@ -860,7 +860,8 @@ class WorkspaceIntegrationTest {
     assertEquals("partial", ((Map<?, ?>) capabilities.get("condition_flow")).get("status"));
     assertEquals("normal_short_circuit_conditions", ((Map<?, ?>) capabilities.get("condition_flow")).get("scope"));
     assertEquals("partial", ((Map<?, ?>) capabilities.get("control_flow")).get("status"));
-    assertEquals("unknown", ((Map<?, ?>) capabilities.get("control_flow")).get("exceptionalFlow"));
+    assertEquals("structured_conservative", ((Map<?, ?>) capabilities.get("control_flow")).get("exceptionalFlow"));
+    assertEquals("context_specific", ((Map<?, ?>) capabilities.get("exception_flow")).get("finallyCompletion"));
   }
 
   @Test

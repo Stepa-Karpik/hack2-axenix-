@@ -37,7 +37,7 @@ The graph is a permanent canvas beneath translucent panels. The dark theme uses 
 
 Workspace preferences are independent of program revisions and graph-node positions. Rearranging windows does not edit source, compile a program or create a revision. Reduced-motion preferences disable layout animation; browsers without backdrop filtering use solid panel backgrounds.
 
-**Share** copies the local project URL. Accounts, collaborator presence and permission-based sharing are not implemented yet.
+**Share** opens project access settings and copies its URL. Owners can switch account projects between private and public access and grant friends viewer or editor roles. Collaborator presence and simultaneous collaborative editing are not implemented.
 
 Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
 
@@ -50,6 +50,14 @@ Open files appear as tabs with language-specific icons and editor highlighting. 
 Import previews support strict UTF-8 text and ZIP archives, with selection before commit and no silent overwrite of existing paths. Archives preserve empty folders; a browser directory picker supplies files and their parent directories, but cannot enumerate empty folders. Unsupported binary files and unsafe or oversized archives are rejected. Build scripts from imported projects are never executed.
 
 Non-Java text files can be edited and exported. Only `.java` files are analyzed and passed to the isolated Java runner. A project containing only text files or folders can be saved without scheduling a Java analysis or execution.
+
+## Exception flow
+
+Ordinary `try`, ordered `catch` clauses, multi-catch and `finally` are shown as executable control flow. Handler tests match the pending exception in source order. A throw from a handler or cleanup bypasses the sibling catches of that same `try`.
+
+Cleanup has a separate continuation for normal completion, return, exception, break and continue. A return expression is evaluated before cleanup; an abrupt completion inside `finally` replaces the pending completion. Nested cleanup runs from the inside out, while a loop or switch jump that stays inside the `try` does not prematurely execute its finalizer. Separate copies of finalizer paths prevent impossible connections between unrelated completions; each copy navigates to the same original source.
+
+Calls and other expressions remain atomic. In methods containing `try`, dashed exceptional edges conservatively show possible failures, including unboxing; they do not infer a unique runtime exception type. Edge metadata records certainty, reason and finalizer completion context. Try-with-resources and its closing/suppression protocol remain explicitly unsupported. Context expansion is bounded to 8192 flow nodes and 24576 edges per method; exceeding either limit preserves the method as read-only opaque source.
 
 ## Console
 
@@ -81,6 +89,18 @@ Metrics include physical and code-token body lines, statement nodes, control nes
 
 Recommendations flag methods with at least 40 code-token lines, nesting of at least four control structures, nested loops, or a branching score of at least ten. They show the observed count, threshold, source location and a suggested review step. At most 400 findings are returned per analysis. These heuristics do not prove a defect, authorize a refactor or predict a speedup. Asymptotic time remains unknown until bounds and call costs can be established.
 
+## Accounts and access
+
+Register with a username, email and a password of 12–256 characters. Sign in with the username or email. Profile settings save the display name and biography on the server; public profiles list public account projects. Friends can exchange and accept requests. Project owners can grant an existing friend viewer or editor access, change that role, or remove it. Private is the default for new account projects.
+
+Viewers can browse source, navigate the prepared graph and download snapshots. Read access includes the project's revision history, reports and artifacts. Editing, analysis creation, execution, restoration and persistent graph changes require owner or editor permission. Changing visibility or membership requires the owner. Public projects have the same read-only access without sign-in. The server checks project access before revisions, imports, exports, artifacts and jobs are accessed. Friendships and project roles are separate: revoke a previously granted project role in **Share** when it should end.
+
+Earlier projects stay in the explicitly labeled local workspace. They are never assigned to the first registered account. Signed-in users can select **Local workspace** to reach them; this compatibility space remains editable on this local server. It is separate from private account projects.
+
+**My projects** lists projects you own or have been invited to. Other public projects remain accessible through their author's profile or a direct link; publishing a project does not add it to everyone's personal list.
+
+Email confirmation and password recovery use expiring, single-use links. Passwords are salted and derived with PBKDF2; only token hashes are stored. Password changes and resets revoke previous sessions and pending links. Without SMTP configuration, account work remains available and the interface reports that email delivery is unavailable. Real delivery requires the mailbox settings below.
+
 ## Membership index
 
 For eligible repeated `ArrayList<String>.contains` searches, Analysis → Recommendations offers a membership-index change. It retains the original list and inserts one local `HashSet<String>` before the selected loop. Only the proven membership receivers inside that loop change; query evaluation, output order and list construction stay in place.
@@ -107,7 +127,7 @@ flowchart LR
 | Component | Location | Responsibility |
 | --- | --- | --- |
 | Web | `apps/web` | Configurable panel workspace, Monaco editor, React Flow graph, proposals and reports |
-| API | `apps/server` | Local sessions, revision history, CAS, artifacts and durable jobs |
+| API | `apps/server` | Account sessions, profiles, friends, project access, revision history, CAS, artifacts and durable jobs |
 | Program engine | `modules/program-engine` | Parsing, source/JDK symbol resolution, graph construction and typed edits |
 | Verification | `modules/verification` | Runner protocol and repeated comparison |
 | Runner controller | `apps/runner-controller` | Bounded compiler/runtime containers and cleanup |
@@ -141,6 +161,21 @@ The workbench and API share one origin. PostgreSQL is bound to `127.0.0.1:55433`
 ```
 
 After a successful build, `./scripts/start.ps1 -SkipBuild` reuses the generated application artifacts and rebuilds their container images. Do not run the Vite development server and the Compose workbench on port 5174 at the same time.
+
+### Email configuration
+
+Set these fields in the ignored `.env`, then restart the stack:
+
+```dotenv
+JB_SMTP_HOST=smtp.yandex.ru
+JB_SMTP_PORT=465
+JB_SMTP_USERNAME=
+JB_SMTP_PASSWORD=
+JB_SMTP_FROM=
+JB_PUBLIC_URL=http://127.0.0.1:5174
+```
+
+Use the full mailbox address for username and sender, and a Yandex application password for `JB_SMTP_PASSWORD`. SMTP uses implicit TLS with certificate and hostname verification. Follow [Yandex's mail-client setup](https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others.html). `JB_PUBLIC_URL` supplies the origin of confirmation and reset links. Keep mailbox credentials out of frontend variables and Git. Verification links expire after 24 hours; reset links expire after one hour. SMTP transport and delivery errors are reported explicitly; local tests do not claim real Yandex delivery.
 
 To use a native API process during frontend development:
 
@@ -195,6 +230,8 @@ pnpm --filter @java-blueprints/web exec playwright test
 ```
 
 These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, declaration navigation across files, stale semantic bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
+
+Synthetic account browser tests require SMTP delivery to be disabled and skip when a live mailbox is configured. Server account tests use a mocked mail transport.
 
 Workspace checks cover drag-and-drop arrangements, tab groups, resizing, local preference recovery and preservation of editor and graph state. Pure frontend tests validate layout-tree invariants and graph presentation geometry. UI layout actions must not create source revisions, proposals, jobs or graph-layout writes.
 
@@ -254,7 +291,7 @@ These are explicit semantic edits: changed order or repetition can change progra
 
 Condition flow covers normal completion of `&&`, `||`, `!` and parentheses in supported `if`, `while`, `do` and `for` conditions. Other expression subtrees remain atomic tests; calls, eager operators, ternaries and unboxing are not expanded into a complete expression or exception graph. Loop initialization, updates and unlabeled jump targets remain explicit. A method exceeding 4096 condition tests is preserved as opaque with a diagnostic.
 
-Traditional colon-style `switch` statements evaluate the selector once and dispatch to a case or default, with explicit fallthrough and unlabeled jump targets. Selector and case nodes support source navigation; separate expression projections retain their existing edit controls. Case-label type and constant validity are checked by the isolated compiler. Direct case statement lists do not become insertion or deletion anchors; actual nested blocks retain those operations. The method-wide limits are 1024 switch entries and 4096 labels. Arrow rules, switch expressions, patterns, `case null`, labeled jumps and `try`/`finally` remain outside this control-flow subset and preserve the method as opaque. Implicit selector exceptions are not expanded into a complete exception graph.
+Traditional colon-style `switch` statements evaluate the selector once and dispatch to a case or default, with explicit fallthrough and unlabeled jump targets. Selector and case nodes support source navigation; separate expression projections retain their existing edit controls. Case-label type and constant validity are checked by the isolated compiler. Direct case statement lists do not become insertion or deletion anchors; actual nested blocks retain those operations. The method-wide limits are 1024 switch entries and 4096 labels. Arrow rules, switch expressions, patterns, `case null` and labeled jumps remain outside this control-flow subset and preserve the method as opaque. In try-containing methods, a conservative selector-exception edge reaches the active handler; expression internals are not expanded.
 
 Enhanced `for` uses a normal iteration abstraction for arrays and `Iterable`: a source expression is evaluated once, then synthetic check, element-binding and continuation steps surround the body. This does not expand the distinct array and iterator protocols, conversions or exceptional paths into individual Java operations. `break` and `continue` retain their enclosing-loop targets, including through nested switches. Existing expression projections support changing the source through the compile-gated proposal workflow; synthetic steps are read-only and have no invented source range. Methods exceeding 1024 enhanced loops are preserved as opaque with a diagnostic.
 
@@ -262,4 +299,4 @@ The graph/edit support matrix is intentionally conservative: unsupported constru
 
 Asymptotic complexity remains unknown. General symbol renaming, structural extraction, class decomposition, optimization beyond the membership rule, method harnesses and benchmarking are not implemented. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
 
-This deployment is a single-user local prototype. It has local session/CSRF controls, not public multi-tenant authentication. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.
+This deployment remains bound to localhost. Account sessions and project permissions coexist with the explicit local guest workspace; adding accounts does not publish the server on the internet. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.

@@ -44,6 +44,7 @@ export default function ProjectExplorer({
   methodId,
   methodsDisabled = false,
   disabled,
+  readOnly = false,
   onOpen,
   onMethod,
   onChange,
@@ -58,6 +59,7 @@ export default function ProjectExplorer({
   methodId: string;
   methodsDisabled?: boolean;
   disabled: boolean;
+  readOnly?: boolean;
   onOpen: (p: string) => void;
   onMethod: (m: Method) => void;
   onChange: (
@@ -69,6 +71,7 @@ export default function ProjectExplorer({
   onDownload: (path: string) => void;
   createCommand?: { kind: "file" | "folder"; id: number };
 }) {
+  const editingDisabled = disabled || readOnly;
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [selected, setSelected] = useState("");
   useEffect(() => {
@@ -86,6 +89,7 @@ export default function ProjectExplorer({
     a.localeCompare(b, undefined, { numeric: true }),
   );
   function begin(kind: "file" | "folder" | "move") {
+    if (editingDisabled) return;
     cancelled.current = false;
     setAction(kind);
     setError("");
@@ -108,7 +112,8 @@ export default function ProjectExplorer({
     return () => cancelAnimationFrame(frame);
   }, [action]);
   async function submit() {
-    if (!action || submitting.current || cancelled.current) return;
+    if (editingDisabled || !action || submitting.current || cancelled.current)
+      return;
     if (!target.trim() || (action !== "move" && target.trim().endsWith("/"))) {
       setAction(null);
       return;
@@ -168,7 +173,7 @@ export default function ProjectExplorer({
                 (selected === path || active === path ? "active" : "")
               }
               style={{ paddingLeft: 10 + depth * 14 }}
-              draggable={!disabled}
+              draggable={!editingDisabled}
               onDragStart={(e) => {
                 setDrag(path);
                 e.dataTransfer.setData("text/x-project-path", path);
@@ -182,7 +187,7 @@ export default function ProjectExplorer({
                 }
               }}
               onDrop={(e) => {
-                if (!folder || !drag) return;
+                if (editingDisabled || !folder || !drag) return;
                 e.preventDefault();
                 e.stopPropagation();
                 void onChange(
@@ -201,7 +206,7 @@ export default function ProjectExplorer({
                 else onOpen(path);
               }}
               onKeyDown={(e) => {
-                if (e.key === "F2" && !disabled) {
+                if (e.key === "F2" && !editingDisabled) {
                   e.preventDefault();
                   setSelected(path);
                   setTarget(path);
@@ -249,7 +254,7 @@ export default function ProjectExplorer({
         <button
           aria-label="Создать файл"
           title="Создать файл"
-          disabled={disabled}
+          disabled={editingDisabled}
           onClick={() => begin("file")}
         >
           <FilePlus2 size={16} />
@@ -257,7 +262,7 @@ export default function ProjectExplorer({
         <button
           aria-label="Создать папку"
           title="Создать папку"
-          disabled={disabled}
+          disabled={editingDisabled}
           onClick={() => begin("folder")}
         >
           <FolderPlus size={16} />
@@ -265,7 +270,7 @@ export default function ProjectExplorer({
         <button
           aria-label="Переименовать"
           title="Переименовать · F2"
-          disabled={disabled || !selected}
+          disabled={editingDisabled || !selected}
           onClick={() => begin("move")}
         >
           <Pencil size={15} />
@@ -273,7 +278,7 @@ export default function ProjectExplorer({
         <button
           aria-label="Переместить"
           title="Переместить"
-          disabled={disabled || !selected}
+          disabled={editingDisabled || !selected}
           onClick={() => begin("move")}
         >
           <Move size={15} />
@@ -286,7 +291,7 @@ export default function ProjectExplorer({
         >
           <Download size={15} />
         </button>
-        <button disabled={disabled} onClick={onImport}>
+        <button disabled={editingDisabled} onClick={onImport}>
           Импорт
         </button>
       </div>
@@ -338,7 +343,7 @@ export default function ProjectExplorer({
           )}
           {action === "move" && (
             <div>
-              <button type="submit" disabled={disabled}>
+              <button type="submit" disabled={editingDisabled}>
                 Применить
               </button>
               <button type="button" onClick={() => setAction(null)}>

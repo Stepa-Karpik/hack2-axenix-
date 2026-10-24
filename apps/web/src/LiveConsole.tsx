@@ -6,10 +6,12 @@ export default function LiveConsole({
   projectId,
   jobId,
   live,
+  readOnly = false,
 }: {
   projectId: string;
   jobId: string;
   live?: LiveRun | null;
+  readOnly?: boolean;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -36,7 +38,7 @@ export default function LiveConsole({
     setBusy(false);
   }, [jobId]);
   async function send(eof = false) {
-    if (sending.current || !live?.inputOpen) return;
+    if (readOnly || sending.current || !live?.inputOpen) return;
     const data = eof ? "" : text + "\n";
     const frame =
       pending.current?.text === data && pending.current.eof === eof
@@ -109,14 +111,14 @@ export default function LiveConsole({
           aria-label="Ответ программе"
           placeholder="Ответ программе…"
           value={text}
-          disabled={!live?.inputOpen || busy}
+          disabled={readOnly || !live?.inputOpen || busy}
           onChange={(e) => setText(e.target.value)}
         />
-        <button disabled={!live?.inputOpen || busy} type="submit">
+        <button disabled={readOnly || !live?.inputOpen || busy} type="submit">
           Отправить
         </button>
         <button
-          disabled={!live?.inputOpen || busy}
+          disabled={readOnly || !live?.inputOpen || busy}
           type="button"
           title="Завершить стандартный ввод"
           onClick={() => void send(true)}

@@ -54,7 +54,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.10.1");
+  expect(analysis.analyzerVersion).toBe("engine-0.11.0");
   let layoutWrites = 0;
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().endsWith("/layout"))
@@ -149,9 +149,14 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await panTo(page, element);
       await element.click();
       await expect(element.locator(".node-label")).toHaveText(caption);
-      await expect(element).toHaveText(
-        kind === "foreach_check" ? caption + "данет" : caption,
-      );
+      await expect(element).toHaveText(caption);
+      if (kind === "foreach_check") {
+        const branchLabels = await page
+          .locator(".branch-label")
+          .allTextContents();
+        expect(branchLabels).toContain("да");
+        expect(branchLabels).toContain("нет");
+      }
       await expect(element.locator(".node-meta")).toHaveCount(0);
       await expect(page.locator(".inspector-selection")).toContainText(
         "Служебный узел",

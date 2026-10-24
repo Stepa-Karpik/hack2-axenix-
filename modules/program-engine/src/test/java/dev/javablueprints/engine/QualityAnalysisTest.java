@@ -68,7 +68,7 @@ class QualityAnalysisTest {
         var m=method(a,"m(int)");
         assertEquals(6,m.branchingScore()); // 1 + two cases + || + ?: + catch
         assertEquals(2,m.maxNesting()); assertEquals(0,m.loops());
-        assertTrue(a.diagnostics().stream().anyMatch(d->d.code().equals("UNSUPPORTED_CONTROL_FLOW")));
+        assertTrue(a.diagnostics().stream().noneMatch(d->d.code().equals("UNSUPPORTED_CONTROL_FLOW")));
         assertEquals("unknown",m.asymptotic());
     }
 

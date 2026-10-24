@@ -196,8 +196,8 @@ class ConditionFlowTest {
     }
 
     @Test void opaqueDomainsDoNotGainConditionTestsOrEditableFlow() {
-        for(String statement:List.of("try{if(a()&&b())yes();}finally{}","switch(1){default -> {if(a()&&b())yes();}}",
-                "outer:while(a()&&b()){break outer;}","for(String s:new String[0]){try{if(a()&&b())yes();}finally{}}")) {
+        for(String statement:List.of("synchronized(this){if(a()&&b())yes();}","switch(1){default -> {if(a()&&b())yes();}}",
+                "outer:while(a()&&b()){break outer;}","for(String s:new String[0]){synchronized(this){if(a()&&b())yes();}}")) {
             String source="class Main {void f(){"+statement+"}boolean a(){return true;}boolean b(){return true;}void yes(){}}";
             Analysis a=analyze(source);
             assertTrue(nodes(a).stream().anyMatch(n->n.kind().equals("opaque")));

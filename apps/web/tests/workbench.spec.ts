@@ -115,7 +115,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Ваши проекты." }),
+    page.getByRole("heading", { name: "Ваши проекты", exact: true }),
   ).toBeVisible();
   await page.getByLabel("Название проекта").fill("UI smoke " + Date.now());
   await page.getByRole("button", { name: "Начать с примера" }).click();

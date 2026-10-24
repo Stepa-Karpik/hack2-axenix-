@@ -67,7 +67,12 @@ public final class EngineModel {
                     parentId, synthetic, editableFields, editableFieldRanges, allowedOperations, insertionPositions, null);
         }
     }
-    public record Edge(String id, String source, String target, String kind, String label, String completionContext) {}
+    public record Edge(String id, String source, String target, String kind, String label,
+                       String completionContext, String certainty, String reason) {
+        public Edge(String id, String source, String target, String kind, String label, String completionContext) {
+            this(id, source, target, kind, label, completionContext, null, null);
+        }
+    }
     public record Graph(String revisionId, String analysisId, String sourceMapVersion,
                         List<Method> methods, List<GraphNode> nodes, List<Edge> edges) {
         public Graph { methods = List.copyOf(methods); nodes = List.copyOf(nodes); edges = List.copyOf(edges); }

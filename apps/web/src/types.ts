@@ -1,4 +1,8 @@
 export interface Project {
+  ownerId?: string | null;
+  visibility?: "private" | "public" | "legacy_local";
+  role?: "owner" | "editor" | "viewer" | "local_guest";
+  canEdit?: boolean;
   id: string;
   name: string;
   headRevisionId: string | null;
@@ -73,6 +77,9 @@ export interface Graph {
     target: string;
     kind: string;
     label: string | null;
+    completionContext?: string | null;
+    certainty?: "exact" | "conservative" | null;
+    reason?: string | null;
   }[];
 }
 export interface Diagnostic {

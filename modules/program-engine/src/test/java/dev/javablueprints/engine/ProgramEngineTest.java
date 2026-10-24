@@ -136,8 +136,8 @@ class ProgramEngineTest {
         assertFalse(analysis.graph().edges().stream().anyMatch(e -> e.kind().equals("loop") && e.target().equals(init.id())));
     }
 
-    @Test void preservesOpaqueFinallyAndBlocksGraphEdits() {
-        String source = "class Main {int f(){try {return 1;} finally {System.out.println(\"cleanup\");}}}";
+    @Test void preservesOpaqueSynchronizationAndBlocksGraphEdits() {
+        String source = "class Main {int f(){synchronized(this) {return 1;}}}";
         SourceBundle bundle = bundle(source);
         Analysis analysis = engine.inspect(bundle);
         assertEquals("valid", analysis.parseStatus());
@@ -209,7 +209,7 @@ class ProgramEngineTest {
     }
 
     @Test void opaqueAndSyntheticNodesExposeNoEditableRanges() {
-        Analysis opaque = engine.inspect(bundle("class Main {int f(){try{return 1;}finally{}}}"));
+        Analysis opaque = engine.inspect(bundle("class Main {int f(){synchronized(this){return 1;}}}"));
         assertTrue(opaque.graph().nodes().stream().allMatch(n -> n.editableFieldRanges().isEmpty()));
         Analysis simple = engine.inspect(bundle("class Main {int f(){return 1;}}"));
         assertTrue(simple.graph().nodes().stream().filter(GraphNode::synthetic).allMatch(n -> n.editableFieldRanges().isEmpty()));

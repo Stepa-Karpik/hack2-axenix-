@@ -122,8 +122,8 @@ class StructuralEditTest {
     @Test void rejectsUnsupportedInsertedControlWithoutWideningOpaqueScope() {
         SourceBundle b = bundle("class Main {void f(){}}");
         Analysis a = engine.inspect(b);
-        for (String statement : List.of("try{}finally{}", "switch(1){default -> {}}", "outer: while(true){break outer;}",
-                "for(String s : new String[0]){try{}finally{}}", "Runnable r = () -> {};", "class Local {}")) {
+        for (String statement : List.of("synchronized(this){}", "switch(1){default -> {}}", "outer: while(true){break outer;}",
+                "for(String s : new String[0]){synchronized(this){}}", "Runnable r = () -> {};", "class Local {}")) {
             fails("UNSUPPORTED_OPERATION", () -> insert(b, a, node(a, "entry", null), "body_end", statement));
         }
     }
@@ -156,7 +156,7 @@ class StructuralEditTest {
     }
 
     @Test void opaqueMethodCannotAdvertiseOrPerformStructuralChanges() {
-        SourceBundle b = bundle("class Main {void f(){try{System.out.println(1);}finally{}}}");
+        SourceBundle b = bundle("class Main {void f(){synchronized(this){System.out.println(1);}}}");
         Analysis a = engine.inspect(b);
         for (GraphNode n : a.graph().nodes()) {
             assertTrue(n.allowedOperations().isEmpty());

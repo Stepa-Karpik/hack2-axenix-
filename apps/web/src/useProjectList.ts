@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Project } from "./types";
 const PAGE_SIZE = 20;
-export function useProjectList() {
+export function useProjectList(scope?: "legacy", accountId?: string) {
   const [rows, setRows] = useState<Project[]>([]),
     [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true),
@@ -23,6 +23,7 @@ export function useProjectList() {
       const current = () => ticket === epoch.current && !request.signal.aborted;
       try {
         const params = new URLSearchParams({ limit: String(PAGE_SIZE + 1) });
+        if (scope) params.set("scope", scope);
         if (filter) params.set("q", filter);
         if (after) params.set("before", after);
         const result = await api<Project[]>("/projects?" + params, {
@@ -55,7 +56,7 @@ export function useProjectList() {
         }
       }
     },
-    [],
+    [scope, accountId],
   );
   useEffect(() => {
     const ticket = ++epoch.current;

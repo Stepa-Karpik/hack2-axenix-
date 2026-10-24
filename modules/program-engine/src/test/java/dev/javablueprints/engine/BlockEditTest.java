@@ -114,9 +114,9 @@ class BlockEditTest {
     }
 
     @Test void opaqueUnbracedAndProjectionNodesNeverAdvertiseNewStructuralEdits() {
-        for(String body:List.of("try{}finally{}","for(int i=0;i<2;i++)a();")) {
+        for(String body:List.of("synchronized(this){}","for(int i=0;i<2;i++)a();")) {
             Analysis a=engine.inspect(bundle(body));
-            for(GraphNode n:a.graph().nodes()) if(body.startsWith("try")||n.kind().equals("for_init")||n.kind().equals("for_update")||n.kind().equals("expression")||n.kind().equals("ExpressionStmt")) {
+            for(GraphNode n:a.graph().nodes()) if(body.startsWith("synchronized")||n.kind().equals("for_init")||n.kind().equals("for_update")||n.kind().equals("expression")||n.kind().equals("ExpressionStmt")) {
                 assertFalse(n.allowedOperations().contains("move_statement")); assertFalse(n.allowedOperations().contains("wrap_if"));
             }
         }

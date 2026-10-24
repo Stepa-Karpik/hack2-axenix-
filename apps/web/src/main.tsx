@@ -8,6 +8,7 @@ import "./graph.css";
 import "./workspace.css";
 import "./files.css";
 import "./glass.css";
+import "./product.css";
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>

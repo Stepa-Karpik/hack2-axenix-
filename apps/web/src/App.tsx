@@ -1,3 +1,9 @@
+import ProjectAccess from "./ProjectAccess";
+import { AccountProvider, AccountNav, useAccount } from "./Account";
+import AccountAuth from "./AccountAuth";
+import ProfilePage from "./ProfilePage";
+import SettingsPage from "./SettingsPage";
+import FriendsPage from "./FriendsPage";
 import SingleRunOutput from "./SingleRunOutput";
 import TestProgressView from "./TestProgressView";
 import CodeInsights from "./CodeInsights";
@@ -170,6 +176,13 @@ function Brand() {
   );
 }
 export default function App() {
+  return (
+    <AccountProvider>
+      <AppRoutes />
+    </AccountProvider>
+  );
+}
+function AppRoutes() {
   const [path, setPath] = useState(location.pathname);
   useEffect(() => {
     const change = () => setPath(location.pathname);
@@ -177,6 +190,27 @@ export default function App() {
     return () => removeEventListener("popstate", change);
   }, []);
   const match = path.match(/^\/projects\/([^/]+)(?:\/runs\/([^/]+))?\/?$/);
+  const authModes = [
+    "login",
+    "register",
+    "forgot-password",
+    "reset-password",
+    "verify-email",
+  ] as const;
+  const authMode = authModes.find(
+    (mode) => path === "/" + mode || path === "/auth/" + mode,
+  );
+  if (authMode) return <AccountAuth key={authMode} mode={authMode} />;
+  if (path === "/settings" || path === "/account") return <SettingsPage />;
+  if (path === "/friends") return <FriendsPage />;
+  const profile = path.match(/^\/(?:u|profile)\/([^/]+)\/?$/);
+  if (profile) {
+    let username = profile[1];
+    try {
+      username = decodeURIComponent(username);
+    } catch {}
+    return <ProfilePage key={username} username={username} />;
+  }
   return match ? (
     <Workbench key={match[1]} projectId={match[1]} runId={match[2]} />
   ) : (
@@ -184,7 +218,12 @@ export default function App() {
   );
 }
 function Projects() {
-  const list = useProjectList();
+  const { session } = useAccount();
+  const [scope, setScope] = useState<"account" | "legacy">("account");
+  const list = useProjectList(
+    scope === "legacy" ? "legacy" : undefined,
+    session?.user?.id,
+  );
   const projects = list.rows,
     loading = list.loading;
   const [error, setError] = useState("");
@@ -233,8 +272,7 @@ function Projects() {
     <div className="projects-page">
       <header className="home-header">
         <Brand />
-        <ThemeToggle />
-        <span className="quiet small">Java 21 · локальное рабочее место</span>
+        <AccountNav />
       </header>
       <main className="project-main">
         <div className="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</div>
@@ -250,6 +288,27 @@ function Projects() {
             <Icon name="upload" /> Импорт .java
           </button>
         </div>
+        {session?.user && (
+          <div className="projects-scope" aria-label="Рабочее пространство">
+            <button
+              aria-pressed={scope === "account"}
+              onClick={() => setScope("account")}
+            >
+              Мои проекты
+            </button>
+            <button
+              aria-pressed={scope === "legacy"}
+              onClick={() => setScope("legacy")}
+            >
+              Локальное пространство
+            </button>
+            <span className="projects-scope-note">
+              {scope === "legacy"
+                ? "Прежние проекты этого сервера"
+                : "Проекты вашего аккаунта"}
+            </span>
+          </div>
+        )}
         <div className="new-project">
           <label className="sr-only" htmlFor="project-name">
             Название проекта
@@ -372,6 +431,9 @@ function Workbench({
   runId?: string;
 }) {
   const base = projectPath(projectId);
+  const { session: accountSession } = useAccount();
+  const [checkingAccess, setCheckingAccess] = useState(false);
+  const saveController = useRef<AbortController | null>(null);
   const initialView = useRef(readView(projectId)).current;
   const [project, setProject] = useState<Project | null>(null);
   const [revision, setRevision] = useState<Revision | null>(null);
@@ -421,7 +483,7 @@ function Workbench({
     (SourceRange & { diagnosticRevisionId?: string }) | null
   >(null);
   const workspace = useWorkspace(projectId);
-  const [shareCopied, setShareCopied] = useState(false);
+  const [showAccess, setShowAccess] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const listener = (e: KeyboardEvent) => {
@@ -522,6 +584,54 @@ function Workbench({
         )
     : Object.keys(files).length > 0 || directories.length > 0;
   const historical = !!revision && revision.id !== project?.headRevisionId;
+  const accessReadOnly = project?.canEdit === false || checkingAccess;
+  const readOnly = historical || accessReadOnly;
+  useEffect(() => {
+    if (accessReadOnly) {
+      saveController.current?.abort();
+      setDialog(null);
+    }
+  }, [accessReadOnly]);
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const recheck = () => {
+      setCheckingAccess(true);
+      saveController.current?.abort();
+      api<Project>(base, { signal: controller.signal })
+        .then((next) => {
+          // Capability refresh must not turn an open editing base into history.
+          // Concurrent saves use the existing revision-conflict recovery flow.
+          if (active)
+            setProject((current) =>
+              current?.id === next.id
+                ? { ...next, headRevisionId: current.headRevisionId }
+                : next,
+            );
+        })
+        .catch((e) => {
+          if (active && e.name !== "AbortError") {
+            setProject((current) =>
+              current ? { ...current, canEdit: false } : current,
+            );
+            setError(
+              "Доступ изменился. Локальный черновик сохранён в браузере. " +
+                message(e),
+            );
+          }
+        })
+        .finally(() => {
+          if (active) setCheckingAccess(false);
+        });
+    };
+    recheck();
+    window.addEventListener("focus", recheck);
+    return () => {
+      active = false;
+      controller.abort();
+      window.removeEventListener("focus", recheck);
+    };
+  }, [base, accountSession?.user?.id]);
   const [analyzing, setAnalyzing] = useState(false);
   const activeFileRef = useRef(file);
   activeFileRef.current = file;
@@ -568,6 +678,11 @@ function Workbench({
         } catch (e) {
           if (!(e instanceof ApiError) || e.code !== "ANALYSIS_NOT_READY")
             throw e;
+          const capability = await api<Project>(base);
+          if (capability.canEdit === false)
+            throw new Error(
+              "Граф ещё не подготовлен владельцем проекта. Исходный код доступен для просмотра.",
+            );
           const j = await api<Job>(`${base}/revisions/${r.id}/analysis`, {
             method: "POST",
             body: {},
@@ -713,10 +828,11 @@ function Workbench({
       mounted.current = false;
       generation.current++;
       controllers.current.forEach((c) => c.abort());
+      saveController.current?.abort();
     };
   }, [projectId]);
   useEffect(() => {
-    if ((!revision && !dirty) || (historical && !dirty)) return;
+    if ((!revision && !dirty) || (readOnly && !dirty)) return;
     try {
       if (dirty)
         localStorage.setItem(
@@ -734,7 +850,7 @@ function Workbench({
     revision,
     projectId,
     dirty,
-    historical,
+    readOnly,
     conflict,
   ]);
   const save = useCallback(async () => {
@@ -742,7 +858,7 @@ function Workbench({
       savingRef.current ||
       !project ||
       conflict ||
-      historical ||
+      readOnly ||
       busy ||
       loadingRevision
     )
@@ -760,8 +876,11 @@ function Workbench({
     savingRef.current = true;
     setSaving(true);
     setError("");
+    const controller = new AbortController();
+    saveController.current = controller;
     try {
       const r = await api<Revision>(base + "/revisions", {
+        signal: controller.signal,
         method: "POST",
         head: baseId || null,
         body: {
@@ -774,7 +893,7 @@ function Workbench({
           expectedHeadRevisionId: baseId || "empty",
         },
       });
-      if (!mounted.current) return;
+      if (!mounted.current || controller.signal.aborted) return false;
       setRevision(r);
       setBaseId(r.id);
       setProject((p) =>
@@ -792,6 +911,7 @@ function Workbench({
       void analyze(r);
       return true;
     } catch (e) {
+      if (controller.signal.aborted) return false;
       if (e instanceof ApiError && e.code === "REVISION_CONFLICT") {
         setConflict(true);
         setError(
@@ -800,13 +920,14 @@ function Workbench({
       } else setError(message(e));
       return false;
     } finally {
+      if (saveController.current === controller) saveController.current = null;
       savingRef.current = false;
       setSaving(false);
     }
   }, [
     project,
     conflict,
-    historical,
+    readOnly,
     busy,
     loadingRevision,
     revision,
@@ -816,7 +937,7 @@ function Workbench({
     analyze,
   ]);
   useEffect(() => {
-    if (!dirty || conflict || historical || !revision || manualSaveRequired)
+    if (!dirty || conflict || readOnly || !revision || manualSaveRequired)
       return;
     const timer = setTimeout(() => void save(), 1800);
     return () => clearTimeout(timer);
@@ -825,7 +946,7 @@ function Workbench({
     directories,
     dirty,
     conflict,
-    historical,
+    readOnly,
     revision,
     save,
     manualSaveRequired,
@@ -836,7 +957,7 @@ function Workbench({
         e.preventDefault();
         void save();
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !accessReadOnly) {
         e.preventDefault();
         const kind = e.shiftKey ? "compare" : "run";
         if (dirty)
@@ -852,7 +973,7 @@ function Workbench({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [save, dirty]);
+  }, [save, dirty, accessReadOnly]);
   useEffect(() => {
     setReportId(undefined);
     if (!runId) {
@@ -949,6 +1070,7 @@ function Workbench({
     );
   }
   function edit(text: string) {
+    if (readOnly) return;
     proposalEpoch.current++;
     const next = { ...filesRef.current, [file]: text };
     filesRef.current = next;
@@ -980,6 +1102,7 @@ function Workbench({
     }
   }
   async function importFiles(list: FileList | null) {
+    if (readOnly) return;
     if (!list?.length || !project) return;
     setBusy(true);
     setError("");
@@ -1012,7 +1135,7 @@ function Workbench({
     accepted?: () => void,
     importedDirectories?: string[],
   ) {
-    if (savingRef.current || busy || historical || conflict || loadingRevision)
+    if (savingRef.current || busy || readOnly || conflict || loadingRevision)
       throw new Error(
         "Дождитесь завершения действия или разрешите конфликт версий.",
       );
@@ -1238,7 +1361,7 @@ function Workbench({
       loadingRevision ||
       analyzing ||
       dirty ||
-      historical ||
+      readOnly ||
       conflict ||
       !revision ||
       !project?.headRevisionId ||
@@ -1322,7 +1445,7 @@ function Workbench({
     loadingRevision,
     analyzing,
     dirty,
-    historical,
+    readOnly,
     conflict,
     busy,
   ]);
@@ -1334,6 +1457,7 @@ function Workbench({
     (!!job && ["queued", "running"].includes(job.status));
   async function restoreRevision(sourceId: string) {
     if (
+      accessReadOnly ||
       !project?.headRevisionId ||
       sourceId === project.headRevisionId ||
       inFlight
@@ -1369,7 +1493,7 @@ function Workbench({
       !analysis ||
       !revision ||
       stale ||
-      historical ||
+      readOnly ||
       inFlight ||
       !operations.includes(operation) ||
       !changePayload
@@ -1420,7 +1544,7 @@ function Workbench({
       !project ||
       inFlight ||
       dirty ||
-      historical ||
+      readOnly ||
       conflict ||
       !canApply(
         proposal.status,
@@ -1558,9 +1682,8 @@ function Workbench({
           methods={graph?.methods ?? []}
           methodsDisabled={stale || analyzing}
           methodId={methodId}
-          disabled={
-            inFlight || historical || conflict || (!!file && !editorReady)
-          }
+          disabled={inFlight || conflict || (!!file && !editorReady)}
+          readOnly={readOnly}
           onOpen={(p) => {
             setMethodId(
               matchingMethod(graph?.methods ?? [], methodSelections.current[p])
@@ -1648,7 +1771,7 @@ function Workbench({
                         ? "Сначала сохраните локальную правку"
                         : "Восстановить как новую версию"
                     }
-                    disabled={inFlight || dirty || conflict}
+                    disabled={accessReadOnly || inFlight || dirty || conflict}
                     onClick={() => void restoreRevision(r.id)}
                   >
                     Восстановить
@@ -1671,12 +1794,12 @@ function Workbench({
           <button
             key={kind}
             className={"palette-block palette-" + kind}
-            draggable={!stale && !historical && !inFlight}
+            draggable={!stale && !readOnly && !inFlight}
             onDragStart={(e) => {
               e.dataTransfer.setData("application/x-blueprint-block", kind);
               e.dataTransfer.effectAllowed = "copy";
             }}
-            disabled={stale || historical || inFlight}
+            disabled={stale || readOnly || inFlight}
             onClick={() => {
               if (!selected || !operations.includes("insert_statement")) {
                 setStatus("Перетащите блок на шаг схемы");
@@ -1731,6 +1854,7 @@ function Workbench({
             onSelect={pickNode}
             projectId={projectId}
             stale={stale}
+            readOnly={readOnly}
             staleMessage={
               dirty
                 ? "Изменения ещё не сохранены"
@@ -1852,7 +1976,7 @@ function Workbench({
             ))}
           <button
             className="file-tabs-save"
-            disabled={!dirty || saving || conflict || historical}
+            disabled={!dirty || saving || conflict || readOnly}
             onClick={() => void save()}
             title="Ctrl+S"
           >
@@ -1928,7 +2052,7 @@ function Workbench({
               }),
             )}
             onOffset={offset}
-            readOnly={historical || busy || treeSaving || loadingRevision}
+            readOnly={readOnly || busy || treeSaving || loadingRevision}
           />
         ) : (
           <div className="empty-pane">
@@ -1945,9 +2069,9 @@ function Workbench({
           analysis={analysis}
           methodId={methodId}
           focusKey={inspectorFocus}
-          optimizationEnabled={!inFlight && !historical && !stale}
+          optimizationEnabled={!inFlight && !readOnly && !stale}
           onOptimize={(nodeId) => {
-            if (inFlight || historical || stale) return;
+            if (inFlight || readOnly || stale) return;
             const node = graph?.nodes.find(
               (item) =>
                 item.id === nodeId &&
@@ -2053,7 +2177,7 @@ function Workbench({
                   <select
                     id="node-operation"
                     value={operation}
-                    disabled={inFlight || stale || historical}
+                    disabled={inFlight || stale || readOnly}
                     onChange={(e) => {
                       setOperation(e.target.value);
                       if (e.target.value === "optimize_membership")
@@ -2080,7 +2204,7 @@ function Workbench({
                           onChange={(e) => setExpression(e.target.value)}
                           rows={5}
                           spellCheck={false}
-                          disabled={inFlight || stale || historical}
+                          disabled={inFlight || stale || readOnly}
                         />
                       </>
                     )}
@@ -2091,7 +2215,7 @@ function Workbench({
                         id="statement-source"
                         rows={6}
                         value={statement}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => setStatement(e.target.value)}
                         spellCheck={false}
                       />
@@ -2103,7 +2227,7 @@ function Workbench({
                       <select
                         id="insert-position"
                         value={position}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => setPosition(e.target.value)}
                       >
                         {positions.map((p) => (
@@ -2123,7 +2247,7 @@ function Workbench({
                       <select
                         id="statement-template"
                         value={template}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => {
                           setTemplate(e.target.value);
                           setStatement(statementTemplates[e.target.value]);
@@ -2139,7 +2263,7 @@ function Workbench({
                         value={statement}
                         rows={6}
                         spellCheck={false}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => setStatement(e.target.value)}
                       />
                     </>
@@ -2155,7 +2279,7 @@ function Workbench({
                       <select
                         id="move-target"
                         value={targetNodeId}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => {
                           setTargetNodeId(e.target.value);
                           const next = targets.find(
@@ -2179,7 +2303,7 @@ function Workbench({
                       <select
                         id="move-position"
                         value={movePosition}
-                        disabled={inFlight || stale || historical || !target}
+                        disabled={inFlight || stale || readOnly || !target}
                         onChange={(e) => setMovePosition(e.target.value)}
                       >
                         {!moveOptions.length && (
@@ -2208,7 +2332,7 @@ function Workbench({
                         value={wrapCondition}
                         rows={3}
                         spellCheck={false}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => setWrapCondition(e.target.value)}
                       />
                     </>
@@ -2221,7 +2345,7 @@ function Workbench({
                         value={elseSource}
                         rows={6}
                         spellCheck={false}
-                        disabled={inFlight || stale || historical}
+                        disabled={inFlight || stale || readOnly}
                         onChange={(e) => setElseSource(e.target.value)}
                       />
                     </>
@@ -2250,7 +2374,7 @@ function Workbench({
                     disabled={
                       inFlight ||
                       stale ||
-                      historical ||
+                      readOnly ||
                       operation === "optimize_membership"
                     }
                     onChange={(e) => setIntent(e.target.value)}
@@ -2265,7 +2389,7 @@ function Workbench({
                     disabled={
                       inFlight ||
                       stale ||
-                      historical ||
+                      readOnly ||
                       !operations.includes(operation) ||
                       !changePayload
                     }
@@ -2337,7 +2461,12 @@ function Workbench({
       <div className="dock-content">
         <>
           {job?.type === "run" && ["queued", "running"].includes(job.status) ? (
-            <LiveConsole projectId={projectId} jobId={job.id} live={job.live} />
+            <LiveConsole
+              projectId={projectId}
+              jobId={job.id}
+              live={job.live}
+              readOnly={accessReadOnly}
+            />
           ) : report ? (
             <ReportView
               report={report}
@@ -2392,7 +2521,7 @@ function Workbench({
             <span>Нет сравнений</span>
             <button
               onClick={() => setDialog("compare")}
-              disabled={!revision || dirty}
+              disabled={accessReadOnly || !revision || dirty}
             >
               Сравнить версии
             </button>
@@ -2426,7 +2555,7 @@ function Workbench({
                 !exactMatched && (
                   <button
                     className="primary"
-                    disabled={inFlight || historical || dirty || conflict}
+                    disabled={inFlight || readOnly || dirty || conflict}
                     onClick={() => setDialog("compare")}
                   >
                     Проверить на тестах
@@ -2436,7 +2565,7 @@ function Workbench({
                 className="primary"
                 disabled={
                   inFlight ||
-                  historical ||
+                  readOnly ||
                   conflict ||
                   !canApply(
                     proposal.status,
@@ -2523,6 +2652,7 @@ function Workbench({
     ),
   };
   function stopJob() {
+    if (accessReadOnly) return;
     if (job && ["queued", "running"].includes(job.status))
       void api<Job>(base + "/jobs/" + job.id + "/cancel", {
         method: "POST",
@@ -2532,7 +2662,10 @@ function Workbench({
         .catch((e) => setError(message(e)));
   }
   return (
-    <div className="workbench configurable-workbench glass-workbench">
+    <div
+      className="workbench configurable-workbench glass-workbench"
+      data-readonly={accessReadOnly || undefined}
+    >
       <header className="toolbar glass-topbar">
         <label className="global-search">
           <Icon name="search" size={17} />
@@ -2549,24 +2682,21 @@ function Workbench({
           <kbd>Ctrl K</kbd>
         </label>
         <span className="toolbar-spacer" />
-        <span className="local-presence" title="Локальная сессия">
+        <button
+          className="local-presence"
+          title="Аккаунт"
+          aria-label="Открыть настройки аккаунта"
+          onClick={() => navigate("/settings")}
+        >
           <CircleUserRound size={23} />
-        </span>
+        </button>
         <button
           className="share-button"
-          title="Скопировать ссылку на проект"
-          onClick={() => {
-            void navigator.clipboard
-              .writeText(location.origin + "/projects/" + projectId)
-              .then(() => {
-                setShareCopied(true);
-                setTimeout(() => setShareCopied(false), 2000);
-              })
-              .catch(() => setError("Не удалось скопировать ссылку"));
-          }}
+          title="Доступ к проекту"
+          onClick={() => setShowAccess(true)}
+          disabled={!project}
         >
-          {shareCopied ? <Check size={16} /> : <Share2 size={16} />}{" "}
-          {shareCopied ? "Скопировано" : "Share"}
+          <Share2 size={16} /> Поделиться
         </button>
         <input
           type="file"
@@ -2577,6 +2707,13 @@ function Workbench({
           onChange={(e) => void importFiles(e.target.files)}
         />
       </header>
+      {showAccess && project && (
+        <ProjectAccess
+          project={project}
+          onClose={() => setShowAccess(false)}
+          onUpdate={setProject}
+        />
+      )}
       <main className="workbench-body">
         <div className="workspace-notices">
           {" "}
@@ -2589,6 +2726,18 @@ function Workbench({
               >
                 <Icon name="close" size={14} />
               </button>
+            </div>
+          )}
+          {accessReadOnly && (
+            <div className="notice" role="status">
+              {checkingAccess
+                ? "Проверка доступа…"
+                : "Проект открыт для просмотра."}
+              {dirty &&
+                " Локальный черновик сохранён в браузере; автосохранение остановлено."}
+              {dirty && (
+                <button onClick={downloadDraft}>Скачать черновик</button>
+              )}
             </div>
           )}
           {conflict && (
@@ -2700,16 +2849,16 @@ function Workbench({
                           editorCommands.current?.[command]();
                       });
                     },
-                    editDisabled:
-                      !file || historical || busy || loadingRevision,
-                    saveDisabled: !dirty || saving || conflict || historical,
+                    editDisabled: !file || readOnly || busy || loadingRevision,
+                    saveDisabled: !dirty || saving || conflict || readOnly,
                     runDisabled:
+                      accessReadOnly ||
                       !revision ||
                       dirty ||
                       busy ||
                       !Object.keys(files).some((p) => p.endsWith(".java")),
                     exportDisabled: !revision || busy,
-                    importDisabled: busy,
+                    importDisabled: busy || readOnly,
                     stopDisabled:
                       !job || !["queued", "running"].includes(job.status),
                   }}
@@ -2814,6 +2963,7 @@ function Workbench({
             aria-label="Сравнить"
             title="Сравнить версии"
             disabled={
+              accessReadOnly ||
               !revision ||
               dirty ||
               busy ||
@@ -2827,6 +2977,7 @@ function Workbench({
             <button
               className="dock-run"
               disabled={
+                accessReadOnly ||
                 !revision ||
                 busy ||
                 !Object.keys(files).some((p) => p.endsWith(".java"))
@@ -2850,7 +3001,7 @@ function Workbench({
               </summary>
               <div className="dock-run-popup">
                 <button
-                  disabled={!revision || dirty || busy}
+                  disabled={accessReadOnly || !revision || dirty || busy}
                   onClick={(e) => {
                     setDialog("run");
                     e.currentTarget.closest("details")?.removeAttribute("open");
@@ -2859,7 +3010,7 @@ function Workbench({
                   Настроить запуск
                 </button>
                 <button
-                  disabled={!revision || dirty || busy}
+                  disabled={accessReadOnly || !revision || dirty || busy}
                   onClick={(e) => {
                     setDialog("compare");
                     e.currentTarget.closest("details")?.removeAttribute("open");
@@ -2878,15 +3029,17 @@ function Workbench({
               </div>
             </details>
           </div>
-          {job && ["queued", "running"].includes(job.status) && (
-            <button
-              className="dock-icon stop-job"
-              aria-label="Остановить выполнение"
-              onClick={stopJob}
-            >
-              <Square size={17} />
-            </button>
-          )}
+          {job &&
+            !accessReadOnly &&
+            ["queued", "running"].includes(job.status) && (
+              <button
+                className="dock-icon stop-job"
+                aria-label="Остановить выполнение"
+                onClick={stopJob}
+              >
+                <Square size={17} />
+              </button>
+            )}
         </div>
       </footer>
       <input
@@ -2972,7 +3125,7 @@ function Workbench({
                   <button
                     className="primary"
                     disabled={
-                      !importSelected.length || saving || historical || conflict
+                      !importSelected.length || saving || readOnly || conflict
                     }
                     onClick={() => void applyImport()}
                   >
@@ -3003,7 +3156,7 @@ function Workbench({
           </section>
         </div>
       )}
-      {dialog && project && revision && (
+      {dialog && project && revision && !accessReadOnly && (
         <RunDialog
           kind={dialog}
           project={project}

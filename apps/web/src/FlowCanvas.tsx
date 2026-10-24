@@ -33,12 +33,15 @@ import {
   ArrowUpRight,
   GitMerge,
 } from "lucide-react";
-import type { RouteBox } from "./flowLayout";
+import type { RouteBox, RouteSide } from "./flowLayout";
 import type { Graph, GraphNode, Layout, SemanticModel } from "./types";
 import {
   arrangeFlow,
   executionNodes,
   routeFlowEdges,
+  flowPorts,
+  routePort,
+  branchLabelPosition,
   routeOrthogonal,
   roundedRoute,
   compactFlowLabel,
@@ -91,7 +94,15 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
       }
       title={data.fullLabel}
     >
-      <Handle type="target" position={Position.Top} isConnectable={false} />
+      {(["top", "right", "bottom", "left"] as const).map((side) => (
+        <Handle
+          key={`target-${side}`}
+          id={`target-${side}`}
+          type="target"
+          position={side as Position}
+          isConnectable={false}
+        />
+      ))}
       {data.dropPosition && (
         <span className="block-insert-hint">
           {data.dropPosition === "before" || data.dropPosition === "body_start"
@@ -127,34 +138,15 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
           <div className="node-label">{data.label}</div>
         </>
       )}
-      <Handle
-        id="next"
-        type="source"
-        position={Position.Bottom}
-        isConnectable={false}
-      />
-      {data.branch && (
-        <>
-          <Handle
-            id="true"
-            type="source"
-            position={Position.Bottom}
-            isConnectable={false}
-          />
-          <Handle
-            id="false"
-            type="source"
-            position={Position.Right}
-            isConnectable={false}
-          />
-          <span className="graph-port graph-port-true" aria-hidden="true">
-            да
-          </span>
-          <span className="graph-port graph-port-false" aria-hidden="true">
-            нет
-          </span>
-        </>
-      )}
+      {(["top", "right", "bottom", "left"] as const).map((side) => (
+        <Handle
+          key={`source-${side}`}
+          id={`source-${side}`}
+          type="source"
+          position={side as Position}
+          isConnectable={false}
+        />
+      ))}
     </div>
   );
 }
@@ -186,6 +178,11 @@ export function kindName(kind: string) {
         loop_back: "Повтор цикла",
         IfStmt: "Если",
         condition_test: "Проверка",
+        try_entry: "Защищённый блок",
+        catch_test: "Тип исключения",
+        catch_entry: "Обработчик",
+        finally_entry: "Завершение finally",
+        finally_resume: "Продолжение",
         SwitchStmt: "Выбор",
         switch_selector: "Значение",
         switch_case: "Ветка",
@@ -247,7 +244,9 @@ function ShortcutEdge({
     boxes: RouteBox[];
     fullLabel?: string;
     labelAtTarget?: boolean;
-    sourceSide?: "bottom" | "right";
+    sourceSide?: RouteSide;
+    targetSide?: RouteSide;
+    compact?: boolean;
     branch?: boolean;
     returning?: boolean;
     departure?: number;
@@ -266,6 +265,8 @@ function ShortcutEdge({
         data?.departure ?? 22,
         data?.sourceSide,
         data?.arrival ?? 22,
+        data?.targetSide,
+        data?.compact,
       ),
     [sourceX, sourceY, targetX, targetY, routeX, data],
   );
@@ -280,12 +281,23 @@ function ShortcutEdge({
   const labelStart = route.points[Math.max(0, horizontal)],
     labelEnd = route.points[Math.max(1, horizontal + 1)];
   const targetLabel = dispatchLabelPosition({ x: targetX, y: targetY });
-  const labelX = data?.labelAtTarget
-    ? targetLabel.x
-    : labelStart.x +
-      Math.sign(labelEnd.x - labelStart.x) *
-        Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
-  const labelY = data?.labelAtTarget ? targetLabel.y : labelStart.y;
+  const branchLabel = data?.branch;
+  const branchAt = branchLabelPosition(
+    { x: sourceX, y: sourceY },
+    data?.sourceSide ?? "bottom",
+  );
+  const labelX = branchLabel
+    ? branchAt.x
+    : data?.labelAtTarget
+      ? targetLabel.x
+      : labelStart.x +
+        Math.sign(labelEnd.x - labelStart.x) *
+          Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
+  const labelY = branchLabel
+    ? branchAt.y
+    : data?.labelAtTarget
+      ? targetLabel.y
+      : labelStart.y;
   return (
     <>
       <g
@@ -308,10 +320,10 @@ function ShortcutEdge({
           style={route.complete ? style : { ...style, strokeDasharray: "4 4" }}
         />
       </g>
-      {label && !data?.branch && (
+      {label && (
         <EdgeLabelRenderer>
           <span
-            className="shortcut-label"
+            className={"shortcut-label" + (branchLabel ? " branch-label" : "")}
             title={flowLabelTitle(data?.fullLabel, route.complete)}
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
@@ -333,6 +345,7 @@ export default function FlowCanvas({
   onSelect,
   projectId,
   stale,
+  readOnly = false,
   semantics,
   staleMessage,
   onRefresh,
@@ -346,6 +359,7 @@ export default function FlowCanvas({
   onSelect: (node: GraphNode) => void;
   projectId: string;
   stale: boolean;
+  readOnly?: boolean;
   staleMessage?: string;
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -460,7 +474,12 @@ export default function FlowCanvas({
                 : e.label
                   ? compactFlowLabel(e.label)
                   : undefined,
-          data: { fullLabel: e.label ?? undefined },
+          data: {
+            fullLabel:
+              [e.label, e.reason, e.completionContext]
+                .filter(Boolean)
+                .join("\n") || undefined,
+          },
           sourceHandle:
             e.kind === "true" || e.kind === "false" ? e.kind : "next",
           markerEnd: {
@@ -528,7 +547,8 @@ export default function FlowCanvas({
                 : n.kind === "entry"
                   ? (graph.methods.find((m) => m.id === methodId)?.signature ??
                     "Начало")
-                  : n.executionRole === "structural"
+                  : n.executionRole === "structural" &&
+                      !["finally_entry", "catch_entry"].includes(n.kind)
                     ? kindName(n.kind)
                     : n.kind === "normal_exit"
                       ? "Завершение"
@@ -627,6 +647,27 @@ export default function FlowCanvas({
       width: node.measured?.width ?? 264,
       height: node.measured?.height ?? 84,
     }));
+    const labelBoxes = edges
+      .filter((edge) => edge.kind === "true" || edge.kind === "false")
+      .flatMap((edge) => {
+        const source = boxes.find((box) => box.id === edge.source);
+        const target = boxes.find((box) => box.id === edge.target);
+        if (!source || !target) return [];
+        const { sourceSide } = flowPorts(source, target, edge.kind);
+        const at = branchLabelPosition(
+          routePort(source, sourceSide),
+          sourceSide,
+        );
+        return [
+          {
+            id: `label:${edge.id}`,
+            x: at.x - 15,
+            y: at.y - 9,
+            width: 30,
+            height: 18,
+          },
+        ];
+      });
     const departures = new Map<number, number>();
     const arrivals = new Map<number, number>();
     return edges.map((edge) => {
@@ -638,9 +679,18 @@ export default function FlowCanvas({
         entering = arrivals.get(targetRow) ?? 0;
       departures.set(sourceRow, leaving + 1);
       arrivals.set(targetRow, entering + 1);
+      const sourceBox = boxes.find((box) => box.id === edge.source);
+      const targetBox = boxes.find((box) => box.id === edge.target);
+      const ports =
+        sourceBox && targetBox
+          ? flowPorts(sourceBox, targetBox, edge.kind)
+          : { sourceSide: "bottom" as const, targetSide: "top" as const };
       const kind = source?.data.visualKind;
+      const exceptional = ["throw", "exception", "uncaught"].includes(
+        edge.kind,
+      );
       const color =
-        kind === "return"
+        exceptional || kind === "return"
           ? "var(--graph-return)"
           : edge.kind === "loop" || kind === "loop" || kind === "jump"
             ? "var(--graph-violet)"
@@ -653,7 +703,14 @@ export default function FlowCanvas({
                   : "var(--graph-green)";
       return {
         ...edge,
-        style: { ...edge.style, stroke: color },
+        sourceHandle: `source-${ports.sourceSide}`,
+        targetHandle: `target-${ports.targetSide}`,
+        style: {
+          ...edge.style,
+          stroke: color,
+          strokeDasharray:
+            edge.certainty === "conservative" ? "5 4" : undefined,
+        },
         markerEnd: { ...edge.markerEnd, color },
         type: "shortcut",
         data: {
@@ -664,9 +721,11 @@ export default function FlowCanvas({
           routeX:
             routes.get(edge.id) ??
             ((source?.position.x ?? 0) + (target?.position.x ?? 0)) / 2 + 132,
-          boxes,
+          boxes: [...boxes, ...labelBoxes],
           labelAtTarget: edge.kind === "case" || edge.kind === "default",
-          sourceSide: edge.kind === "false" ? "right" : "bottom",
+          ...ports,
+          compact:
+            edge.kind !== "loop" && Math.abs(targetRow - sourceRow) <= 180,
           branch: edge.kind === "true" || edge.kind === "false",
           returning:
             edge.kind === "loop" ||
@@ -755,7 +814,7 @@ export default function FlowCanvas({
     [],
   );
   async function saveLayout() {
-    if (!layout || stale) return;
+    if (!layout || stale || readOnly) return;
     try {
       const requestedScope = scope;
       const saved = await api<Layout>(
@@ -792,6 +851,7 @@ export default function FlowCanvas({
       onDragOver={(e) => {
         if (
           stale ||
+          readOnly ||
           !e.dataTransfer.types.includes("application/x-blueprint-block")
         )
           return;
@@ -828,7 +888,8 @@ export default function FlowCanvas({
         if (
           dropTarget &&
           ["statement", "condition", "loop"].includes(kind) &&
-          !stale
+          !stale &&
+          !readOnly
         ) {
           e.preventDefault();
           onInsert?.(dropTarget.id, kind, dropTarget.position);
@@ -875,9 +936,9 @@ export default function FlowCanvas({
         }}
         onNodeDoubleClick={(_, n) => {
           const source = methodNodes.find((s) => s.id === n.id);
-          if (source && !stale) onEdit?.(source);
+          if (source && !stale && !readOnly) onEdit?.(source);
         }}
-        nodesDraggable={!stale}
+        nodesDraggable={!stale && !readOnly}
         nodesConnectable={false}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         minZoom={0.15}

@@ -86,7 +86,7 @@ public class Workspace {
     var rows =
         db.queryForList(
             "SELECT"
-                + " id::text,name,head_revision_id::text,original_revision_id::text,created_at,updated_at"
+                + " id::text,name,head_revision_id::text,original_revision_id::text,created_at,updated_at,owner_id::text,visibility"
                 + " FROM projects WHERE id=?",
             uuid(p));
     if (rows.isEmpty()) throw missing();
@@ -104,8 +104,24 @@ public class Workspace {
         r.get("created_at").toString(),
         "updatedAt",
         r.get("updated_at").toString(),
-        "localOwnerId",
-        "local");
+        "localOwnerId", r.get("owner_id")==null ? "local" : null,
+        "ownerId", r.get("owner_id"), "visibility", r.get("visibility"),
+        "role", projectRole(p,r.get("owner_id")),
+        "canEdit", Set.of("owner","editor","local_guest").contains(projectRole(p,r.get("owner_id"))));
+  }
+
+  static String currentActor() {
+    var context=org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+    return context instanceof org.springframework.web.context.request.ServletRequestAttributes r
+        ? Objects.toString(r.getRequest().getAttribute("accountId"),null) : null;
+  }
+  String projectRole(String project,Object owner) {
+    if(owner==null) return "local_guest";
+    String actor=currentActor();
+    if(Objects.equals(owner,actor)) return "owner";
+    if(actor==null) return "viewer";
+    return db.queryForList("SELECT role FROM project_members WHERE project_id=? AND account_id=?",uuid(project),uuid(actor))
+        .stream().map(row->row.get("role").toString()).findFirst().orElse("viewer");
   }
 
   static ApiError missing() {
@@ -125,15 +141,25 @@ public class Workspace {
   }
 
   List<Map<String, Object>> projects(int limit, String query, String before) {
+    return projects(limit,query,before,"default");
+  }
+
+  List<Map<String, Object>> projects(int limit, String query, String before, String scope) {
+    if(!Set.of("default","legacy").contains(scope)) throw new ApiError(400,"INVALID_REQUEST","Unknown project scope");
+    String actor=currentActor();
+    boolean legacy=actor==null || scope.equals("legacy");
     if (query.length() > 120) throw new ApiError(400, "INVALID_REQUEST", "Project search is limited to 120 characters");
     String filter = query.strip();
     UUID cursor = before == null ? null : uuid(before);
-    if (cursor != null) project(cursor.toString());
+    if (cursor != null) {
+      project(cursor.toString());
+      if(!Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM projects p WHERE id=? AND ((? AND owner_id IS NULL) OR (NOT ? AND (owner_id=?::uuid OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.account_id=?::uuid)))))",Boolean.class,cursor,legacy,legacy,actor,actor))) throw missing();
+    }
     return db
         .queryForList(
-            "SELECT id::text FROM projects WHERE (?='' OR position(lower(?) in lower(name))>0)"
+            "SELECT id::text FROM projects p WHERE ((? AND owner_id IS NULL) OR (NOT ? AND (owner_id=?::uuid OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.account_id=?::uuid)))) AND (?='' OR position(lower(?) in lower(name))>0)"
                 + " AND (?::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM projects WHERE id=?::uuid))"
-                + " ORDER BY created_at DESC,id DESC LIMIT ?", filter, filter, cursor, cursor, limit)
+                + " ORDER BY created_at DESC,id DESC LIMIT ?", legacy,legacy,actor,actor,filter, filter, cursor, cursor, limit)
         .stream()
         .map(r -> project(r.get("id").toString()))
         .toList();
@@ -156,7 +182,8 @@ public class Workspace {
     if (name == null || name.isBlank() || name.length() > 120)
       throw new ApiError(400, "INVALID_REQUEST", "Name must contain 1..120 characters");
     String id = id();
-    db.update("INSERT INTO projects(id,name)VALUES(?,?)", uuid(id), name);
+    String actor=currentActor();
+    db.update("INSERT INTO projects(id,name,owner_id,visibility)VALUES(?,?,?::uuid,?)", uuid(id), name,actor,actor==null?"legacy_local":"private");
     return project(id);
   }
 

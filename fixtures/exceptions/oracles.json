@@ -1,0 +1,18 @@
+[
+  {"id":"multi-first","argv":["ordered","0"],"expectedStdout":"TMF"},
+  {"id":"multi-alternative","argv":["ordered","1"],"expectedStdout":"TMF"},
+  {"id":"later-handler","argv":["ordered","2"],"expectedStdout":"TRF"},
+  {"id":"normal-finally","argv":["ordered","3"],"expectedStdout":"TNF"},
+  {"id":"nested-return","argv":["nested","false"],"expectedStdout":"AIO7"},
+  {"id":"finally-overrides-return","argv":["nested","true"],"expectedStdout":"AIO9"},
+  {"id":"handler-rethrow","argv":["handler"],"expectedStdout":"CIOF"},
+  {"id":"jumps-cleanup","argv":["jumps"],"expectedStdout":"01J"},
+  {"id":"short-circuit-skip","argv":["short","false"],"expectedStdout":"NF"},
+  {"id":"short-circuit-throw","argv":["short","true"],"expectedStdout":"ECF"},
+  {"id":"checked-throws-helper","argv":["checked"],"expectedStdout":"ECF"},
+  {"id":"custom-checked-message","argv":["custom-checked"],"expectedStdout":"xF"},
+  {"id":"throw-null","argv":["null-throw"],"expectedStdout":"NF"},
+  {"id":"finally-throw-overrides-return","argv":["finally-throw"],"expectedStdout":"AFC9"},
+  {"id":"catch-return-expression-throws","argv":["catch-return-throw"],"expectedStdout":"EIO4"},
+  {"id":"finally-jumps-override-return","argv":["finally-jump"],"expectedStdout":"019"}
+]

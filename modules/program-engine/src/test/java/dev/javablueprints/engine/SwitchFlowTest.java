@@ -180,7 +180,7 @@ class SwitchFlowTest {
                 "switch(select()){case new Integer(1):a();}","switch(select()){case true ? 1 : lab():a();}",
                 "switch(select()){case (int)(Object)null:a();}","switch(select()){case (@A(value=probe()) int) 1:a();}",
                 "switch(select()){case (@A(value=null) int) 1:a();}","switch(select()){default:a();default:b();}",
-                "try{switch(select()){case 1:a();}}finally{}","outer:switch(select()){case 1:break outer;}"))opaqueOrInvalid(source(body));
+                "synchronized(this){switch(select()){case 1:a();}}","outer:switch(select()){case 1:break outer;}"))opaqueOrInvalid(source(body));
     }
 
     @Test void annotationExpressionsInsideCastTypesCannotHideUnsafeLabelDescendants(){

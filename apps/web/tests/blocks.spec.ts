@@ -99,7 +99,7 @@ async function analysis(
         );
         if (!response.ok()) return false;
         result = (await response.json()).data;
-        return result?.analyzerVersion === "engine-0.10.1";
+        return result?.analyzerVersion === "engine-0.11.0";
       },
       { timeout: 30000 },
     )

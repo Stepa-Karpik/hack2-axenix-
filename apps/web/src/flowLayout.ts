@@ -29,6 +29,7 @@ export function visualKind(
   if (
     [
       "condition_test",
+      "catch_test",
       "foreach_check",
       "switch_selector",
       "condition",
@@ -47,6 +48,9 @@ export function visualKind(
   if (["MethodCallExpr", "ObjectCreationExpr"].includes(node.kind))
     return "call";
   if (node.kind === "merge") return "join";
+  if (["finally_resume"].includes(node.kind)) return "jump";
+  if (["try_entry", "catch_entry", "finally_entry"].includes(node.kind))
+    return "structure";
   if (node.executionRole === "structural") return "structure";
   const range = node.sourceRange;
   if (
@@ -369,6 +373,59 @@ export function routeFlowEdges(
 }
 
 export type RoutePoint = { x: number; y: number };
+export type RouteSide = "top" | "right" | "bottom" | "left";
+export function flowPorts(source: RouteBox, target: RouteBox, kind: string) {
+  const dx = target.x + target.width / 2 - source.x - source.width / 2;
+  const dy = target.y + target.height / 2 - source.y - source.height / 2;
+  // Back edges keep an exterior corridor and arrive from above/beside the loop.
+  if (kind === "loop")
+    return { sourceSide: "left", targetSide: "left" } as const;
+  if (dy <= -24 && Math.abs(dx) <= 40)
+    return { sourceSide: "top", targetSide: "bottom" } as const;
+  if (dy <= -24)
+    return {
+      sourceSide: dx < 0 ? "left" : "right",
+      targetSide: "bottom",
+    } as const;
+  const branch = kind === "true" || kind === "false";
+  const sideways = Math.abs(dx) > 40 && (branch || Math.abs(dy) < 100);
+  const sourceSide: RouteSide = sideways
+    ? dx < 0
+      ? "left"
+      : "right"
+    : "bottom";
+  const targetSide: RouteSide =
+    target.y >= source.y + source.height + 24
+      ? "top"
+      : dx < 0
+        ? "right"
+        : dx > 0
+          ? "left"
+          : "top";
+  return { sourceSide, targetSide };
+}
+export function routePort(box: RouteBox, side: RouteSide): RoutePoint {
+  return {
+    x:
+      side === "left"
+        ? box.x
+        : side === "right"
+          ? box.x + box.width
+          : box.x + box.width / 2,
+    y:
+      side === "top"
+        ? box.y
+        : side === "bottom"
+          ? box.y + box.height
+          : box.y + box.height / 2,
+  };
+}
+export function branchLabelPosition(start: RoutePoint, side: RouteSide) {
+  return {
+    x: start.x + (side === "left" ? -28 : side === "right" ? 28 : 20),
+    y: start.y + (side === "top" ? -20 : side === "bottom" ? 20 : -14),
+  };
+}
 export type RouteBox = {
   id: string;
   x: number;
@@ -393,14 +450,19 @@ export function routeOrthogonal(
   lane: number,
   boxes: RouteBox[],
   departure = 22,
-  sourceSide: "bottom" | "right" = "bottom",
+  sourceSide: RouteSide = "bottom",
   arrival = 22,
+  targetSide: RouteSide = "top",
+  compact = false,
 ) {
-  const leave =
-    sourceSide === "right"
-      ? { x: start.x + departure, y: start.y }
-      : { x: start.x, y: start.y + departure };
-  const approach = { x: end.x, y: end.y - arrival };
+  const outward = (point: RoutePoint, side: RouteSide, distance: number) => ({
+    x:
+      point.x + (side === "left" ? -distance : side === "right" ? distance : 0),
+    y:
+      point.y + (side === "top" ? -distance : side === "bottom" ? distance : 0),
+  });
+  const leave = outward(start, sourceSide, departure);
+  const approach = outward(end, targetSide, arrival);
   const initial = [
     start,
     leave,
@@ -416,12 +478,42 @@ export function routeOrthogonal(
         .some((point, index) => segmentHitsBox(points[index], point, box)),
     );
   const initialBlockers = blockers(initial);
-  if (!initialBlockers.length) return { points: initial, complete: true };
+  if (compact) {
+    const candidates = [
+      [start, leave, { x: leave.x, y: approach.y }, approach, end],
+      [start, leave, { x: approach.x, y: leave.y }, approach, end],
+    ];
+    const length = (points: RoutePoint[]) =>
+      points
+        .slice(1)
+        .reduce(
+          (sum, p, i) =>
+            sum + Math.abs(p.x - points[i].x) + Math.abs(p.y - points[i].y),
+          0,
+        );
+    const clear = candidates
+      .filter((points) => !blockers(points).length)
+      .sort((a, b) => length(a) - length(b));
+    if (clear.length) return { points: clear[0], complete: true };
+  }
+  if (!initialBlockers.length && !compact)
+    return { points: initial, complete: true };
   // Endpoint stems are fixed by the actual handle direction. Do not enter the
   // source/target through a different side just to report a successful route.
   if (blockers([start, leave]).length || blockers([approach, end]).length)
     return { points: initial, complete: false };
-  const relevant = new Map(initialBlockers.map((box) => [box.id, box]));
+  const relevant = new Map(
+    (compact
+      ? boxes.filter(
+          (box) =>
+            box.x < Math.max(start.x, end.x) + 36 &&
+            box.x + box.width > Math.min(start.x, end.x) - 36 &&
+            box.y < Math.max(start.y, end.y) + 36 &&
+            box.y + box.height > Math.min(start.y, end.y) - 36,
+        )
+      : initialBlockers
+    ).map((box) => [box.id, box]),
+  );
   // Only obstructed saved/dragged layouts need this bounded visibility-grid search.
   // A budget failure retains the original endpoints/label and exposes an explicit limited route.
   for (let round = 0; round < 4 && relevant.size <= 32; round++) {
@@ -452,17 +544,26 @@ export function routeOrthogonal(
     const parents = new Map<number, number>();
     parents.set(first, -1);
     const queue = [first];
+    const distances = new Map<number, number>([[first, 0]]);
     const point = (id: number) => ({
       x: xs[id % width],
       y: ys[Math.floor(id / width)],
     });
-    for (
-      let offset = 0;
-      offset < queue.length && !parents.has(last);
-      offset++
-    ) {
-      const id = queue[offset],
-        x = id % width,
+    const estimate = (id: number) =>
+      Math.abs(point(id).x - approach.x) + Math.abs(point(id).y - approach.y);
+    const settled = new Set<number>();
+    while (queue.length) {
+      // Visibility cells have unequal lengths. A hop-count BFS can prefer a
+      // huge exterior detour; A* minimizes actual canvas distance instead.
+      queue.sort(
+        (a, b) =>
+          distances.get(a)! + estimate(a) - (distances.get(b)! + estimate(b)),
+      );
+      const id = queue.shift()!;
+      if (id === last) break;
+      if (settled.has(id)) continue;
+      settled.add(id);
+      const x = id % width,
         y = Math.floor(id / width);
       for (const [nx, ny] of [
         [x - 1, y],
@@ -472,13 +573,36 @@ export function routeOrthogonal(
       ]) {
         if (nx < 0 || nx >= width || ny < 0 || ny >= ys.length) continue;
         const next = index(nx, ny);
-        if (parents.has(next)) continue;
+        if (settled.has(next)) continue;
+        const step = {
+          x: point(next).x - point(id).x,
+          y: point(next).y - point(id).y,
+        };
+        if (
+          id === first &&
+          step.x * (leave.x - start.x) + step.y * (leave.y - start.y) < 0
+        )
+          continue;
+        if (
+          next === last &&
+          (point(id).x - approach.x) * (approach.x - end.x) +
+            (point(id).y - approach.y) * (approach.y - end.y) <
+            0
+        )
+          continue;
         if (
           obstacles.some((box) => segmentHitsBox(point(id), point(next), box))
         )
           continue;
-        parents.set(next, id);
-        queue.push(next);
+        const distance =
+          distances.get(id)! +
+          Math.abs(point(id).x - point(next).x) +
+          Math.abs(point(id).y - point(next).y);
+        if (distance < (distances.get(next) ?? Infinity)) {
+          distances.set(next, distance);
+          parents.set(next, id);
+          queue.push(next);
+        }
       }
     }
     if (!parents.has(last)) break;
@@ -495,7 +619,7 @@ export function routeOrthogonal(
     if (!collisions.length) return { points: path, complete: true };
     for (const box of collisions) relevant.set(box.id, box);
   }
-  return { points: initial, complete: false };
+  return { points: initial, complete: !initialBlockers.length };
 }
 
 export type LoopArea = RouteBox & { kind: string; members: string[] };
