@@ -130,7 +130,11 @@ export default function CodeEditor({
         model,
         "java-blueprints",
         diagnostics
-          .filter((d) => d.sourceRange?.filePath === path)
+          .filter(
+            (d) =>
+              d.sourceRange?.filePath === path &&
+              d.code !== "UNSUPPORTED_CONTROL_FLOW",
+          )
           .map((d) => ({
             message: d.message,
             severity:
@@ -147,6 +151,7 @@ export default function CodeEditor({
   return (
     <Editor
       height="100%"
+      loading={<span className="quiet">Загрузка редактора…</span>}
       path={modelPath ?? path}
       keepCurrentModel
       saveViewState
@@ -156,6 +161,7 @@ export default function CodeEditor({
       onChange={(v) => onChange(v ?? "")}
       options={{
         readOnly,
+        editContext: false,
         fontSize: 13,
         fontFamily: "'Cascadia Code', 'Consolas', monospace",
         lineHeight: 21,
@@ -185,6 +191,30 @@ export default function CodeEditor({
             instance.trigger("menu", "editor.action.selectAll", null);
           },
         });
+        const dom = instance.getDomNode();
+        const paste = (event: ClipboardEvent) => {
+          if (!instance.hasTextFocus()) return;
+          const text = event.clipboardData?.getData("text/plain");
+          if (!text || instance.getOption(monaco.editor.EditorOption.readOnly))
+            return;
+          const selections = instance.getSelections();
+          if (!selections || selections.length !== 1) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          instance.pushUndoStop();
+          instance.executeEdits("clipboard", [
+            {
+              range: selections[0],
+              text: text.replace(/\r\n?/g, "\n"),
+              forceMoveMarkers: true,
+            },
+          ]);
+          instance.pushUndoStop();
+        };
+        dom?.addEventListener("paste", paste, true);
+        instance.onDidDispose(() =>
+          dom?.removeEventListener("paste", paste, true),
+        );
         decorations.current = instance.createDecorationsCollection();
         instance.onDidChangeModel(() => highlight.current());
         try {
@@ -228,6 +258,8 @@ export default function CodeEditor({
         });
         highlight.current();
         instance.onDidChangeCursorPosition((e) => {
+          // Restoring a model or its caret must not change the selected method.
+          if (e.source !== "keyboard" && e.source !== "mouse") return;
           const model = instance.getModel();
           if (model) onOffsetRef.current(model.getOffsetAt(e.position));
         });

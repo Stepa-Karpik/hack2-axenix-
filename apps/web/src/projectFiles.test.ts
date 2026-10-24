@@ -9,7 +9,37 @@ import {
   methodIdentity,
   matchingMethod,
   remapModels,
+  publicJavaType,
 } from "./projectFiles.ts";
+test("filename hint detects only a real top-level public type", () => {
+  assert.equal(
+    publicJavaType(
+      "// public class Fake {}\n/* public class Other {} */ public final class Main { public class Nested {} }",
+    ),
+    "Main",
+  );
+  assert.equal(
+    publicJavaType("class Outer { public class Nested {} }"),
+    undefined,
+  );
+  assert.equal(
+    publicJavaType(
+      "public @Example(value=Other.class) record Order(int id) {}",
+    ),
+    "Order",
+  );
+  assert.equal(publicJavaType("public @interface Label {}"), "Label");
+  assert.equal(
+    publicJavaType(
+      'class Outer { String s = "}"; String t = """\n public class Fake {}\n """; public class Nested {} }',
+    ),
+    undefined,
+  );
+  assert.equal(
+    publicJavaType('public class Main { String escaped = "\\u007b"; }'),
+    undefined,
+  );
+});
 test("nested and empty directories survive subtree moves with unsaved text", () => {
   const before = {
     files: { "src/Main.java": "unsaved", "notes.txt": "memo" },

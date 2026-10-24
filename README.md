@@ -11,13 +11,13 @@ A local Java workbench that connects source code to a structured control-flow gr
 ## Workflow
 
 1. Create a project, then create files and folders or import text files from a ZIP archive or directory. Review the import selection before adding it to the project.
-2. Save and analyze the revision. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
+2. Edit the source. Changes are autosaved and analyzed; **Ctrl+S** saves immediately. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
    Compound conditions show the evaluation order of `&&`, `||` and `!`, including branches that skip the right operand. Select an individual test to inspect its source, or its enclosing condition to edit the whole expression.
    Traditional `switch` statements show selector evaluation, case selection, fallthrough and the destination of `break` or an enclosing loop's `continue`.
    Enhanced `for` loops show the source evaluated once, followed by element checks, binding and body repetition. Synthetic iteration steps do not expose source-edit controls.
-3. Change an expression or condition, insert or delete a supported statement, reorder statements within a block, wrap one in `if` or `while`, or add and remove a supported `else` branch. Empty methods accept an insertion at their entry node. The original head stays intact while the candidate compiles.
+3. Open the block palette with **+** in the dock, then drag a block onto a graph node: its upper half inserts before it, its lower half inserts after it. Empty methods accept an insertion at their entry node. Double-click an editable block to open its inspector. Edit its Java statement or supported expression, reorder statements within a block, wrap one in `if` or `while`, or add and remove a supported `else` branch. The original head stays intact while the candidate compiles.
 4. Review the diff. A semantic change can be applied explicitly after compilation. A change marked as preserving behavior additionally requires a matching comparison for the exact two revisions.
-5. Run a single console input, or compare a versioned test suite. Download the complete canonical snapshot or a selected file or folder as a ZIP archive.
+5. Run the saved program and answer it in the live Console. Send additional lines while it runs, close standard input with **EOF**, or stop execution from the dock. Compare immutable revisions using a versioned test suite. Download the complete canonical snapshot or a selected file or folder as a ZIP archive.
 6. Restore a historical snapshot from the history panel. Restoration creates a new revision with its source revision recorded; previous revisions remain intact. Save or discard an unsaved draft before restoring.
 
 A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
@@ -36,17 +36,25 @@ Workspace preferences are independent of program revisions and graph-node positi
 
 **Share** copies the local project URL. Accounts, collaborator presence and permission-based sharing are not implemented yet.
 
-Graph nodes use distinct icons, shapes and restrained semantic colors. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Green connections emphasize primary forward links or the selected node's adjacent routes; they are not a runtime execution trace. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
+Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
 
 ## Files and folders
 
-The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors.
+The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Enter a new file or folder name and press **Enter** or click elsewhere to create it; **Escape** cancels. Its icon follows the filename extension. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors. A mismatched public Java type offers an explicit filename correction.
 
 Open files appear as tabs with language-specific icons and editor highlighting. Switching, closing and reopening tabs retains the current file's draft, selection and undo history during the project session. File operations save a complete snapshot together with pending text edits. Concurrent changes produce a conflict instead of replacing another saved version.
 
 Import previews support strict UTF-8 text and ZIP archives, with selection before commit and no silent overwrite of existing paths. Archives preserve empty folders; a browser directory picker supplies files and their parent directories, but cannot enumerate empty folders. Unsupported binary files and unsafe or oversized archives are rejected. Build scripts from imported projects are never executed.
 
 Non-Java text files can be edited and exported. Only `.java` files are analyzed and passed to the isolated Java runner. A project containing only text files or folders can be saved without scheduling a Java analysis or execution.
+
+## Console
+
+The Console displays standard output and errors during execution. **Send** delivers one line to the running program; **End input** (`Завершить ввод`, EOF) closes its input, allowing programs using `Scanner.hasNextLine()` or `readAllBytes()` to finish. The stop action retains captured output in the run report. Hiding the Console keeps the run active, and reloading its URL reconnects to the current job.
+
+Interactive runs have a 120-second runtime limit, a 1 MiB combined output limit and a 1 MiB input budget including initial input. Each submitted input frame is limited to 8 KiB, with at most 1,024 frames. Compilation remains limited to 20 seconds. The elapsed time includes compilation and execution setup. Repeated input requests with the same idempotency key and body are delivered once.
+
+The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
 
 ## Architecture
 

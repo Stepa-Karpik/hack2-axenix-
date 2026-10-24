@@ -159,7 +159,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
     .filter({ hasText: "История" })
     .click();
   // Local edits block restore before the autosave debounce can replace the draft.
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+End");
   await page.keyboard.insertText("\n// local draft\n");
   await expect(restore).toBeDisabled();

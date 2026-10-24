@@ -51,6 +51,8 @@ export async function panToNode(page: Page, node: ReturnType<Page["locator"]>) {
           })),
       )
       .not.toBeNull();
+    // Focus the canvas before Space: an editor selection must never receive it.
+    await page.mouse.click(start!.x, start!.y);
     await page.keyboard.down("Space");
     await page.mouse.move(start!.x, start!.y);
     await page.mouse.down();

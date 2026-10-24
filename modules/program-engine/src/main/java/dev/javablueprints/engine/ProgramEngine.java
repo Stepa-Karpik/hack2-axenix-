@@ -21,7 +21,7 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.7.0";
+    public static final String VERSION = "engine-0.8.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -53,7 +53,7 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!Set.of("replace_expression", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else").contains(command.operation())) {
+        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else").contains(command.operation())) {
             throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
@@ -65,6 +65,10 @@ public final class ProgramEngine {
             case "replace_expression" -> {
                 if (!(command.payload() instanceof ReplaceExpression payload)) throw failure("INVALID_EDIT", "Expected expression payload");
                 yield replaceExpression(bundle, parsed, selected, target, payload);
+            }
+            case "replace_statement" -> {
+                if (!(command.payload() instanceof ReplaceStatement payload)) throw failure("INVALID_EDIT", "Expected statement payload");
+                yield replaceStatement(bundle, parsed, selected, target, payload);
             }
             case "insert_statement" -> {
                 if (!(command.payload() instanceof InsertStatement payload)) throw failure("INVALID_EDIT", "Expected insertion payload");
@@ -129,6 +133,19 @@ public final class ProgramEngine {
             after = "(" + payload.expression() + ")";
         }
         return new TextChange(path, range.startOffset(), range.endOffset(), before, after);
+    }
+
+    private TextChange replaceStatement(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, ReplaceStatement payload) {
+        requireOperation(selected,"replace_statement");
+        if(statementContainer(target)==null || containsComment(target)) throw failure("UNSUPPORTED_OPERATION","Replacement requires a comment-free statement in a real block");
+        if(payload.source()==null || payload.source().isBlank() || payload.source().indexOf('\r')>=0 || payload.source().indexOf('\uFEFF')>=0) throw failure("INVALID_EDIT","One canonical LF Java statement required");
+        var replacement=parser().parseBlock("{\n"+payload.source()+"\n}");
+        if(!replacement.isSuccessful() || replacement.getResult().isEmpty() || replacement.getResult().orElseThrow().getStatements().size()!=1) throw failure("INVALID_EDIT","Replacement must be exactly one Java statement");
+        if(unsupportedFlow(replacement.getResult().orElseThrow().getStatement(0))) throw failure("UNSUPPORTED_OPERATION","Unsupported replacement flow");
+        String path=selected.sourceRange().filePath();
+        SourceRange range=parsed.maps().get(path).range(target);
+        String source=bundle.files().get(path);
+        return new TextChange(path,range.startOffset(),range.endOffset(),source.substring(range.startOffset(),range.endOffset()),payload.source());
     }
 
     private TextChange insertStatement(Parsed parsed, GraphNode selected, Node target, InsertStatement payload) {
@@ -476,6 +493,7 @@ public final class ProgramEngine {
                 new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
                 new Capability("enhanced_for_flow", builder.invalid ? "not_requested" : "partial", "Normal iteration abstraction, source evaluated once, synthetic check/bind/advance; at most 1024 enhanced-for loops per method. Advance means continuation, not Iterator.next; array/Iterable protocol details and exceptional flow are unknown. Type validity requires isolated compilation"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
+                new Capability("replace_statement", "partial", "One comment-free supported block statement; exact source replacement and isolated compilation required"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
                 new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
@@ -615,6 +633,7 @@ public final class ProgramEngine {
                 operations.add("insert_statement");
                 positions = List.of("body_start", "body_end");
             } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null) {
+                if (!containsComment(ast)) operations.add("replace_statement");
                 operations.add("insert_statement");
                 if (!containsComment(ast)) operations.add("delete_statement");
                 operations.add("move_statement");

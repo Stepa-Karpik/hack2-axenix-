@@ -1,7 +1,60 @@
 // @ts-nocheck -- Node's built-in test runner, intentionally no browser dependency.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasChanges, canApply, nodeAtOffset, draftKey } from "./state.ts";
+import {
+  hasChanges,
+  canApply,
+  nodeAtOffset,
+  draftKey,
+  operationAnchor,
+} from "./state.ts";
+test("condition atoms resolve only their current editable owner; synthetic iteration remains readonly", () => {
+  const binding = { revisionId: "r", analysisId: "a", methodId: "m" };
+  const owner = {
+    ...binding,
+    id: "if",
+    kind: "IfStmt",
+    parentId: null,
+    editableFields: ["condition"],
+    allowedOperations: ["replace_expression", "insert_statement"],
+  };
+  const atom = {
+    ...binding,
+    id: "atom",
+    kind: "condition_test",
+    parentId: "if",
+    allowedOperations: [],
+  };
+  assert.equal(
+    operationAnchor(atom, [owner, atom], "replace_expression"),
+    owner,
+  );
+  assert.equal(operationAnchor(atom, [owner, atom], "insert_statement"), owner);
+  assert.equal(
+    operationAnchor(
+      { ...atom, analysisId: "old" },
+      [owner],
+      "replace_expression",
+    ),
+    null,
+  );
+  assert.equal(
+    operationAnchor(
+      { ...atom, kind: "foreach_check" },
+      [owner],
+      "replace_expression",
+    ),
+    null,
+  );
+  assert.equal(
+    operationAnchor(
+      atom,
+      [{ ...owner, parentId: "atom", allowedOperations: [] }],
+      "replace_expression",
+    ),
+    null,
+  );
+});
 test("invalid Java drafts remain content changes", () => {
   assert.equal(
     hasChanges({ "Main.java": "class {" }, { "Main.java": "class Main {}" }),
@@ -260,7 +313,10 @@ test("shortcut and loop lanes bypass every node column", async () => {
     { id: "back", source: "c", target: "a", kind: "loop" },
   ];
   const routes = routeFlowEdges(nodes, edges);
-  assert.ok(routes.get("next") > Math.max(...nodes.map(node => node.position.x + 280)));
+  assert.ok(
+    routes.get("next") >
+      Math.max(...nodes.map((node) => node.position.x + 280)),
+  );
   assert.notEqual(routes.get("next"), routes.get("skip"));
   assert.ok(
     routes.get("skip") >
@@ -305,30 +361,48 @@ test("dragged departure and approach obstacles are bypassed within router budget
 });
 
 test("switch dispatch preserves raw captions and separates ten target labels", async () => {
-  const { compactFlowLabel, routeFlowEdges, dispatchLabelPosition, flowLabelTitle } =
-    await import("./flowLayout.ts");
+  const {
+    compactFlowLabel,
+    routeFlowEdges,
+    dispatchLabelPosition,
+    flowLabelTitle,
+  } = await import("./flowLayout.ts");
   const raw = "1, /* colon: && || */ 2";
   assert.equal(compactFlowLabel(raw), raw);
   const fullRaw = raw.repeat(30);
   assert.equal(flowLabelTitle(fullRaw, true), fullRaw);
   assert.ok(flowLabelTitle(fullRaw, false).startsWith(fullRaw + "\n"));
-  assert.ok(flowLabelTitle(fullRaw, false).includes("обход узлов не гарантирован"));
+  assert.ok(
+    flowLabelTitle(fullRaw, false).includes("обход узлов не гарантирован"),
+  );
   const caption = compactFlowLabel('"😀'.repeat(30), 16);
   assert.equal(Array.from(caption).length, 16);
   assert.equal(caption.endsWith("…"), true);
   const targets = Array.from({ length: 10 }, (_, index) => ({
-    id: "case" + index, position: { x: index * 320, y: 290 },
+    id: "case" + index,
+    position: { x: index * 320, y: 290 },
   }));
   const edges = targets.map((target, index) => ({
-    id: "edge" + index, source: "selector", target: target.id,
-    kind: index === 9 ? "default" : "case", label: index === 0 ? raw : String(index),
+    id: "edge" + index,
+    source: "selector",
+    target: target.id,
+    kind: index === 9 ? "default" : "case",
+    label: index === 0 ? raw : String(index),
   }));
-  const routes = routeFlowEdges([{ id: "selector", position: { x: 0, y: 0 } }, ...targets], edges);
+  const routes = routeFlowEdges(
+    [{ id: "selector", position: { x: 0, y: 0 } }, ...targets],
+    edges,
+  );
   assert.equal(routes.size, 10);
   assert.equal(edges[0].label, raw);
-  const labels = targets.map(target => dispatchLabelPosition(target.position));
+  const labels = targets.map((target) =>
+    dispatchLabelPosition(target.position),
+  );
   assert.equal(labels.length, 10);
   for (let i = 0; i < labels.length; i++)
     for (let j = i + 1; j < labels.length; j++)
-      assert.ok(Math.abs(labels[i].x - labels[j].x) >= 240 || Math.abs(labels[i].y - labels[j].y) >= 24);
+      assert.ok(
+        Math.abs(labels[i].x - labels[j].x) >= 240 ||
+          Math.abs(labels[i].y - labels[j].y) >= 24,
+      );
 });

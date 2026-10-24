@@ -76,7 +76,7 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.7.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.8.0");
   const graph = analysis.graph;
   const method = (name: string) =>
     graph.methods.find((method: any) =>

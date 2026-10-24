@@ -19,28 +19,52 @@ public final class RunnerClient {
         return execute(projectId, jobId, attemptId, fence, spec, () -> false);
     }
     public Observation execute(String projectId, String jobId, String attemptId, long fence, Spec spec, BooleanSupplier cancelled) throws IOException, InterruptedException {
+        return execute(projectId,jobId,attemptId,fence,spec,cancelled, o -> {});
+    }
+    public Observation execute(String projectId, String jobId, String attemptId, long fence, Spec spec, BooleanSupplier cancelled, java.util.function.Consumer<Observation> progress) throws IOException, InterruptedException {
         String executionId = UUID.randomUUID().toString();
         Submit submit = new Submit(projectId, jobId, attemptId, executionId, spec.hash(), fence, Instant.now().plusSeconds(90).toString(), spec);
         Map<String,String> ownership = Map.of("X-Project-Id",projectId,"X-Job-Id",jobId,"X-Attempt-Id",attemptId,"X-Spec-Hash",spec.hash(),"X-Fencing-Token",Long.toString(fence));
         Observation result = request("POST", "/internal/v1/executions", submit, Map.of("Idempotency-Key",jobId + ":" + attemptId + ":" + executionId), Observation.class);
-        long deadline = System.nanoTime() + Duration.ofSeconds(80).toNanos();
+        long deadline = System.nanoTime() + Duration.ofSeconds(spec.interactive()?150:80).toNanos();
         boolean cancellationSent=false;
+        long renewAt = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        validateObservation(result,submit);
+        progress.accept(result);
         while (!result.status().equals("terminal")) {
             if ((cancelled.getAsBoolean() && !cancellationSent) || System.nanoTime() > deadline) {
                 if(cancellationSent) throw new IOException("Runner cancellation unconfirmed; cleanup pending");
                 request("POST", "/internal/v1/executions/" + executionId + "/cancel", Map.of(), ownership, Observation.class);
                 cancellationSent=true;deadline=System.nanoTime()+Duration.ofSeconds(15).toNanos();
             }
-            Thread.sleep(80);
+            if(spec.interactive() && !cancellationSent && System.nanoTime() > renewAt) {
+                request("POST", "/internal/v1/attempts/"+attemptId+"/renew", Map.of("leaseExpiresAt", Instant.now().plusSeconds(90).toString()), ownership, Map.class);
+                renewAt=System.nanoTime()+Duration.ofSeconds(10).toNanos();
+            }
+            Thread.sleep(spec.interactive()?200:80);
             result = request("GET", "/internal/v1/executions/" + executionId, null, ownership, Observation.class);
+            validateObservation(result,submit);
+            progress.accept(result);
         }
         if (!result.projectId().equals(projectId) || !result.jobId().equals(jobId) || !result.attemptId().equals(attemptId) || !result.executionId().equals(executionId) || !result.specHash().equals(spec.hash())) throw new IOException("Runner result ownership mismatch");
         result.stdout().decode(MAX_OUTPUT); result.stderr().decode(MAX_OUTPUT);
         if (result.stdout().length() + result.stderr().length() > MAX_OUTPUT) throw new IOException("Runner result output ceiling");
         return result;
     }
+    private static void validateObservation(Observation o,Submit request) throws IOException {
+        if(!Objects.equals(o.projectId(),request.projectId()) || !Objects.equals(o.jobId(),request.jobId()) || !Objects.equals(o.attemptId(),request.attemptId()) || !Objects.equals(o.executionId(),request.executionId()) || !Objects.equals(o.specHash(),request.specHash()) || o.phase()!=request.executionSpec().phase()) throw new IOException("Runner observation ownership mismatch");
+        try {o.stdout().decode(MAX_OUTPUT);o.stderr().decode(MAX_OUTPUT);}catch(RuntimeException e){throw new IOException("Invalid runner output",e);}
+        if(o.stdout().length()+o.stderr().length()>MAX_OUTPUT)throw new IOException("Runner result output ceiling");
+    }
     public static Spec compileSpec(Map<String,String> sources) { var encoded = new TreeMap<String,Bytes>(); sources.forEach((p,s) -> encoded.put(p,Bytes.text(s))); return new Spec(PROFILE,Phase.compile,encoded,null,null,List.of(),Bytes.of(new byte[0]),null,0); }
     public static Spec runtimeSpec(String artifactId,String mainClass,TestCase c,int observation) { return new Spec(PROFILE,Phase.runtime,Map.of(),artifactId,mainClass,c.args(),Bytes.text(c.stdin()),c.id(),observation); }
+    public static Spec interactiveSpec(String artifactId,String mainClass,TestCase c) {
+        return new Spec(PROFILE,Phase.runtime,Map.of(),artifactId,mainClass,c.args(),Bytes.text(c.stdin()),c.id(),1,true);
+    }
+    public void input(Observation execution, InputFrame frame) throws IOException, InterruptedException {
+        var headers=Map.of("X-Project-Id",execution.projectId(),"X-Job-Id",execution.jobId(),"X-Attempt-Id",execution.attemptId(),"X-Spec-Hash",execution.specHash(),"X-Fencing-Token","1");
+        request("POST","/internal/v1/executions/"+execution.executionId()+"/stdin",frame,headers,Map.class);
+    }
     public Comparison compare(String projectId,String jobId,String attemptId,long fence,Map<String,String> baseline,Map<String,String> candidate,String mainClass,List<TestCase> cases) throws InterruptedException {
         return compare(projectId,jobId,attemptId,fence,baseline,candidate,mainClass,cases,()->false);
     }

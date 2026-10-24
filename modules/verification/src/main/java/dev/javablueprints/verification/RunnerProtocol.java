@@ -13,7 +13,7 @@ public final class RunnerProtocol {
     public static final String PROFILE = "java21-v1";
     public static final String IMAGE = "eclipse-temurin@sha256:742daacb9316be4b6fc60258f6e4ac2a11882f6c597373c92290a57bfad0d2e0";
     public static final int MAX_OUTPUT = 1024 * 1024;
-    public static final String PROFILE_HASH = hash(("runner-transport-v1-ustar1|"+PROFILE+"|"+IMAGE+"|uid65534|readonly|caps:none|seccomp:builtin|network:none|memory512m|cpu1|pids128|workspace64m|tmp16m|compile20s|runtime5s|output1m|javac-proc:none-release21|env-unset-javaoptions|java-Xmx256m-Xss512k-utf8-en-US-UTC").getBytes(StandardCharsets.UTF_8));
+    public static final String PROFILE_HASH = hash(("runner-transport-v1-ustar1|"+PROFILE+"|"+IMAGE+"|uid65534|readonly|caps:none|seccomp:builtin|network:none|memory512m|cpu1|pids128|workspace64m|tmp16m|compile20s|runtime5s|interactive120s-input1m-frames1024|output1m|javac-proc:none-release21|env-unset-javaoptions|java-Xmx256m-Xss512k-utf8-en-US-UTC").getBytes(StandardCharsets.UTF_8));
     public enum Phase { compile, runtime }
     public enum ExecutionOutcome { exited, timeout, oom, output_limit, compile_error, cancelled, sandbox_error }
     public enum ComparisonOutcome { matched_on_tests, mismatch, compile_error, inconclusive, unavailable }
@@ -29,12 +29,16 @@ public final class RunnerProtocol {
         }
     }
     public record Spec(String profileId, Phase phase, Map<String, Bytes> sources, String compileArtifactId,
-                       String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex) {
+                       String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex, boolean interactive) {
+        public Spec(String profileId, Phase phase, Map<String, Bytes> sources, String compileArtifactId, String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex) {
+            this(profileId, phase, sources, compileArtifactId, mainClass, args, stdin, caseId, observationIndex, false);
+        }
         public Spec { sources = sources == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(sources)); args = args == null ? List.of() : List.copyOf(args); }
         public String hash() { try { return RunnerProtocol.hash(JSON.writeValueAsBytes(List.of(PROFILE_HASH,this))); } catch (Exception e) { throw new IllegalArgumentException(e); } }
     }
     public record Submit(String projectId, String jobId, String attemptId, String executionId, String specHash,
                          long fencingToken, String leaseExpiresAt, Spec executionSpec) {}
+    public record InputFrame(String id, Bytes data, boolean eof) {}
     public record Observation(String projectId, String jobId, String attemptId, String executionId, String specHash,
                               Phase phase, String status, ExecutionOutcome outcome, Integer exitCode, Bytes stdout,
                               Bytes stderr, boolean truncated, String compileArtifactId, boolean cleanupPending) {}

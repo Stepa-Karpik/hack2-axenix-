@@ -26,7 +26,7 @@ const helperSource = `public class Helper {
 async function cursor(page: Page, source: string, offset: number) {
   const prefix = source.slice(0, offset);
   const lines = prefix.split("\n");
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   for (let i = 1; i < lines.length; i++) await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Home");
@@ -195,7 +195,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("symbols-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText("public class Main { invalid ! }");

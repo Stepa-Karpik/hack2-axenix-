@@ -11,7 +11,7 @@ async function create(page: Page) {
     timeout: 30000,
   });
   await expect(
-    page.locator(".monaco-editor .native-edit-context"),
+    page.locator(".monaco-editor textarea.inputarea"),
   ).toBeAttached();
   await page.waitForTimeout(350);
   return page.url().split("/projects/")[1];
@@ -154,7 +154,7 @@ test("hidden editor keeps its slot, caret and undo and restores visibility after
 }) => {
   const id = await create(page);
   const initial = await stored(page, id);
-  const editor = page.locator(".monaco-editor .native-edit-context");
+  const editor = page.locator(".monaco-editor textarea.inputarea");
   const identity = await editor.elementHandle();
   const canvas = await page.locator(".react-flow__viewport").elementHandle();
   await editor.focus();
@@ -178,7 +178,7 @@ test("hidden editor keeps its slot, caret and undo and restores visibility after
   expect(
     await identity!.evaluate(
       (el) =>
-        el === document.querySelector(".monaco-editor .native-edit-context"),
+        el === document.querySelector(".monaco-editor textarea.inputarea"),
     ),
   ).toBe(true);
   expect(
@@ -203,7 +203,7 @@ test("hidden editor keeps its slot, caret and undo and restores visibility after
     .locator(".workspace-dock")
     .getByRole("button", { name: "Код", exact: true })
     .click();
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+End");
   await expect(page.locator(".monaco-editor")).toContainText(
     "window-state-marker",

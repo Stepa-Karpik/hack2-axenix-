@@ -117,9 +117,10 @@ public final class EngineModel {
     /** Typed operation payloads; no untyped AST or arbitrary graph mutation crosses this boundary. */
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
                               String operation, EditPayload payload, String intent) {}
-    public sealed interface EditPayload permits ReplaceExpression, InsertStatement, DeleteStatement,
+    public sealed interface EditPayload permits ReplaceExpression, ReplaceStatement, InsertStatement, DeleteStatement,
             MoveStatement, WrapStatement, AddElse, RemoveElse {}
     public record ReplaceExpression(String field, String expression) implements EditPayload {}
+    public record ReplaceStatement(String source) implements EditPayload {}
     public record InsertStatement(String position, String source) implements EditPayload {}
     public record DeleteStatement() implements EditPayload {}
     public record MoveStatement(String targetNodeId, String position) implements EditPayload {}

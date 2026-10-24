@@ -94,7 +94,7 @@ export async function pollJob<T extends { status: string }>(
   signal: AbortSignal,
   onProgress?: (job: T) => void,
 ): Promise<T> {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 1200; i++) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const job = await read();
     onProgress?.(job);
@@ -105,7 +105,9 @@ export async function pollJob<T extends { status: string }>(
           signal.removeEventListener("abort", abort);
           resolve();
         },
-        Math.min(500 * 2 ** Math.min(i, 3), 5000),
+        "type" in job && job.type === "run"
+          ? 300
+          : Math.min(500 * 2 ** Math.min(i, 3), 5000),
       );
       const abort = () => {
         clearTimeout(timer);

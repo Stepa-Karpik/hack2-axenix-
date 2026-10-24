@@ -23,14 +23,14 @@ test("expired browser session reacquires CSRF once and saves with the original i
         key: response.request().headers()["idempotency-key"],
       });
   });
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText(
     "public class Main { static int recovered = 7; }\n",
   );
   await page.keyboard.press("Control+s");
-  await expect(page.getByText("Сохранено", { exact: true })).toBeVisible({
+  await expect(page.locator(".local-label")).toHaveText("Сохранено", {
     timeout: 30000,
   });
   await expect(page.locator(".monaco-editor")).toContainText("recovered = 7");
@@ -77,7 +77,7 @@ test("concurrent head conflict preserves draft and requires explicit save after 
   });
   expect(external.status()).toBe(201);
   const other = (await external.json()).data;
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText(
@@ -131,7 +131,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
   await expect(page.getByLabel("Условие", { exact: true })).toHaveValue(
     "values[i] == target",
   );
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   for (let i = 0; i < 14; i++) await page.keyboard.press("ArrowDown");
   for (let i = 0; i < 23; i++) await page.keyboard.press("ArrowRight");
@@ -163,7 +163,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
       r.request().method() === "POST" &&
       r.status() === 201,
   );
-  await page.locator(".monaco-editor .native-edit-context").focus();
+  await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText("public class Main {\n  invalid !\n}\n");
@@ -262,7 +262,12 @@ test("real API empty project, import, run availability and keyboard dialog", asy
     await page.getByRole("tab", { name: "Консоль", exact: true }).click();
     expect(page.url()).toBe(runUrl);
     expect(runUrl.endsWith("/runs/" + started.id)).toBe(true);
-    await expect(page.locator(".execution")).toHaveCount(2, { timeout: 60000 });
+    await expect(
+      page.getByRole("region", { name: "Результат запуска" }),
+    ).toBeVisible({ timeout: 60000 });
+    await expect(page.locator(".run-result-heading")).toContainText(
+      "Завершено",
+    );
     const result = (
       await (
         await page.request.get(
@@ -274,7 +279,9 @@ test("real API empty project, import, run availability and keyboard dialog", asy
     expect(result.result.report.revisionId).toBe(requested.revisionId);
     expect(result.result.report.stdinUtf8).toBe("7\n");
     await page.reload();
-    await expect(page.locator(".execution")).toHaveCount(2);
+    await expect(
+      page.getByRole("region", { name: "Результат запуска" }),
+    ).toBeVisible();
   }
 });
 test("real candidate compile → mismatch report → explicit semantic apply", async ({

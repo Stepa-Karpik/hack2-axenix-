@@ -243,7 +243,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
     page.locator(".method-item").filter({ hasText: "answer(" }),
   ).toBeVisible({ timeout: 30000 });
   await page.locator(".method-item").filter({ hasText: "answer(" }).click();
-  const editor = page.locator(".monaco-editor .native-edit-context");
+  const editor = page.locator(".monaco-editor textarea.inputarea");
   await editor.focus();
   await page.keyboard.press("Control+Home");
   for (let line = 0; line < 3; line++) await page.keyboard.press("ArrowDown");
@@ -294,7 +294,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   await page
     .getByLabel("Путь новой папки", { exact: true })
     .fill("nested/empty");
-  await page.getByRole("button", { name: "Применить", exact: true }).click();
+  await page.locator("#explorer-path").press("Enter");
   await expect
     .poll(async () => (await head(page.request, base)).directories)
     .toContain("nested/empty");
@@ -302,7 +302,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   await page
     .getByLabel("Путь нового файла", { exact: true })
     .fill("nested/info.txt");
-  await page.getByRole("button", { name: "Применить", exact: true }).click();
+  await page.locator("#explorer-path").press("Enter");
   await expect
     .poll(async () =>
       (await head(page.request, base)).files.map((file) => file.path),

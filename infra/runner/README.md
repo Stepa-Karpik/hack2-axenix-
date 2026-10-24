@@ -31,8 +31,18 @@ module-info, ASCII Java identifiers, 100 files / 1 MiB source, 1 MiB stdin, 100 
 8 MiB class bytes / 1000 classes, 1 MiB combined output, and a 16 MiB request body. Sandboxes
 use 512 MiB RAM with no swap, 1 CPU, 128 PIDs, UID 65534, a read-only root, no capabilities,
 no-new-privileges, built-in seccomp, no network, a 64 MiB workspace tmpfs and 16 MiB
-temporary tmpfs. Compilation has a 20-second limit, runtime a 5-second limit, and Java a fixed 256 MiB heap. A new container/JVM
+temporary tmpfs. Compilation has a 20-second limit, ordinary runtime a 5-second limit, interactive single-run runtime a 120-second limit, and Java a fixed 256 MiB heap. A new container/JVM
 is used per execution, with annotation processors disabled.
+
+Interactive execution is an explicit runtime-spec flag and is included in its hash.
+Only single-run observation 1 accepts it; paired comparisons remain noninteractive.
+The owned `/internal/v1/executions/{id}/stdin` endpoint accepts idempotent input
+frames, up to 8 KiB each, 1,024 frames and 1 MiB total including initial stdin.
+It retains stdin until EOF or execution termination. GET observations include
+bounded live stdout/stderr. The client renews the attempt lease every ten seconds;
+expiry, cancellation and fencing still terminate the sandbox. Input delivery uses
+the same private authentication and project/job/attempt/spec/fence ownership as
+execution observations. The browser never receives controller credentials.
 
 Current operational limits: singleton controller, 2 workers, 32 nonterminal
 executions, 1024 retained execution handles, 64 MiB aggregate retained bytes and

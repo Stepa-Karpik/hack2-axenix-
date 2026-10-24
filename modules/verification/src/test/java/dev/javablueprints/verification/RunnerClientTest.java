@@ -7,6 +7,19 @@ import java.net.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 class RunnerClientTest {
+ @Test void ownershipIsCheckedBeforePublishingProgress() throws Exception {
+  var progress=new AtomicInteger();var http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+  http.createContext("/internal/v1/executions",exchange->{
+   Submit submit=JSON.readValue(exchange.getRequestBody(),Submit.class);
+   var wrong=new Observation(submit.projectId(),submit.jobId(),submit.attemptId(),"wrong-execution",submit.specHash(),Phase.compile,"running",null,null,Bytes.text("private output"),Bytes.text(""),false,null,false);
+   byte[] bytes=JSON.writeValueAsBytes(wrong);exchange.sendResponseHeaders(202,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
+  });http.start();
+  try {
+   var client=new RunnerClient(URI.create("http://127.0.0.1:"+http.getAddress().getPort()),"unit-test");
+   assertThrows(java.io.IOException.class,()->client.execute("project","job","attempt",1,RunnerClient.compileSpec(Map.of("Main.java","class Main {}")),()->false,o->progress.incrementAndGet()));
+   assertEquals(0,progress.get());
+  } finally {http.stop(0);}
+ }
  @Test void compilerCleanupFailureStopsBeforeSubmittingAnotherExecution() throws Exception {
   var calls=new AtomicInteger();var http=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
   http.createContext("/internal/v1/health",exchange->{byte[] bytes=JSON.writeValueAsBytes(Map.of("available",true));exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();});

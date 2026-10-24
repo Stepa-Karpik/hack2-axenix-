@@ -53,6 +53,42 @@ public class JobWorker {
             URI.create(url == null || url.isBlank() ? "http://127.0.0.1:8091" : url), token);
   }
 
+  static final class LiveRun {
+    final String project, attempt;
+    final boolean interactive;
+    final long started = System.nanoTime();
+    volatile Observation execution;
+    volatile boolean eof;
+    final Map<String, InputFrame> inputs = new LinkedHashMap<>();
+    LiveRun(String project, String attempt, boolean interactive) {this.project=project;this.attempt=attempt;this.interactive=interactive;}
+  }
+  final java.util.concurrent.ConcurrentHashMap<String, LiveRun> liveRuns = new java.util.concurrent.ConcurrentHashMap<>();
+  Map<String,Object> live(String p,String j) {
+    LiveRun run=liveRuns.get(j);
+    if(run==null || !run.project.equals(p)) return null;
+    Observation o=run.execution;
+    return map("interactive",run.interactive,"phase",o==null?"compile":o.phase().name(),"inputOpen",run.interactive&&!run.eof&&o!=null&&o.phase()==Phase.runtime&&!o.status().equals("terminal"),"stdoutUtf8",o==null?"":new String(o.stdout().decode(MAX_OUTPUT),StandardCharsets.UTF_8),"stderrUtf8",o==null?"":new String(o.stderr().decode(MAX_OUTPUT),StandardCharsets.UTF_8),"elapsedMs",java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-run.started));
+  }
+  Map<String,Object> input(String p,String j,String key,String text,boolean eof) {
+    LiveRun run=liveRuns.get(j);
+    var job=w.job(p,j);
+    if(run==null || !run.project.equals(p) || !run.attempt.equals(job.get("attemptId")) || !"running".equals(job.get("status")) || job.get("cancelRequestedAt")!=null || run.execution==null || run.execution.phase()!=Phase.runtime || !run.interactive)
+      throw new ApiError(409,"INPUT_CLOSED","Program is not accepting input");
+    try {
+      RunnerProtocol.id(key);
+      var frame=new InputFrame(key,Bytes.text(text),eof);
+      synchronized(run) {
+        InputFrame old=run.inputs.get(key);
+        if(old!=null && !old.equals(frame))throw new ApiError(409,"INPUT_CONFLICT","Input key already used");
+        runner.input(run.execution,frame);
+        run.inputs.putIfAbsent(key,frame); if(eof)run.eof=true;
+      }
+      return map("accepted",true);
+    } catch(IllegalArgumentException e) {throw new ApiError(400,"INVALID_INPUT","Invalid input key or data");}
+      catch(java.io.IOException e) {throw new ApiError(409,"INPUT_CLOSED","Program ended or input closed");}
+      catch(InterruptedException e) {Thread.currentThread().interrupt();throw new ApiError(503,"RUNNER_UNAVAILABLE","Runner unavailable");}
+  }
+
   boolean available() {
     return enabled && runner.available();
   }
@@ -182,7 +218,7 @@ public class JobWorker {
                     ? x.code()
                     : e instanceof ApiError x ? x.code : "JOB_FAILED",
                 "message",
-                "Change could not complete"));
+                e instanceof EngineException || e instanceof ApiError ? e.getMessage() : "Change could not complete"));
         w.updateResource(p, str(input, "proposalId"), "proposal", proposal);
       }
       finish(
@@ -196,7 +232,7 @@ public class JobWorker {
                   ? x.code
                   : e instanceof EngineException x ? x.code() : "JOB_FAILED",
               "message",
-              "Job could not complete"));
+              e instanceof EngineException || e instanceof ApiError ? e.getMessage() : "Job could not complete"));
     } finally {
       renewal.cancel(false);
       w.publication.remove();
@@ -220,7 +256,8 @@ public class JobWorker {
                   uuid(attempt));
           if (rows.isEmpty()) return;
           boolean cancelled = Boolean.TRUE.equals(rows.getFirst().get("cancelled"));
-          if (!cancelled && error == null && pending != null) pending.forEach(Runnable::run);
+          boolean retainRun = result != null && "single_run".equals(result.get("resultKind"));
+          if ((!cancelled || retainRun) && error == null && pending != null) pending.forEach(Runnable::run);
           if (cancelled || error != null) {
             w.db.update(
                 "UPDATE resources SET data=jsonb_set(data,'{status}','\"rejected\"'::jsonb) WHERE"
@@ -232,7 +269,7 @@ public class JobWorker {
               "UPDATE jobs SET status=?,result=?::jsonb,error=?::jsonb,finished_at=now() WHERE"
                   + " project_id=? AND id=? AND attempt_id=? AND status='running'",
               cancelled ? "cancelled" : error == null ? "succeeded" : "failed",
-              cancelled || error != null ? null : w.encode(result),
+              (cancelled && !retainRun) || error != null ? null : w.encode(result),
               error == null ? null : w.encode(error),
               uuid(p),
               uuid(j),
@@ -365,35 +402,16 @@ public class JobWorker {
   Map<String, Object> run(String p, String j, String attempt, Map<String, Object> in)
       throws Exception {
     requireAvailable();
-    var compile =
-        runner.execute(
-            p,
-            j,
-            attempt,
-            1,
-            RunnerClient.compileSpec(w.javaFiles(w.revision(p, str(in, "revisionId")))),
-            () -> cancelled(p, j));
-    Observation runtime = null;
-    if (compilationPassed(compile) && !cancelled(p, j))
-      runtime =
-          runner.execute(
-              p,
-              j,
-              attempt,
-              1,
-              RunnerClient.runtimeSpec(
-                  compile.compileArtifactId(),
-                  str(in, "entryPoint"),
-                  testCase(
-                      map(
-                          "id",
-                          "single",
-                          "stdinUtf8",
-                          in.getOrDefault("stdinUtf8", ""),
-                          "argv",
-                          in.getOrDefault("argv", List.of()))),
-                  1),
-              () -> cancelled(p, j));
+    var live=new LiveRun(p,attempt,Boolean.TRUE.equals(in.get("interactive")));
+    liveRuns.put(j,live);
+    try {
+    var compile=runner.execute(p,j,attempt,1,RunnerClient.compileSpec(w.javaFiles(w.revision(p,str(in,"revisionId")))),()->cancelled(p,j), o->live.execution=o);
+    Observation runtime=null;
+    if(compilationPassed(compile)&&!cancelled(p,j)) {
+      var test=testCase(map("id","single","stdinUtf8",in.getOrDefault("stdinUtf8",""),"argv",in.getOrDefault("argv",List.of())));
+      var spec=live.interactive?RunnerClient.interactiveSpec(compile.compileArtifactId(),str(in,"entryPoint"),test):RunnerClient.runtimeSpec(compile.compileArtifactId(),str(in,"entryPoint"),test,1);
+      runtime=runner.execute(p,j,attempt,1,spec,()->cancelled(p,j),o->live.execution=o);
+    }
     var report =
         map(
             "id",
@@ -420,8 +438,12 @@ public class JobWorker {
             runtime == null ? null : observation(p, runtime),
             "createdAt",
             java.time.Instant.now().toString());
+    report.put("interactive",live.interactive);
+    report.put("wallTimeMs",java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-live.started));
+    synchronized(live) { report.put("inputLines",live.inputs.values().stream().map(f->map("id",f.id(),"text",new String(f.data().decode(8192),StandardCharsets.UTF_8),"eof",f.eof())).toList()); }
     w.putResource(p, report.get("id").toString(), "single_run", report);
     return map("resultKind", "single_run", "reportId", report.get("id"), "report", report);
+    } finally { liveRuns.remove(j,live); }
   }
 
   TestCase testCase(Map<String, Object> m) {

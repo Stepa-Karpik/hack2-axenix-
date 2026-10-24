@@ -1,3 +1,5 @@
+import SingleRunOutput from "./SingleRunOutput";
+import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
 import Workspace, { useWorkspace } from "./Workspace";
 import WorkspaceMenu from "./WorkspaceMenu";
@@ -42,6 +44,7 @@ import {
   statementTemplates,
 } from "./state";
 import type { Draft } from "./state";
+import { operationAnchor } from "./state";
 import { blockEditPayload, moveTargets, movePositions } from "./blockEdits";
 import CodeEditor, { disposeEditorModels } from "./CodeEditor";
 import ProjectExplorer, { FileGlyph } from "./ProjectExplorer";
@@ -53,6 +56,7 @@ import {
   methodIdentity,
   matchingMethod,
   remapModels,
+  publicJavaType,
 } from "./projectFiles";
 import type { FileSnapshot } from "./projectFiles";
 import FlowCanvas, {
@@ -97,6 +101,7 @@ interface WorkbenchView {
   methodId: string;
   methodIdentity?: ReturnType<typeof methodIdentity>;
   tabs?: string[];
+  methodSelections?: Record<string, ReturnType<typeof methodIdentity>>;
 }
 function readView(id: string): Partial<WorkbenchView> {
   try {
@@ -107,6 +112,7 @@ function readView(id: string): Partial<WorkbenchView> {
       file: typeof view?.file === "string" ? view.file : undefined,
       methodId: typeof view?.methodId === "string" ? view.methodId : undefined,
       methodIdentity: view?.methodIdentity,
+      methodSelections: view?.methodSelections,
       tabs: Array.isArray(view?.tabs)
         ? view.tabs.filter((t: unknown) => typeof t === "string")
         : [],
@@ -350,6 +356,12 @@ function Workbench({
       projectId + "/models/" + crypto.randomUUID());
   }
   const selectedMethodIdentity = useRef(initialView.methodIdentity);
+  const methodSelections = useRef({
+    ...initialView.methodSelections,
+    ...(initialView.methodIdentity
+      ? { [initialView.methodIdentity.filePath]: initialView.methodIdentity }
+      : {}),
+  });
   const [importPreview, setImportPreview] = useState<{
     files: { path: string; content: string }[];
     directories: string[];
@@ -367,7 +379,9 @@ function Workbench({
   const [graph, setGraph] = useState<Graph | null>(null);
   const [methodId, setMethodId] = useState(initialView.methodId ?? "");
   const [selected, setSelected] = useState<GraphNode | null>(null);
-  const [range, setRange] = useState<SourceRange | null>(null);
+  const [range, setRange] = useState<
+    (SourceRange & { diagnosticRevisionId?: string }) | null
+  >(null);
   const workspace = useWorkspace(projectId);
   const [shareCopied, setShareCopied] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -400,12 +414,14 @@ function Workbench({
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Загрузка…");
   const [saving, setSaving] = useState(false);
+  const [treeSaving, setTreeSaving] = useState(false);
+  const [editorReady, setEditorReady] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [search, setSearch] = useState("");
   const [dialog, setDialog] = useState<"run" | "compare" | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
-  const [loadingRevision, setLoadingRevision] = useState(false);
+  const [loadingRevision, setLoadingRevision] = useState(true);
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const [expression, setExpression] = useState("");
   const [operation, setOperation] = useState("");
@@ -437,6 +453,7 @@ function Workbench({
           file,
           methodId,
           tabs,
+          methodSelections: methodSelections.current,
           methodIdentity:
             methodIdentity(graph?.methods.find((m) => m.id === methodId)) ??
             selectedMethodIdentity.current,
@@ -450,7 +467,10 @@ function Workbench({
   }, [file, files]);
   useEffect(() => {
     const m = graph?.methods.find((m) => m.id === methodId);
-    if (m) selectedMethodIdentity.current = methodIdentity(m);
+    if (m) {
+      selectedMethodIdentity.current = methodIdentity(m);
+      methodSelections.current[m.sourceRange.filePath] = methodIdentity(m);
+    }
   }, [graph, methodId]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
@@ -462,6 +482,9 @@ function Workbench({
         )
     : Object.keys(files).length > 0 || directories.length > 0;
   const historical = !!revision && revision.id !== project?.headRevisionId;
+  const [analyzing, setAnalyzing] = useState(false);
+  const activeFileRef = useRef(file);
+  activeFileRef.current = file;
   const stale =
     !!graph &&
     (dirty ||
@@ -486,12 +509,14 @@ function Workbench({
   const analyze = useCallback(
     async (r: Revision) => {
       const current = ++generation.current;
+      setAnalyzing(true);
       if (!r.files.some((f) => f.path.endsWith(".java"))) {
         setAnalysis(null);
         setGraph(null);
         setMethodId("");
         setSelected(null);
         setRange(null);
+        setAnalyzing(false);
         setStatus("Сохранено · нет Java-исходников");
         return;
       }
@@ -519,9 +544,20 @@ function Workbench({
           setSelected(null);
           setRange(null);
           setMethodId(
-            matchingMethod(a.graph.methods, selectedMethodIdentity.current)
-              ?.id ??
-              a.graph.methods[0]?.id ??
+            matchingMethod(
+              a.graph.methods,
+              methodSelections.current[activeFileRef.current] ??
+                (selectedMethodIdentity.current?.filePath ===
+                activeFileRef.current
+                  ? selectedMethodIdentity.current
+                  : undefined),
+            )?.id ??
+              a.graph.methods.find(
+                (m) => m.sourceRange.filePath === activeFileRef.current,
+              )?.id ??
+              (activeFileRef.current.endsWith(".java")
+                ? ""
+                : a.graph.methods[0]?.id) ??
               "",
           );
         } else if (!graphRef.current) {
@@ -545,6 +581,9 @@ function Workbench({
           setError(message(e));
           setStatus("Разбор недоступен");
         }
+      } finally {
+        if (mounted.current && current === generation.current)
+          setAnalyzing(false);
       }
     },
     [base, track],
@@ -615,9 +654,15 @@ function Workbench({
         setProject(p);
         setRunnerAvailable(c.runner.available);
         if (p.headRevisionId) void openRevision(p.headRevisionId, true);
-        else setStatus("Добавьте исходники");
+        else {
+          setStatus("Добавьте исходники");
+          setLoadingRevision(false);
+        }
       })
-      .catch((e) => setError(message(e)));
+      .catch((e) => {
+        setError(message(e));
+        setLoadingRevision(false);
+      });
     return () => {
       mounted.current = false;
       generation.current++;
@@ -655,7 +700,7 @@ function Workbench({
       busy ||
       loadingRevision
     )
-      return;
+      return false;
     const snapshot = filesRef.current;
     if (
       revision &&
@@ -665,7 +710,7 @@ function Workbench({
           directoryPaths(filesOf(revision), revision.directories ?? []),
         )
     )
-      return;
+      return true;
     savingRef.current = true;
     setSaving(true);
     setError("");
@@ -699,6 +744,7 @@ function Workbench({
       setManualSaveRequired(false);
       void refreshHistory();
       void analyze(r);
+      return true;
     } catch (e) {
       if (e instanceof ApiError && e.code === "REVISION_CONFLICT") {
         setConflict(true);
@@ -706,6 +752,7 @@ function Workbench({
           "Версия изменилась в другом окне. Локальная правка сохранена.",
         );
       } else setError(message(e));
+      return false;
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -745,7 +792,12 @@ function Workbench({
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
-        setDialog(e.shiftKey ? "compare" : "run");
+        const kind = e.shiftKey ? "compare" : "run";
+        if (dirty)
+          void save().then((ok) => {
+            if (ok) setDialog(kind);
+          });
+        else setDialog(kind);
       }
       if (e.key === "Escape") {
         setDialog(null);
@@ -754,7 +806,7 @@ function Workbench({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [save]);
+  }, [save, dirty]);
   useEffect(() => {
     setReportId(undefined);
     if (!runId) {
@@ -851,7 +903,9 @@ function Workbench({
     );
   }
   function edit(text: string) {
-    setFiles((f) => ({ ...f, [file]: text }));
+    const next = { ...filesRef.current, [file]: text };
+    filesRef.current = next;
+    setFiles(next);
     setStatus("Есть изменения");
     setProposal(null);
     setReferenceId(null);
@@ -917,6 +971,7 @@ function Workbench({
       );
     savingRef.current = true;
     setSaving(true);
+    setTreeSaving(true);
     setError("");
     try {
       const r = await api<Revision>(base + "/revisions", {
@@ -967,6 +1022,7 @@ function Workbench({
     } finally {
       savingRef.current = false;
       setSaving(false);
+      setTreeSaving(false);
     }
   }
   async function changePath(
@@ -983,13 +1039,22 @@ function Workbench({
         ? movePath(snapshot, from, to)
         : addPath(snapshot, to, kind === "folder");
     const identity = selectedMethodIdentity.current;
+    const selections = methodSelections.current;
     const mapped = (p: string) =>
       p === from || p.startsWith(from + "/") ? to + p.slice(from.length) : p;
-    if (kind === "move" && identity)
-      selectedMethodIdentity.current = {
-        ...identity,
-        filePath: mapped(identity.filePath),
-      };
+    if (kind === "move") {
+      if (identity)
+        selectedMethodIdentity.current = {
+          ...identity,
+          filePath: mapped(identity.filePath),
+        };
+      methodSelections.current = Object.fromEntries(
+        Object.entries(selections).map(([path, choice]) => [
+          mapped(path),
+          choice ? { ...choice, filePath: mapped(choice.filePath) } : choice,
+        ]),
+      );
+    }
     try {
       await persistSnapshot(next, undefined, () => {
         if (kind === "move") {
@@ -1000,6 +1065,7 @@ function Workbench({
       });
     } catch (e) {
       selectedMethodIdentity.current = identity;
+      methodSelections.current = selections;
       throw e;
     }
   }
@@ -1043,6 +1109,12 @@ function Workbench({
       setError(message(e));
     }
   }
+  const [dropEdit, setDropEdit] = useState<{
+    nodeId: string;
+    kind: string;
+    position: string;
+    serial: number;
+  } | null>(null);
   const operations = nodeOperations(selected);
   const positions = selected?.insertionPositions ?? [];
   const targets = moveTargets(selected, graph);
@@ -1062,14 +1134,28 @@ function Workbench({
     setOperation(nodeOperations(selected)[0] ?? "");
     setPosition(selected?.insertionPositions?.[0] ?? "");
     setTemplate("statement");
-    setStatement(statementTemplates.statement);
+    setStatement(
+      selected?.allowedOperations?.includes("replace_statement") &&
+        selected.sourceRange
+        ? (filesRef.current[selected.sourceRange.filePath] ?? "").slice(
+            selected.sourceRange.startOffset,
+            selected.sourceRange.endOffset,
+          )
+        : statementTemplates.statement,
+    );
     setIntent("semantic_edit");
     setTargetNodeId("");
     setMovePosition("before");
     setWrapCondition("");
     setElseSource("{\n\n}");
     setProposal(null);
-  }, [selected?.id, revision?.id]);
+    if (dropEdit && dropEdit.nodeId === selected?.id) {
+      setOperation("insert_statement");
+      setTemplate(dropEdit.kind);
+      setStatement(statementTemplates[dropEdit.kind]);
+      setPosition(dropEdit.position);
+    }
+  }, [selected?.id, revision?.id, dropEdit?.serial]);
   useEffect(() => {
     setProposal(null);
   }, [
@@ -1305,10 +1391,19 @@ function Workbench({
           snapshot={{ files, directories }}
           active={file}
           search={search}
-          methods={stale ? [] : (graph?.methods ?? [])}
+          methods={graph?.methods ?? []}
+          methodsDisabled={stale || analyzing}
           methodId={methodId}
-          disabled={inFlight || historical || conflict}
+          disabled={
+            inFlight || historical || conflict || (!!file && !editorReady)
+          }
           onOpen={(p) => {
+            setMethodId(
+              matchingMethod(graph?.methods ?? [], methodSelections.current[p])
+                ?.id ??
+                graph?.methods.find((m) => m.sourceRange.filePath === p)?.id ??
+                "",
+            );
             setFile(p);
             workspace.reveal("code");
             setRange(null);
@@ -1318,6 +1413,8 @@ function Workbench({
             if (stale) return;
             setMethodId(m.id);
             selectedMethodIdentity.current = methodIdentity(m);
+            methodSelections.current[m.sourceRange.filePath] =
+              methodIdentity(m);
             setFile(m.sourceRange.filePath);
             setRange(m.sourceRange);
             setSelected(null);
@@ -1405,19 +1502,22 @@ function Workbench({
     ),
     palette: (
       <div className="block-palette">
-        <p className="small quiet">Вставка в выбранную точку исходника</p>
+        <p className="small quiet">Перетащите на схему: выше или ниже шага.</p>
         {(["statement", "condition", "loop"] as const).map((kind) => (
           <button
             key={kind}
             className={"palette-block palette-" + kind}
-            disabled={
-              !selected ||
-              !operations.includes("insert_statement") ||
-              stale ||
-              historical ||
-              inFlight
-            }
+            draggable={!stale && !historical && !inFlight}
+            onDragStart={(e) => {
+              e.dataTransfer.setData("application/x-blueprint-block", kind);
+              e.dataTransfer.effectAllowed = "copy";
+            }}
+            disabled={stale || historical || inFlight}
             onClick={() => {
+              if (!selected || !operations.includes("insert_statement")) {
+                setStatus("Перетащите блок на шаг схемы");
+                return;
+              }
               setOperation("insert_statement");
               setTemplate(kind);
               setStatement(statementTemplates[kind]);
@@ -1467,6 +1567,41 @@ function Workbench({
             onSelect={pickNode}
             projectId={projectId}
             stale={stale}
+            staleMessage={
+              dirty
+                ? "Изменения ещё не сохранены"
+                : analyzing
+                  ? "Обновляем схему…"
+                  : analysis?.parseStatus === "invalid"
+                    ? "В коде есть синтаксическая ошибка"
+                    : "Схему нужно обновить"
+            }
+            onRefresh={() => {
+              if (dirty) void save();
+              else if (revision) void analyze(revision);
+            }}
+            refreshing={saving || analyzing}
+            onInsert={(nodeId, kind, position) => {
+              const n = graph.nodes.find((n) => n.id === nodeId);
+              if (!n || stale) return;
+              pickNode(n);
+              setDropEdit({ nodeId, kind, position, serial: Date.now() });
+              void workspace.reveal("analysis");
+            }}
+            onEdit={(n) => {
+              pickNode(
+                operationAnchor(n, graph.nodes, "replace_expression") ?? n,
+              );
+              void workspace.reveal("analysis");
+              setTimeout(
+                () =>
+                  (
+                    document.getElementById("statement-source") ??
+                    document.getElementById("expression")
+                  )?.focus(),
+                0,
+              );
+            }}
           />
         ) : (
           <div className="empty-pane">
@@ -1482,7 +1617,7 @@ function Workbench({
             </h2>
             <p>
               {analysis?.parseStatus === "invalid"
-                ? "Диагностика доступна во вкладке «Вывод»."
+                ? "Откройте диагностику в панели «Анализ»."
                 : "Импортируйте .java или выберите метод."}
             </p>
             {!revision && (
@@ -1506,6 +1641,16 @@ function Workbench({
                   aria-label={p.split("/").pop()}
                   aria-selected={file === p}
                   onClick={() => {
+                    setMethodId(
+                      matchingMethod(
+                        graph?.methods ?? [],
+                        methodSelections.current[p],
+                      )?.id ??
+                        graph?.methods.find((m) => m.sourceRange.filePath === p)
+                          ?.id ??
+                        "",
+                    );
+                    setSelected(null);
                     setFile(p);
                     setRange(null);
                   }}
@@ -1550,10 +1695,48 @@ function Workbench({
             {saving ? "Сохранение…" : "Сохранить"}
           </button>
         </div>
+        {file && (
+          <div className="editor-file-status">
+            <span>{(files[file] ?? "").split("\n").length} строк</span>
+            <span>
+              {saving
+                ? "Сохраняем…"
+                : dirty
+                  ? "Изменения не сохранены"
+                  : analyzing
+                    ? "Обновляем схему…"
+                    : "Сохранено"}
+            </span>
+          </div>
+        )}
+        {file &&
+          (() => {
+            const type = publicJavaType(files[file] ?? "");
+            const name = file.split("/").pop();
+            const target =
+              file.slice(0, file.lastIndexOf("/") + 1) + type + ".java";
+            return languageFor(file) === "java" &&
+              type &&
+              name !== type + ".java" ? (
+              <div className="notice filename-notice">
+                Публичный класс {type} должен находиться в файле {type}.java.
+                <button
+                  onClick={() =>
+                    void changePath("move", file, target).catch((e) =>
+                      setError(message(e)),
+                    )
+                  }
+                >
+                  Переименовать в {type}.java
+                </button>
+              </div>
+            ) : null;
+          })()}
         {file ? (
           <CodeEditor
             onReady={(commands) => {
               editorCommands.current = commands;
+              setEditorReady(true);
             }}
             path={projectId + "/" + file}
             modelPath={modelId(file)}
@@ -1564,21 +1747,24 @@ function Workbench({
               range &&
               !dirty &&
               analysis?.revisionId === revision?.id &&
-              analysis?.parseStatus === "valid"
+              (analysis?.parseStatus === "valid" ||
+                range.diagnosticRevisionId === revision?.id)
                 ? { ...range, filePath: projectId + "/" + range.filePath }
                 : null
             }
-            diagnostics={(analysis?.diagnostics ?? []).map((d) => ({
-              ...d,
-              sourceRange: d.sourceRange
-                ? {
-                    ...d.sourceRange,
-                    filePath: projectId + "/" + d.sourceRange.filePath,
-                  }
-                : null,
-            }))}
+            diagnostics={(dirty ? [] : (analysis?.diagnostics ?? [])).map(
+              (d) => ({
+                ...d,
+                sourceRange: d.sourceRange
+                  ? {
+                      ...d.sourceRange,
+                      filePath: projectId + "/" + d.sourceRange.filePath,
+                    }
+                  : null,
+              }),
+            )}
             onOffset={offset}
-            readOnly={historical || busy || saving || loadingRevision}
+            readOnly={historical || busy || treeSaving || loadingRevision}
           />
         ) : (
           <div className="empty-pane">
@@ -1610,6 +1796,44 @@ function Workbench({
             </dd>
           </dl>
         </div>
+        {!!analysis?.diagnostics.length && (
+          <details
+            className="analysis-diagnostics"
+            open={analysis?.diagnostics.some((d) => d.severity === "error")}
+          >
+            <summary>Диагностика · {analysis.diagnostics.length}</summary>{" "}
+            {(analysis?.diagnostics ?? []).map((d) => (
+              <button
+                className="diagnostic"
+                key={d.id}
+                onClick={() => {
+                  if (d.sourceRange) {
+                    setRange({
+                      ...d.sourceRange,
+                      diagnosticRevisionId: analysis.revisionId,
+                    });
+                    setFile(d.sourceRange.filePath);
+                    setMode("split");
+                  }
+                }}
+              >
+                <span className="diagnostic-symbol">
+                  {d.severity === "error" ? "!" : "△"}
+                </span>
+                <span>
+                  {d.code === "UNSUPPORTED_CONTROL_FLOW"
+                    ? "Этот метод пока доступен только для просмотра схемы. Его код сохранён и может выполняться."
+                    : d.message}
+                </span>
+                <code>
+                  {d.sourceRange
+                    ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
+                    : d.code}
+                </code>
+              </button>
+            ))}
+          </details>
+        )}
         {selected ? (
           <>
             <div
@@ -1643,7 +1867,6 @@ function Workbench({
                 Перейти к коду <Icon name="external" size={14} />
               </button>
             )}
-            {symbolPanel}
             {operations.length > 0 ? (
               <div className="expression-form">
                 <label htmlFor="node-operation">Действие</label>
@@ -1673,6 +1896,19 @@ function Workbench({
                       rows={5}
                       spellCheck={false}
                       disabled={inFlight || stale || historical}
+                    />
+                  </>
+                )}
+                {operation === "replace_statement" && (
+                  <>
+                    <label htmlFor="statement-source">Код блока</label>
+                    <textarea
+                      id="statement-source"
+                      rows={6}
+                      value={statement}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => setStatement(e.target.value)}
+                      spellCheck={false}
                     />
                   </>
                 )}
@@ -1855,7 +2091,7 @@ function Workbench({
           </div>
         )}
 
-        {!selected && symbolPanel}
+        {symbolPanel}
         <div className="inspector-section">
           <div className="panel-caption">
             ВЫРАЖЕНИЯ <span>{expressions.length}</span>
@@ -1893,31 +2129,16 @@ function Workbench({
     console: (
       <div className="dock-content">
         <>
-          {analysis?.diagnostics.map((d) => (
-            <button
-              className="diagnostic"
-              key={d.id}
-              onClick={() => {
-                if (d.sourceRange) {
-                  setRange(d.sourceRange);
-                  setFile(d.sourceRange.filePath);
-                  setMode("split");
-                }
-              }}
-            >
-              <span className="diagnostic-symbol">
-                {d.severity === "error" ? "!" : "△"}
-              </span>
-              <span>{d.message}</span>
-              <code>
-                {d.sourceRange
-                  ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
-                  : d.code}
-              </code>
-            </button>
-          ))}
-          {report ? (
-            <ReportView report={report} projectId={projectId} />
+          {job?.type === "run" && ["queued", "running"].includes(job.status) ? (
+            <LiveConsole projectId={projectId} jobId={job.id} live={job.live} />
+          ) : report ? (
+            <ReportView
+              report={report}
+              projectId={projectId}
+              cancelled={job?.status === "cancelled"}
+            />
+          ) : job?.status === "cancelled" ? (
+            <div className="output-empty">Запуск отменён</div>
           ) : job?.error ? (
             <div className="notice error">
               {job.error.code} · {job.error.message}
@@ -1970,7 +2191,9 @@ function Workbench({
                 <span className="status-tag">
                   {proposal.status === "ready"
                     ? "Скомпилирован"
-                    : proposal.status}
+                    : proposal.status === "rejected"
+                      ? "Изменение не применено"
+                      : "Проверка…"}
                 </span>
               </span>
               <span className="small quiet">
@@ -2008,6 +2231,13 @@ function Workbench({
                 <pre className="added">+ {d.after}</pre>
               </div>
             ))}
+            {proposal.compileExecution &&
+              proposal.compileExecution.outcome !== "exited" && (
+                <ExecutionView
+                  title="Ошибка компиляции"
+                  execution={proposal.compileExecution}
+                />
+              )}
             {proposal.checks && (
               <p className="small quiet">
                 Разбор: {proposal.checks.parseStatus} · Компиляция:{" "}
@@ -2021,6 +2251,11 @@ function Workbench({
                   Проверить base / candidate
                 </button>
               )}
+            {proposal.error && (
+              <div className="notice error" role="alert">
+                {proposal.error.message}
+              </div>
+            )}
             {proposal.diagnostics?.map((d) => (
               <p key={d.id}>{d.message}</p>
             ))}
@@ -2361,11 +2596,16 @@ function Workbench({
               className="dock-run"
               disabled={
                 !revision ||
-                dirty ||
                 busy ||
                 !Object.keys(files).some((p) => p.endsWith(".java"))
               }
-              onClick={() => setDialog("run")}
+              onClick={() => {
+                if (dirty)
+                  void save().then((ok) => {
+                    if (ok) setDialog("run");
+                  });
+                else setDialog("run");
+              }}
             >
               <Icon name="play" size={20} />
               {job && ["queued", "running"].includes(job.status)
@@ -2613,6 +2853,7 @@ function RunDialog({
             argv: args,
             stdinUtf8: stdin,
             profileId: "java21-v1",
+            interactive: true,
           },
         });
       } else {
@@ -2789,9 +3030,11 @@ function RunDialog({
 function ReportView({
   report,
   projectId,
+  cancelled = false,
 }: {
   report: Report;
   projectId: string;
+  cancelled?: boolean;
 }) {
   const [sourceHash, setSourceHash] = useState<string | null>(null);
   useEffect(() => {
@@ -2807,6 +3050,14 @@ function ReportView({
       active = false;
     };
   }, [projectId, report.revisionId]);
+  if (report.revisionId)
+    return (
+      <SingleRunOutput
+        report={report}
+        sourceHash={sourceHash}
+        cancelled={cancelled}
+      />
+    );
   return (
     <div className="report">
       {report.revisionId && (

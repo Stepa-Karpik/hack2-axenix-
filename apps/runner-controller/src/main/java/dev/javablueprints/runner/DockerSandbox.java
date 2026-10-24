@@ -40,6 +40,9 @@ public final class DockerSandbox {
     public boolean cleanupPending(){return !pendingCleanup.isEmpty();}
     public record Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending) {}
     public Result execute(Submit submit,Map<String,byte[]> classes,BooleanSupplier cancelled) {
+        return execute(submit,classes,cancelled,null);
+    }
+    Result execute(Submit submit,Map<String,byte[]> classes,BooleanSupplier cancelled,LiveSession live) {
         String name="jb-"+UUID.randomUUID();
         var spec=submit.executionSpec();
         ExecutionOutcome outcome=ExecutionOutcome.sandbox_error; Integer exit=null;
@@ -55,9 +58,9 @@ public final class DockerSandbox {
             List<String> args=new ArrayList<>(List.of("exec","-i","--user","65534:65534",name,"env","-u","JAVA_TOOL_OPTIONS","-u","JDK_JAVA_OPTIONS"));
             long wall;
             if(spec.phase()==Phase.compile) { args.addAll(List.of("javac","-J-Xmx256m","-J-Dfile.encoding=UTF-8","-proc:none","--release","21","-encoding","UTF-8","-d","/workspace/classes")); args.addAll(spec.sources().keySet()); wall=20_000; }
-            else { args.addAll(List.of("java","-Xmx256m","-Xss512k","-XX:ActiveProcessorCount=1","-Dfile.encoding=UTF-8","-Duser.language=en","-Duser.country=US","-Duser.timezone=UTC","-cp","/workspace",spec.mainClass())); args.addAll(spec.args()); wall=5_000; }
+            else { args.addAll(List.of("java","-Xmx256m","-Xss512k","-XX:ActiveProcessorCount=1","-Dfile.encoding=UTF-8","-Duser.language=en","-Duser.country=US","-Duser.timezone=UTC","-cp","/workspace",spec.mainClass())); args.addAll(spec.args()); wall=spec.interactive()?120_000:5_000; }
             long remaining=Duration.between(Instant.now(),Instant.parse(submit.leaseExpiresAt())).toMillis();
-            var r=command(args,spec.stdin().decode(1024*1024),Math.max(1,Math.min(wall,remaining)),cancelled);
+            var r=command(args,spec.stdin().decode(1024*1024),spec.interactive()?wall:Math.max(1,Math.min(wall,remaining)),cancelled,MAX_OUTPUT,live);
             stdout=r.stdout(); stderr=r.stderr(); truncated=r.limit(); exit=r.exit();
             if(r.timeout()||r.limit()||cancelled.getAsBoolean()) command(List.of("kill",name),new byte[0],3000,()->false);
             var state=command(List.of("inspect","--format","{{.State.OOMKilled}}",name),new byte[0],5000,()->false);
@@ -81,18 +84,29 @@ public final class DockerSandbox {
         return command(args,stdin,wall,cancelled,MAX_OUTPUT);
     }
     Command command(List<String> args,byte[] stdin,long wall,BooleanSupplier cancelled,int ceiling) throws IOException,InterruptedException {
+        return command(args,stdin,wall,cancelled,ceiling,null);
+    }
+    Command command(List<String> args,byte[] stdin,long wall,BooleanSupplier cancelled,int ceiling,LiveSession live) throws IOException,InterruptedException {
         var all=new ArrayList<>(prefix); all.addAll(args);
         ProcessBuilder builder=new ProcessBuilder(all);
         builder.environment().remove("JAVA_TOOL_OPTIONS"); builder.environment().remove("JDK_JAVA_OPTIONS");
         Process p=builder.start(); AtomicInteger remaining=new AtomicInteger(ceiling); AtomicBoolean limit=new AtomicBoolean();
-        ByteArrayOutputStream out=new ByteArrayOutputStream(),err=new ByteArrayOutputStream();
+        ByteArrayOutputStream out=live==null?new ByteArrayOutputStream():live.stdout,err=live==null?new ByteArrayOutputStream():live.stderr;
         Thread a=Thread.ofVirtual().start(()->drain(p.getInputStream(),out,remaining,limit));
         Thread b=Thread.ofVirtual().start(()->drain(p.getErrorStream(),err,remaining,limit));
-        Thread writer=Thread.ofVirtual().start(()->{try(var stream=p.getOutputStream()){stream.write(stdin);}catch(IOException ignored){}});
+        Thread writer=Thread.ofVirtual().start(()->{try(var stream=p.getOutputStream()){
+            stream.write(stdin);stream.flush();
+            if(live!=null) while(p.isAlive()) {
+                InputFrame frame=live.input.poll(100,TimeUnit.MILLISECONDS);
+                if(frame==null)continue;
+                stream.write(frame.data().decode(8192));stream.flush();
+                if(frame.eof())break;
+            }
+        }catch(IOException|InterruptedException ignored){}});
         long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(wall); boolean timeout=false;
         while(p.isAlive()) { if(cancelled.getAsBoolean() || limit.get() || System.nanoTime()>deadline) { timeout=System.nanoTime()>deadline; p.destroyForcibly(); break; } Thread.sleep(10); }
         if(!p.waitFor(3,TimeUnit.SECONDS)) p.destroyForcibly();
-        a.join(2000); b.join(2000); writer.join(100);
+        a.join(2000); b.join(2000); writer.interrupt(); writer.join(100);
         if(a.isAlive()||b.isAlive()){p.getInputStream().close();p.getErrorStream().close();a.join(1000);b.join(1000);if(a.isAlive()||b.isAlive())throw new IOException("Stream drain incomplete");}
         return new Command(p.isAlive()?-1:p.exitValue(),out.toByteArray(),err.toByteArray(),timeout,limit.get());
     }

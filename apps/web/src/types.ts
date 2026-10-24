@@ -111,6 +111,9 @@ export interface TestResult {
   difference?: unknown;
 }
 export interface Report {
+  wallTimeMs?: number;
+  interactive?: boolean;
+  inputLines?: { id: string; text: string; eof: boolean }[];
   revisionId?: string;
   entryPoint?: string;
   argv?: string[];
@@ -130,7 +133,16 @@ export interface Report {
   baseCompile?: Execution;
   candidateCompile?: Execution;
 }
+export interface LiveRun {
+  interactive: boolean;
+  phase: string;
+  inputOpen: boolean;
+  stdoutUtf8: string;
+  stderrUtf8: string;
+  elapsedMs: number;
+}
 export interface Job {
+  live?: LiveRun | null;
   id: string;
   type: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -143,6 +155,7 @@ export interface Job {
   } | null;
 }
 export interface Proposal {
+  compileExecution?: Execution | null;
   id: string;
   jobId: string;
   baseRevisionId: string;

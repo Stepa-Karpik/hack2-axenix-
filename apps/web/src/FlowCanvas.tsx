@@ -48,6 +48,7 @@ import {
   visualKind,
 } from "./flowLayout";
 import { api, projectPath } from "./api";
+import { operationAnchor } from "./state";
 type FlowData = {
   label: string;
   kind: string;
@@ -57,6 +58,7 @@ type FlowData = {
   fullLabel?: string;
   visualKind?: ReturnType<typeof visualKind>;
   branch?: boolean;
+  dropPosition?: string;
 };
 const nodeIcons = {
   method: Braces,
@@ -75,6 +77,7 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
   const Glyph = nodeIcons[data.visualKind ?? "operation"];
   return (
     <div
+      data-insert-position={data.dropPosition}
       data-node-kind={data.kind}
       data-visual-kind={data.visualKind}
       className={
@@ -89,6 +92,13 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
       title={data.fullLabel}
     >
       <Handle type="target" position={Position.Top} isConnectable={false} />
+      {data.dropPosition && (
+        <span className="block-insert-hint">
+          {data.dropPosition === "before" || data.dropPosition === "body_start"
+            ? "Вставить перед"
+            : "Вставить после"}
+        </span>
+      )}
       <Glyph
         className="graph-node-icon"
         size={15}
@@ -279,6 +289,7 @@ function ShortcutEdge({
   return (
     <>
       <g
+        style={{ color: style?.stroke as string }}
         data-shortcut-source={source}
         data-shortcut-target={target}
         data-route-status={route.complete ? "clear" : "limited"}
@@ -323,6 +334,11 @@ export default function FlowCanvas({
   projectId,
   stale,
   semantics,
+  staleMessage,
+  onRefresh,
+  refreshing,
+  onInsert,
+  onEdit,
 }: {
   graph: Graph;
   methodId: string;
@@ -330,8 +346,18 @@ export default function FlowCanvas({
   onSelect: (node: GraphNode) => void;
   projectId: string;
   stale: boolean;
+  staleMessage?: string;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  onInsert?: (nodeId: string, kind: string, position: string) => void;
+  onEdit?: (node: GraphNode) => void;
   semantics?: SemanticModel | null;
 }) {
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    highlightId: string;
+    position: string;
+  } | null>(null);
   const [nodes, setNodes] = useState<Node<FlowData>[]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutError, setLayoutError] = useState("");
@@ -612,8 +638,23 @@ export default function FlowCanvas({
         entering = arrivals.get(targetRow) ?? 0;
       departures.set(sourceRow, leaving + 1);
       arrivals.set(targetRow, entering + 1);
+      const kind = source?.data.visualKind;
+      const color =
+        kind === "return"
+          ? "var(--graph-return)"
+          : edge.kind === "loop" || kind === "loop" || kind === "jump"
+            ? "var(--graph-violet)"
+            : kind === "condition"
+              ? "var(--graph-yellow)"
+              : kind === "variable"
+                ? "var(--graph-teal)"
+                : kind === "call" || kind === "operation"
+                  ? "var(--graph-blue)"
+                  : "var(--graph-green)";
       return {
         ...edge,
+        style: { ...edge.style, stroke: color },
+        markerEnd: { ...edge.markerEnd, color },
         type: "shortcut",
         data: {
           ...edge.data,
@@ -668,8 +709,18 @@ export default function FlowCanvas({
         },
       }),
     );
-    return [...areas, ...nodes];
-  }, [nodes, methodNodes]);
+    return [
+      ...areas,
+      ...nodes.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          dropPosition:
+            dropTarget?.highlightId === n.id ? dropTarget.position : undefined,
+        },
+      })),
+    ];
+  }, [nodes, methodNodes, dropTarget]);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
@@ -731,10 +782,66 @@ export default function FlowCanvas({
     }
   }
   return (
-    <div className="flow-area" ref={container}>
+    <div
+      className="flow-area"
+      ref={container}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node))
+          setDropTarget(null);
+      }}
+      onDragOver={(e) => {
+        if (
+          stale ||
+          !e.dataTransfer.types.includes("application/x-blueprint-block")
+        )
+          return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "none";
+        const target = (e.target as Element).closest(
+          ".react-flow__node-blueprint",
+        );
+        const n = methodNodes.find(
+          (n) => n.id === target?.getAttribute("data-id"),
+        );
+        const anchor = n
+          ? operationAnchor(n, methodNodes, "insert_statement")
+          : null;
+        if (!target || !n || !anchor) {
+          setDropTarget(null);
+          return;
+        }
+        const rect = target.getBoundingClientRect();
+        const desired =
+          e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+        const position = anchor.insertionPositions?.includes(desired)
+          ? desired
+          : anchor.insertionPositions?.[0];
+        if (!position) {
+          setDropTarget(null);
+          return;
+        }
+        e.dataTransfer.dropEffect = "copy";
+        setDropTarget({ id: anchor.id, highlightId: n.id, position });
+      }}
+      onDrop={(e) => {
+        const kind = e.dataTransfer.getData("application/x-blueprint-block");
+        if (
+          dropTarget &&
+          ["statement", "condition", "loop"].includes(kind) &&
+          !stale
+        ) {
+          e.preventDefault();
+          onInsert?.(dropTarget.id, kind, dropTarget.position);
+        }
+        setDropTarget(null);
+      }}
+    >
       {stale && (
         <div className="stale-banner">
-          Схема версии {graph.revisionId.slice(0, 8)} устарела · только просмотр
+          <span>{staleMessage ?? "Схему нужно обновить"}</span>
+          <button disabled={refreshing} onClick={onRefresh}>
+            {refreshing ? "Обновление…" : "Обновить схему"}
+          </button>
         </div>
       )}
       <ReactFlow
@@ -765,6 +872,10 @@ export default function FlowCanvas({
         onNodeClick={(_, n) => {
           const source = methodNodes.find((s) => s.id === n.id);
           if (source) onSelect(source);
+        }}
+        onNodeDoubleClick={(_, n) => {
+          const source = methodNodes.find((s) => s.id === n.id);
+          if (source && !stale) onEdit?.(source);
         }}
         nodesDraggable={!stale}
         nodesConnectable={false}

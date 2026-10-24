@@ -47,7 +47,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.7.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.8.0");
   for (const name of ["andTest", "orTest", "mixedTest", "loopTest"]) {
     await page
       .locator(".method-item")

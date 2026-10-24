@@ -83,6 +83,8 @@ export function blockEditPayload(
         ? { field, source: fields.expression }
         : null;
     }
+    case "replace_statement":
+      return fields.statement.trim() ? { source: fields.statement } : null;
     case "insert_statement":
       return node.insertionPositions?.includes(fields.position) &&
         fields.statement.trim()

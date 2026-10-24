@@ -99,7 +99,7 @@ async function analysis(
         );
         if (!response.ok()) return false;
         result = (await response.json()).data;
-        return result?.analyzerVersion === "engine-0.7.0";
+        return result?.analyzerVersion === "engine-0.8.0";
       },
       { timeout: 30000 },
     )
@@ -403,11 +403,13 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
     expect(await output(page.request, base, current.id)).toBe(action.expected);
     await page.reload();
     await page.locator(".method-item").filter({ hasText: "main(" }).click();
-    await page.locator(".monaco-editor .native-edit-context").focus();
+    await page.locator(".monaco-editor textarea.inputarea").focus();
     await page.keyboard.press("Control+End");
     // Monaco virtualizes short panes; reveal the preserved comment with Find.
     await page.keyboard.press("Control+f");
-    await page.keyboard.insertText("keep trailing");
+    const findInput = page.getByRole("textbox", { name: "Find", exact: true });
+    await expect(findInput).toBeFocused();
+    await findInput.fill("keep trailing");
     await page.keyboard.press("Escape");
     await expect(page.locator(".monaco-editor")).toContainText("keep trailing");
   }

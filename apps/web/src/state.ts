@@ -1,3 +1,36 @@
+import type { GraphNode } from "./types";
+
+export function operationAnchor(
+  node: GraphNode,
+  nodes: GraphNode[],
+  operation: string,
+): GraphNode | null {
+  if (node.allowedOperations?.includes(operation)) return node;
+  if (node.kind !== "condition_test") return null;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const seen = new Set([node.id]);
+  let parent = node.parentId;
+  while (parent && !seen.has(parent)) {
+    seen.add(parent);
+    const candidate = byId.get(parent);
+    if (
+      !candidate ||
+      candidate.methodId !== node.methodId ||
+      candidate.analysisId !== node.analysisId ||
+      candidate.revisionId !== node.revisionId
+    )
+      return null;
+    if (
+      candidate.allowedOperations?.includes(operation) &&
+      (operation !== "replace_expression" ||
+        candidate.editableFields?.includes("condition"))
+    )
+      return candidate;
+    parent = candidate.parentId;
+  }
+  return null;
+}
+
 export interface Draft {
   baseRevisionId: string;
   files: Record<string, string>;
@@ -54,6 +87,7 @@ export function nodeAtOffset<
 
 export const operationLabels: Record<string, string> = {
   replace_expression: "Изменить выражение",
+  replace_statement: "Редактировать блок",
   insert_statement: "Вставить оператор",
   delete_statement: "Удалить оператор",
   move_statement: "Переместить оператор",

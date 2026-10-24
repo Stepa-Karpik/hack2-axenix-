@@ -99,6 +99,64 @@ test("unrelated returns receive distinct exterior lanes without changing edges",
   assert.equal(JSON.stringify(edges), snapshot);
 });
 
+test("sibling branches follow their real true and false ports regardless of node order", () => {
+  const nodes = [
+    { id: "entry", kind: "entry" },
+    { id: "check", kind: "condition_test" },
+    { id: "falseReturn", kind: "ReturnStmt" },
+    { id: "trueReturn", kind: "ReturnStmt" },
+    { id: "exit", kind: "normal_exit" },
+  ];
+  const edges = [
+    { source: "entry", target: "check", kind: "normal" },
+    { source: "check", target: "falseReturn", kind: "false" },
+    { source: "check", target: "trueReturn", kind: "true" },
+    { source: "trueReturn", target: "exit", kind: "normal" },
+    { source: "falseReturn", target: "exit", kind: "normal" },
+  ];
+  const before = JSON.stringify(edges);
+  const positions = arrangeFlow(nodes, edges);
+  assert.ok(positions.get("trueReturn").x < positions.get("falseReturn").x);
+  assert.equal(positions.get("trueReturn").y, positions.get("falseReturn").y);
+  assert.equal(JSON.stringify(edges), before);
+});
+
+test("separate forward guards reuse local corridors without drifting across the canvas", () => {
+  const nodes = [],
+    edges = [];
+  for (let i = 0; i < 40; i++) {
+    nodes.push(
+      { id: "check" + i, position: { x: 0, y: i * 320 } },
+      { id: "next" + i, position: { x: 320, y: i * 320 + 128 } },
+    );
+    edges.push({
+      id: "false" + i,
+      source: "check" + i,
+      target: "next" + i,
+      kind: "false",
+    });
+  }
+  const routes = [...routeFlowEdges(nodes, edges).values()];
+  assert.equal(routes.length, 40);
+  assert.equal(new Set(routes).size, 1);
+  assert.ok(routes[0] >= 286 && routes[0] <= 500);
+});
+
+test("adjacent return branches merge directly into their real shared exit", () => {
+  const nodes = [
+    { id: "left", position: { x: -160, y: 0 }, data: { kind: "ReturnStmt" } },
+    { id: "right", position: { x: 160, y: 0 }, data: { kind: "ReturnStmt" } },
+    { id: "exit", position: { x: 0, y: 128 } },
+  ];
+  assert.equal(
+    routeFlowEdges(nodes, [
+      { id: "a", source: "left", target: "exit", kind: "normal" },
+      { id: "b", source: "right", target: "exit", kind: "normal" },
+    ]).size,
+    0,
+  );
+});
+
 test("right branch departures and target approaches retain their true ports", () => {
   const boxes = [
     { id: "source", x: 0, y: 0, width: 264, height: 84 },
@@ -197,9 +255,7 @@ test("ordinary find loop false paths have distinct corridors and no false join",
       "right",
     );
     assert.equal(route.complete, true);
-    assert.ok(
-      lanes.get(edge.id) > Math.max(...boxes.map((b) => b.x + b.width)),
-    );
+    assert.ok(lanes.get(edge.id) > source.x + source.width);
     route.points.slice(1).forEach((point, i) => {
       assert.ok(boxes.every((b) => !segmentHitsBox(route.points[i], point, b)));
     });

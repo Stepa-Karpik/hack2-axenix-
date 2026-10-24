@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FileCode2,
   FileText,
@@ -16,6 +16,16 @@ import { directoryPaths, languageFor } from "./projectFiles";
 import type { FileSnapshot } from "./projectFiles";
 import type { Method } from "./types";
 export function FileGlyph({ path }: { path: string }) {
+  const language = languageFor(path);
+  if (language === "java" || language === "python")
+    return (
+      <span
+        className={"file-type-icon language-" + language}
+        aria-hidden="true"
+      >
+        {language === "java" ? "J" : "Py"}
+      </span>
+    );
   return languageFor(path) === "plaintext" ? (
     <FileText size={15} aria-hidden="true" />
   ) : (
@@ -32,6 +42,7 @@ export default function ProjectExplorer({
   search,
   methods,
   methodId,
+  methodsDisabled = false,
   disabled,
   onOpen,
   onMethod,
@@ -45,6 +56,7 @@ export default function ProjectExplorer({
   search: string;
   methods: Method[];
   methodId: string;
+  methodsDisabled?: boolean;
   disabled: boolean;
   onOpen: (p: string) => void;
   onMethod: (m: Method) => void;
@@ -63,11 +75,15 @@ export default function ProjectExplorer({
   const [target, setTarget] = useState("");
   const [error, setError] = useState("");
   const [drag, setDrag] = useState("");
+  const nameInput = useRef<HTMLInputElement>(null);
+  const submitting = useRef(false);
+  const cancelled = useRef(false);
   const dirs = directoryPaths(snapshot.files, snapshot.directories);
   const all = [...Object.keys(snapshot.files), ...dirs].sort((a, b) =>
     a.localeCompare(b, undefined, { numeric: true }),
   );
   function begin(kind: "file" | "folder" | "move") {
+    cancelled.current = false;
     setAction(kind);
     setError("");
     setTarget(
@@ -83,12 +99,25 @@ export default function ProjectExplorer({
   useEffect(() => {
     if (createCommand) begin(createCommand.kind);
   }, [createCommand]);
+  useEffect(() => {
+    if (!action) return;
+    const frame = requestAnimationFrame(() => nameInput.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [action]);
   async function submit() {
+    if (!action || submitting.current || cancelled.current) return;
+    if (!target.trim() || (action !== "move" && target.trim().endsWith("/"))) {
+      setAction(null);
+      return;
+    }
+    submitting.current = true;
     try {
-      await onChange(action!, selected, target);
+      await onChange(action, selected, target.trim());
       setAction(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось изменить путь");
+    } finally {
+      submitting.current = false;
     }
   }
   function render(parent: string, depth: number) {
@@ -201,7 +230,7 @@ export default function ProjectExplorer({
                     "method-item " + (methodId === m.id ? "active" : "")
                   }
                   style={{ paddingLeft: 26 + depth * 14 }}
-                  disabled={disabled}
+                  disabled={disabled || methodsDisabled}
                   onClick={() => onMethod(m)}
                 >
                   {m.signature}
@@ -275,18 +304,45 @@ export default function ProjectExplorer({
           </label>
           <input
             id="explorer-path"
+            ref={nameInput}
             autoFocus
             value={target}
             onChange={(e) => setTarget(e.target.value)}
+            onBlur={(e) => {
+              if (
+                action !== "move" &&
+                e.currentTarget.isConnected &&
+                target.trim() &&
+                !target.trim().endsWith("/")
+              )
+                void submit();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                cancelled.current = true;
+                setAction(null);
+              }
+            }}
           />
-          <div>
-            <button type="submit" disabled={disabled}>
-              Применить
-            </button>
-            <button type="button" onClick={() => setAction(null)}>
-              Отмена
-            </button>
-          </div>
+          {action !== "move" && (
+            <span className="inline-file-icon">
+              {action === "folder" ? (
+                <Folder size={15} />
+              ) : (
+                <FileGlyph path={target || "untitled.txt"} />
+              )}
+            </span>
+          )}
+          {action === "move" && (
+            <div>
+              <button type="submit" disabled={disabled}>
+                Применить
+              </button>
+              <button type="button" onClick={() => setAction(null)}>
+                Отмена
+              </button>
+            </div>
+          )}
           {action === "move" && (
             <p className="small quiet">
               Меняется путь. Java package, imports и имя класса остаются в

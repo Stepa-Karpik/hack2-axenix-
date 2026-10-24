@@ -119,6 +119,58 @@ export function methodIdentity(method?: Method) {
       }
     : undefined;
 }
+// Filename hint only. Compilation remains the authority for Java validity.
+export function publicJavaType(source: string): string | undefined {
+  if (/\\u+[\da-fA-F]{4}/.test(source)) return undefined;
+  let code = "";
+  for (let i = 0; i < source.length;) {
+    if (source.startsWith("//", i)) {
+      const end = source.indexOf("\n", i + 2);
+      i = end < 0 ? source.length : end;
+      code += " ";
+    } else if (source.startsWith("/*", i)) {
+      const end = source.indexOf("*/", i + 2);
+      i = end < 0 ? source.length : end + 2;
+      code += " ";
+    } else if (source[i] === '"' || source[i] === "'") {
+      const delimiter = source.startsWith('"""', i) ? '"""' : source[i];
+      i += delimiter.length;
+      while (i < source.length) {
+        if (source[i] === "\\") i += 2;
+        else if (source.startsWith(delimiter, i)) {
+          i += delimiter.length;
+          break;
+        } else i++;
+      }
+      code += " ";
+    } else code += source[i++];
+  }
+  const tokens =
+    code.match(/[\p{ID_Start}_$][\p{ID_Continue}$]*|[{}();]/gu) ?? [];
+  let depth = 0,
+    parentheses = 0,
+    isPublic = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "{") depth++;
+    else if (token === "}") depth--;
+    else if (token === "(") parentheses++;
+    else if (token === ")") parentheses--;
+    else if (depth === 0 && parentheses === 0) {
+      if (token === ";") isPublic = false;
+      else if (token === "public") isPublic = true;
+      else if (
+        isPublic &&
+        ["class", "interface", "enum", "record"].includes(token)
+      ) {
+        const name = tokens[i + 1];
+        return name && /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u.test(name)
+          ? name
+          : undefined;
+      }
+    }
+  }
+}
 export function matchingMethod(
   methods: Method[],
   identity?: ReturnType<typeof methodIdentity>,

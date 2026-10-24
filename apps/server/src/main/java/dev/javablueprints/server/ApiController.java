@@ -53,7 +53,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else"),
+            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else"),
             "symbols",
             map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
                 dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
@@ -238,7 +238,9 @@ public class ApiController {
       @PathVariable String p,
       @PathVariable String r,
       @RequestParam(required = false) String analysisId) {
-    return ok(w.analysis(p, r, analysisId));
+    var result=w.analysis(p,r,analysisId);
+    if(analysisId==null && !dev.javablueprints.engine.ProgramEngine.VERSION.equals(result.get("analyzerVersion"))) throw new ApiError(409,"ANALYSIS_NOT_READY","Analysis engine updated; refresh required");
+    return ok(result);
   }
 
   @GetMapping("/projects/{p}/revisions/{r}/graph")
@@ -535,7 +537,8 @@ public class ApiController {
       @PathVariable String p,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
-    fields(b, "revisionId", "profileId", "entryPoint", "argv", "stdinUtf8");
+    fields(b, "revisionId", "profileId", "entryPoint", "argv", "stdinUtf8", "interactive");
+    if(b.containsKey("interactive") && !(b.get("interactive") instanceof Boolean)) throw new ApiError(400,"INVALID_REQUEST","interactive must be boolean");
     w.javaFiles(w.revision(p, str(b, "revisionId")));
     profile(b);
     entry(str(b, "entryPoint"));
@@ -560,7 +563,15 @@ public class ApiController {
 
   @GetMapping({"/projects/{p}/jobs/{j}", "/projects/{p}/runs/{j}"})
   Object job(@PathVariable String p, @PathVariable String j) {
-    return ok(w.job(p, j));
+    var view=w.job(p,j);view.put("live",worker.live(p,j));return ok(view);
+  }
+
+  @PostMapping("/projects/{p}/runs/{j}/input")
+  Object runInput(@PathVariable String p,@PathVariable String j,@RequestHeader("Idempotency-Key") String key,@RequestBody Map<String,Object> b) {
+    fields(b,"text","eof");
+    if(!(b.get("text") instanceof String text) || !(b.get("eof") instanceof Boolean eof)) throw new ApiError(400,"INVALID_REQUEST","text and eof required");
+    if(text.getBytes(StandardCharsets.UTF_8).length>8192) throw new ApiError(413,"INPUT_LIMIT_EXCEEDED","Input line limit is8KiB");
+    return ok(worker.input(p,j,key,text,eof));
   }
 
   @GetMapping("/projects/{p}/comparisons/{c}")
@@ -737,6 +748,7 @@ public class ApiController {
           throw new ApiError(400, "INVALID_REQUEST", "Unknown expression field");
         yield new ReplaceExpression(field, editSource(payload));
       }
+      case "replace_statement" -> { fields(payload,"source");yield new ReplaceStatement(editSource(payload)); }
       case "insert_statement" -> {
         fields(payload, "position", "source");
         String position = str(payload, "position");

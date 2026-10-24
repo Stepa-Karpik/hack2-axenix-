@@ -31,7 +31,8 @@ public final class RunnerController implements AutoCloseable {
     private static final class Entry {
         final Submit request; final AtomicBoolean cancelled=new AtomicBoolean(); final Instant created=Instant.now();
         volatile Observation result;
-        Entry(Submit s) {request=s; result=observation(s,"queued",null,null,Bytes.of(new byte[0]),Bytes.of(new byte[0]),false,null,false);}
+        final LiveSession live;
+        Entry(Submit s) {live=s.executionSpec().interactive()?new LiveSession(s.executionSpec().stdin().length()):null;request=s; result=observation(s,"queued",null,null,Bytes.of(new byte[0]),Bytes.of(new byte[0]),false,null,false);}
     }
     public RunnerController(InetSocketAddress address,String secret,DockerSandbox docker) throws Exception {
         if(secret==null || secret.length()<32) throw new IllegalArgumentException("Runner secret must contain at least32 characters");
@@ -55,12 +56,20 @@ public final class RunnerController implements AutoCloseable {
                 respond(exchange,202,submit(request)); return;
             }
             if(path.startsWith("/internal/v1/executions/")) {
-                String suffix=path.substring("/internal/v1/executions/".length()); boolean cancel=suffix.endsWith("/cancel");
-                String id=cancel?suffix.substring(0,suffix.length()-7):suffix; id(id);
+                String suffix=path.substring("/internal/v1/executions/".length()); boolean cancel=suffix.endsWith("/cancel"), input=suffix.endsWith("/stdin");
+                String id=cancel?suffix.substring(0,suffix.length()-7):input?suffix.substring(0,suffix.length()-6):suffix; id(id);
                 Entry entry;
                 synchronized(this){entry=executions.get(id); if(entry==null || !owned(exchange,entry)) {respond(exchange,404,Map.of("error","NOT_FOUND"));return;}}
+                if(input && method.equals("POST")) {
+                    if(entry.live==null || entry.result.status().equals("terminal") || entry.cancelled.get() || stale(entry.request)) throw new Conflict();
+                    var frame=JSON.readValue(body(exchange),InputFrame.class);
+                    entry.live.accept(frame);respond(exchange,200,Map.of("accepted",true));return;
+                }
                 if(cancel && method.equals("POST")) {entry.cancelled.set(true); clearArtifacts(entry.request); respond(exchange,202,entry.result);return;}
-                if(!cancel && method.equals("GET")){respond(exchange,200,entry.result);return;}
+                if(!cancel && !input && method.equals("GET")){
+                    Observation view=entry.result;
+                    if(entry.live!=null && !view.status().equals("terminal")) view=observation(entry.request,view.status(),null,null,Bytes.of(entry.live.stdout.toByteArray()),Bytes.of(entry.live.stderr.toByteArray()),false,null,false);
+                    respond(exchange,200,view);return;}
             }
             if(path.startsWith("/internal/v1/attempts/") && path.endsWith("/renew") && method.equals("POST")) {
                 String attemptId=path.substring("/internal/v1/attempts/".length(),path.length()-6); id(attemptId);
@@ -105,7 +114,7 @@ public final class RunnerController implements AutoCloseable {
         entry.result=observation(s,"running",null,null,Bytes.of(new byte[0]),Bytes.of(new byte[0]),false,null,false);
         Map<String,byte[]> classes;
         synchronized(this) { var artifact=artifacts.get(s.executionSpec().compileArtifactId());classes=artifact==null?Map.of():artifact.classes(); }
-        var result=docker.execute(s,classes,()->entry.cancelled.get() || stale(s));
+        var result=docker.execute(s,classes,()->entry.cancelled.get() || stale(s),entry.live);
         synchronized(this) {
             String artifactId=null;
             if(s.executionSpec().phase()==Phase.compile && result.outcome()==ExecutionOutcome.exited && !entry.cancelled.get() && !stale(s)) {
@@ -128,6 +137,7 @@ public final class RunnerController implements AutoCloseable {
         Instant lease=Instant.parse(s.leaseExpiresAt());if(!lease.isAfter(Instant.now())||lease.isAfter(Instant.now().plusSeconds(120)))throw new IllegalArgumentException("Lease");
         Spec spec=s.executionSpec();if(!PROFILE.equals(spec.profileId())||!spec.hash().equals(s.specHash()))throw new IllegalArgumentException("Spec integrity/profile");
         spec.stdin().decode(1024*1024);
+        if(spec.interactive() && (spec.phase()!=Phase.runtime || !"single".equals(spec.caseId()) || spec.observationIndex()!=1)) throw new IllegalArgumentException("Interactive single run only");
         if(spec.phase()==Phase.compile){if(spec.sources().isEmpty()||spec.sources().size()>100)throw new Limit();long size=0;for(var e:spec.sources().entrySet()){path(e.getKey());if(!e.getKey().endsWith(".java"))throw new IllegalArgumentException("Source extension");byte[] bytes=e.getValue().decode(1024*1024);size+=bytes.length;try{StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes));}catch(CharacterCodingException ex){throw new IllegalArgumentException("UTF8");}}if(size>1024*1024)throw new Limit();}
         else if(spec.phase()==Phase.runtime){id(spec.compileArtifactId());id(spec.caseId());if(!spec.sources().isEmpty()||spec.observationIndex()<1||spec.observationIndex()>3||spec.mainClass()==null||spec.mainClass().length()>240||!spec.mainClass().matches("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*"))throw new IllegalArgumentException("Runtime arguments");arguments(spec.args());}else throw new IllegalArgumentException("Phase");
     }

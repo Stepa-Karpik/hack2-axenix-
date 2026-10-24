@@ -147,10 +147,12 @@ export function arrangeFlow(
   const indegree = new Map(nodes.map((node) => [node.id, 0]));
   const children = new Map<string, Edge[]>();
   const parents = new Map<string, string[]>();
+  const incoming = new Map<string, Edge[]>();
   for (const edge of forward) {
     indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
     append(children, edge.source, edge);
     append(parents, edge.target, edge.source);
+    append(incoming, edge.target, edge);
   }
   const rank = new Map(nodes.map((node) => [node.id, 0]));
   const queue = nodes
@@ -222,7 +224,22 @@ export function arrangeFlow(
         : 0;
     };
     const centers = new Map(members.map((id) => [id, center(id)]));
-    members.sort((a, b) => centers.get(a)! - centers.get(b)!);
+    const branchOrder = (id: string) => {
+      const links = incoming.get(id) ?? [];
+      return (
+        links.reduce(
+          (sum, link) =>
+            sum + (link.kind === "false" ? 1 : link.kind === "true" ? -1 : 0),
+          0,
+        ) / Math.max(1, links.length)
+      );
+    };
+    // A bottom true port leads left; the right false port leads right. Only
+    // break rank ties: sequential paths retain their single vertical lane.
+    members.sort(
+      (a, b) =>
+        centers.get(a)! - centers.get(b)! || branchOrder(a) - branchOrder(b),
+    );
     const mean =
       members.reduce((sum, id) => sum + centers.get(id)!, 0) / members.length;
     members.forEach((id, index) =>
@@ -236,7 +253,11 @@ export function arrangeFlow(
 }
 
 export function routeFlowEdges(
-  nodes: { id: string; position: { x: number; y: number } }[],
+  nodes: {
+    id: string;
+    position: { x: number; y: number };
+    data?: { kind?: string };
+  }[],
   edges: (Edge & { id: string })[],
 ) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -249,8 +270,39 @@ export function routeFlowEdges(
   left -= 40;
   right += 40;
   const routes = new Map<string, number>();
-  let leftLane = 0,
-    rightLane = 0;
+  const reserved = new Map<
+    number,
+    { x: number; top: number; bottom: number; merge?: string }[]
+  >();
+  const lane = (
+    base: number,
+    direction: number,
+    sourceY: number,
+    targetY: number,
+    merge?: string,
+  ) => {
+    const top = Math.min(sourceY, targetY) - 24;
+    const bottom = Math.max(sourceY, targetY) + 84;
+    let x = base;
+    const occupied = () => {
+      const cell = Math.floor(x / 24);
+      for (let index = cell - 1; index <= cell + 1; index++) {
+        for (const route of reserved.get(index) ?? []) {
+          if (
+            Math.abs(route.x - x) < 20 &&
+            top < route.bottom &&
+            bottom > route.top &&
+            !(merge && merge === route.merge)
+          )
+            return true;
+        }
+      }
+      return false;
+    };
+    while (occupied()) x += direction * 24;
+    append(reserved, Math.floor(x / 24), { x, top, bottom, merge });
+    return x;
+  };
   for (const edge of [...edges].sort((a, b) => {
     const span = (e: typeof a) =>
       Math.abs(
@@ -267,8 +319,8 @@ export function routeFlowEdges(
       routes.set(
         edge.id,
         target.position.x < source.position.x
-          ? left - leftLane++ * 24
-          : right + rightLane++ * 24,
+          ? lane(left, -1, source.position.y, target.position.y)
+          : lane(right, 1, source.position.y, target.position.y),
       );
       continue;
     }
@@ -276,15 +328,41 @@ export function routeFlowEdges(
     // obstacle fallback across their own source, which can collapse unrelated
     // false paths onto the same source boundary despite distinct planned lanes.
     if (edge.kind === "false" && distance > 0) {
-      routes.set(edge.id, right + rightLane++ * 24);
+      routes.set(
+        edge.id,
+        lane(
+          target.position.x + 132 >= source.position.x + 286
+            ? target.position.x + 132
+            : Math.max(source.position.x, target.position.x) + 304,
+          1,
+          source.position.y,
+          target.position.y,
+        ),
+      );
+      continue;
+    }
+    if (
+      ["ReturnStmt", "ThrowStmt"].includes(source.data?.kind ?? "") &&
+      distance > 161
+    ) {
+      routes.set(
+        edge.id,
+        lane(
+          Math.max(source.position.x, target.position.x) + 304,
+          1,
+          source.position.y,
+          target.position.y,
+          "return:" + edge.target,
+        ),
+      );
       continue;
     }
     if (distance <= 0 || distance > 161)
       routes.set(
         edge.id,
         edge.kind === "true"
-          ? right + rightLane++ * 24
-          : left - leftLane++ * 24,
+          ? lane(right, 1, source.position.y, target.position.y)
+          : lane(left, -1, source.position.y, target.position.y),
       );
   }
   return routes;

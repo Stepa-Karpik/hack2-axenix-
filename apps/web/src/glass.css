@@ -13,6 +13,7 @@
   --lime: #54df97;
   --green: #207247;
   --muted-strong: #56635b;
+  --console-error: #a82b43;
   --sidebar-width: 285px;
   position: relative;
   width: 100%;
@@ -36,6 +37,7 @@
   --selected: #0c1a12;
   --green: #64ed9c;
   --muted-strong: #bac1bc;
+  --console-error: #ed7185;
 }
 .glass-workbench .workbench-body {
   position: absolute;
@@ -652,7 +654,7 @@
   border-radius: 24px;
 }
 .glass-workbench .flow-area .blueprint-node.visual-return {
-  --node-accent: #ce6b88;
+  --node-accent: var(--graph-return);
 }
 .glass-workbench .flow-area .blueprint-node.visual-condition {
   border-color: var(--node-accent);
@@ -964,4 +966,208 @@
   max-height: 65%;
   overflow: auto;
   scrollbar-width: thin;
+}
+
+/* Direct editing and file feedback. */
+.file-type-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 17px;
+  font-size: 11px;
+  font-weight: 700;
+  flex: none;
+  color: var(--ink);
+}
+.explorer-form {
+  position: relative;
+}
+.explorer-form:has(.inline-file-icon) label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.explorer-form:has(.inline-file-icon) input {
+  padding-left: 30px;
+}
+.inline-file-icon {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  pointer-events: none;
+}
+.editor-file-status {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+.filename-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  flex-wrap: wrap;
+}
+.analysis-diagnostics {
+  margin: 10px;
+  font-size: 12px;
+}
+.analysis-diagnostics .diagnostic {
+  width: 100%;
+  white-space: normal;
+}
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.blueprint-node[data-insert-position] {
+  outline: 2px solid #66dba4;
+}
+.block-insert-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -28px;
+  background: var(--surface);
+  color: #66dba4;
+  font-size: 12px;
+  padding: 4px;
+  border-radius: 5px;
+  text-align: center;
+}
+.blueprint-node[data-insert-position="after"] .block-insert-hint {
+  top: auto;
+  bottom: -28px;
+}
+.glass-workbench
+  .flow-area
+  g[data-route-highlighted="true"]
+  .react-flow__edge-path {
+  stroke: inherit;
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+.glass-workbench .flow-area g[data-route-source] .react-flow__edge-path {
+  stroke: currentColor !important;
+}
+
+.live-console {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 8px;
+}
+.live-console-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 8px 10px;
+  flex: none;
+}
+.live-console-output {
+  flex: 1;
+  min-height: 60px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 8px 12px;
+  font:
+    13px/1.5 Consolas,
+    monospace;
+  color: var(--ink);
+  user-select: text;
+}
+.console-stderr {
+  color: var(--console-error, #a82b43);
+}
+.console-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.console-input input {
+  min-width: 60px;
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  padding: 7px;
+}
+.console-input button {
+  flex: none;
+  font-size: 11px;
+}
+.console-input-history {
+  font-size: 11px;
+  color: var(--muted);
+  max-height: 90px;
+  overflow: auto;
+  flex: none;
+  padding: 0 10px;
+}
+.block-palette button[draggable="true"] {
+  cursor: grab;
+}
+.code-pane > section:has(.monaco-editor) {
+  min-height: 0;
+  flex: 1;
+}
+
+.flow-area {
+  --graph-return: #b3455e;
+}
+[data-theme="dark"] .flow-area {
+  --graph-return: #ed7185;
+}
+
+.single-run-output {
+  padding: 8px 12px;
+  min-height: 0;
+}
+.run-result-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding-bottom: 8px;
+}
+.single-run-output pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    13px/1.5 Consolas,
+    monospace;
+  margin: 4px 0 12px;
+  user-select: text;
+}
+.single-run-output .run-input,
+.single-run-output .run-provenance {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+.single-run-output details[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.single-run-output details code {
+  display: block;
+  overflow-wrap: anywhere;
 }
