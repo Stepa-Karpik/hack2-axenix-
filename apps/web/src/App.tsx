@@ -958,7 +958,10 @@ function Workbench({
   ]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.code === "KeyS" || e.key.toLowerCase() === "s")
+      ) {
         e.preventDefault();
         e.stopPropagation();
         void save();

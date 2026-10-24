@@ -11,7 +11,7 @@ A local Java workbench that connects source code to a structured control-flow gr
 ## Workflow
 
 1. Create a project, then create files and folders or import text files from a ZIP archive or directory. Review the import selection before adding it to the project.
-2. Edit the source. Drafts persist locally on each edit; the server saves and analyzes after an eight-second idle pause. **Ctrl+S** saves immediately without opening the browser's page-save dialog. Unchanged saves do not add revisions. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
+2. Edit the source. Drafts persist locally on each edit; the server saves and analyzes after an eight-second idle pause. **Ctrl+S** saves immediately without opening the browser's page-save dialog, including with a Russian keyboard layout. Unchanged saves do not add revisions. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
    Compound conditions show the evaluation order of `&&`, `||` and `!`, including branches that skip the right operand. Select an individual test to inspect its source, or its enclosing condition to edit the whole expression.
    Traditional `switch` statements show selector evaluation, case selection, fallthrough and the destination of `break` or an enclosing loop's `continue`.
    Enhanced `for` loops show the source evaluated once, followed by element checks, binding and body repetition. Synthetic iteration steps do not expose source-edit controls.
