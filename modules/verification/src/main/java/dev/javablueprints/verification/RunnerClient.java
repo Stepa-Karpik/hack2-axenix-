@@ -69,30 +69,54 @@ public final class RunnerClient {
         return compare(projectId,jobId,attemptId,fence,baseline,candidate,mainClass,cases,()->false);
     }
     public Comparison compare(String projectId,String jobId,String attemptId,long fence,Map<String,String> baseline,Map<String,String> candidate,String mainClass,List<TestCase> cases,BooleanSupplier cancelled) throws InterruptedException {
+        return compare(projectId,jobId,attemptId,fence,baseline,candidate,mainClass,cases,cancelled,ComparisonObserver.NONE);
+    }
+    public Comparison compare(String projectId,String jobId,String attemptId,long fence,Map<String,String> baseline,Map<String,String> candidate,String mainClass,List<TestCase> cases,BooleanSupplier cancelled,ComparisonObserver observer) throws InterruptedException {
+        Objects.requireNonNull(observer);
         if(cases.isEmpty() || cases.size()>100) throw new IllegalArgumentException("Suite must contain 1..100 cases");
         Observation bc = null, cc = null;
         var results=new ArrayList<TestResult>();
         String currentCase=null;var partialBase=new ArrayList<Observation>();var partialCandidate=new ArrayList<Observation>();
         try {
             if(!available()) return unavailable(cases.size());
+            observer.phase(ComparisonObserver.Stage.compile_base);
             bc = execute(projectId,jobId,attemptId,fence,compileSpec(baseline),cancelled);
             if(bc.cleanupPending())return new Comparison(ComparisonOutcome.inconclusive,"cleanup_pending",false,3,0,0,0,cases.size(),List.of(),bc,null);
+            if(cancelled.getAsBoolean()) return new Comparison(ComparisonOutcome.inconclusive,"cancelled",false,3,0,0,0,cases.size(),List.of(),bc,null);
+            observer.phase(ComparisonObserver.Stage.compile_candidate);
             cc = execute(projectId,jobId,attemptId,fence,compileSpec(candidate),cancelled);
             if(bc.cleanupPending()||cc.cleanupPending())return new Comparison(ComparisonOutcome.inconclusive,"cleanup_pending",false,3,0,0,0,cases.size(),List.of(),bc,cc);
             if(bc.outcome()!=ExecutionOutcome.exited || cc.outcome()!=ExecutionOutcome.exited) {
                 boolean error = bc.outcome()==ExecutionOutcome.compile_error || cc.outcome()==ExecutionOutcome.compile_error;
                 return new Comparison(error?ComparisonOutcome.compile_error:ComparisonOutcome.inconclusive,error?"compile_error":"compile_execution_limit",false,3,0,0,0,cases.size(),List.of(),bc,cc);
             }
+            observer.phase(ComparisonObserver.Stage.tests);
             for(var c:cases) {
+                if(cancelled.getAsBoolean()) break;
                 currentCase=c.id();var b=new ArrayList<Observation>(); var d=new ArrayList<Observation>();partialBase=b;partialCandidate=d;
-                for(int i=1;i<=3;i++) { b.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(bc.compileArtifactId(),mainClass,c,i),cancelled)); d.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(cc.compileArtifactId(),mainClass,c,i),cancelled)); if(cancelled.getAsBoolean()) break; }
-                results.add(new TestResult(c.id(),List.copyOf(b),List.copyOf(d),false));
+                observer.caseStarted(c.id());
+                for(int i=1;i<=3;i++) {
+                    b.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(bc.compileArtifactId(),mainClass,c,i),cancelled));
+                    observer.observed(c.id(),ComparisonObserver.Side.base,i,b.getLast());
+                    if(cancelled.getAsBoolean()) break;
+                    d.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(cc.compileArtifactId(),mainClass,c,i),cancelled));
+                    observer.observed(c.id(),ComparisonObserver.Side.candidate,i,d.getLast());
+                    if(cancelled.getAsBoolean()) break;
+                }
+                var raw=new TestResult(c.id(),List.copyOf(b),List.copyOf(d),false);
+                results.add(raw);
+                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc).tests().getFirst());
                 currentCase=null;
                 if(cancelled.getAsBoolean()) break;
             }
             return Comparator.compare(cases,results,bc,cc);
         } catch(IOException e) {
-            if(currentCase!=null)results.add(new TestResult(currentCase,partialBase,partialCandidate,false));
+            if(currentCase!=null) {
+                var raw=new TestResult(currentCase,partialBase,partialCandidate,false);results.add(raw);
+                String failedCase=currentCase;
+                var c=cases.stream().filter(test->test.id().equals(failedCase)).findFirst().orElseThrow();
+                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc).tests().getFirst());
+            }
             if(results.isEmpty())return new Comparison(ComparisonOutcome.unavailable,"runner_unavailable",false,3,0,0,0,cases.size(),List.of(),bc,cc);
             return Comparator.compare(cases,results,bc,cc);
         }

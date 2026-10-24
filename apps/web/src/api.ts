@@ -94,20 +94,24 @@ export async function pollJob<T extends { status: string }>(
   signal: AbortSignal,
   onProgress?: (job: T) => void,
 ): Promise<T> {
-  for (let i = 0; i < 1200; i++) {
+  for (let i = 0; i < 12000; i++) {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     const job = await read();
     onProgress?.(job);
     if (["succeeded", "failed", "cancelled"].includes(job.status)) return job;
+    const comparison = "type" in job && job.type === "compare";
+    if (i >= 1199 && !comparison) break;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(
         () => {
           signal.removeEventListener("abort", abort);
           resolve();
         },
-        "type" in job && job.type === "run"
-          ? 300
-          : Math.min(500 * 2 ** Math.min(i, 3), 5000),
+        comparison
+          ? 500
+          : "type" in job && job.type === "run"
+            ? 300
+            : Math.min(500 * 2 ** Math.min(i, 3), 5000),
       );
       const abort = () => {
         clearTimeout(timer);

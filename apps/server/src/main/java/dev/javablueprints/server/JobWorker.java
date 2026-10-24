@@ -63,6 +63,12 @@ public class JobWorker {
     LiveRun(String project, String attempt, boolean interactive) {this.project=project;this.attempt=attempt;this.interactive=interactive;}
   }
   final java.util.concurrent.ConcurrentHashMap<String, LiveRun> liveRuns = new java.util.concurrent.ConcurrentHashMap<>();
+  final java.util.concurrent.ConcurrentHashMap<String, TestProgress> comparisonRuns = new java.util.concurrent.ConcurrentHashMap<>();
+  Object comparisonProgress(String project, String job, Map<String,Object> view) {
+    var progress=comparisonRuns.get(job);
+    return progress!=null && progress.project.equals(project) && progress.attempt.equals(view.get("attemptId")) && "running".equals(view.get("status"))
+        ? progress.snapshot() : view.get("progress");
+  }
   Map<String,Object> live(String p,String j) {
     LiveRun run=liveRuns.get(j);
     if(run==null || !run.project.equals(p)) return null;
@@ -160,7 +166,7 @@ public class JobWorker {
               var r = rows.getFirst();
               String attempt = id();
               w.db.update(
-                  "UPDATE jobs SET status='running',attempt_id=?,lease_until=now()+interval '45"
+                  "UPDATE jobs SET status='running',progress=NULL,attempt_id=?,lease_until=now()+interval '45"
                       + " seconds',started_at=now() WHERE id=?",
                   uuid(attempt),
                   uuid(r.get("id").toString()));
@@ -464,11 +470,17 @@ public class JobWorker {
 
   Map<String, Object> compare(String p, String j, String attempt, Map<String, Object> in)
       throws Exception {
-    requireAvailable();
     var suite = w.resource(p, str(in, "suiteVersionId"), "suite");
     var cases =
         ((List<?>) suite.get("cases"))
             .stream().map(x -> testCase((Map<String, Object>) x)).toList();
+    var progress=new TestProgress(p,attempt,(List<Map<String,Object>>)suite.get("cases"),snapshot->{
+      if(!w.jobProgress(p,j,attempt,snapshot)) throw new ApiError(409,"STALE_ATTEMPT","Comparison attempt is no longer active");
+    },map("baseRevisionId",in.get("baseRevisionId"),"candidateRevisionId",in.get("candidateRevisionId"),"suiteVersionId",in.get("suiteVersionId"),"suiteVersionHash",suite.get("versionHash"),"executionProfileId",RunnerProtocol.PROFILE,"executionProfileHash",PROFILE_HASH));
+    comparisonRuns.put(j,progress);
+    try {
+    progress.publish();
+    requireAvailable();
     var comparison =
         runner.compare(
             p,
@@ -479,13 +491,16 @@ public class JobWorker {
             w.javaFiles(w.revision(p, str(in, "candidateRevisionId"))),
             str(suite, "entryPoint"),
             cases,
-            () -> cancelled(p, j));
+            () -> cancelled(p, j),progress);
+    progress.finish(comparison,w.job(p,j).get("cancelRequestedAt")!=null);
     var results = new ArrayList<Map<String, Object>>();
     for (var t : comparison.tests())
       results.add(
           map(
               "caseId",
               t.caseId(),
+              "elapsedMs",
+              progress.duration(t.caseId()),
               "input",
               ((List<Map<String, Object>>) suite.get("cases"))
                   .stream().filter(cs -> t.caseId().equals(cs.get("id"))).findFirst().orElseThrow(),
@@ -548,12 +563,18 @@ public class JobWorker {
             "/api/v1/projects/" + p + "/comparisons/" + c + "/test-results",
             "createdAt",
             java.time.Instant.now().toString());
+    report.put("wallTimeMs",progress.snapshot().get("elapsedMs"));
+    report.put("completed",progress.snapshot().get("completed"));
     if (comparison.baseCompile() != null)
       report.put("baseCompile", observation(p, comparison.baseCompile()));
     if (comparison.candidateCompile() != null)
       report.put("candidateCompile", observation(p, comparison.candidateCompile()));
     w.putResource(p, c, "comparison", report);
     return map("resultKind", "comparison", "comparisonId", c, "report", report);
+    } catch(Exception error) {
+      try { progress.failed(error instanceof ApiError e?e.code:"JOB_FAILED"); } catch(Exception ignored) {}
+      throw error;
+    } finally {comparisonRuns.remove(j,progress);}
   }
 
   Map<String, Object> observation(String p, Observation o) {

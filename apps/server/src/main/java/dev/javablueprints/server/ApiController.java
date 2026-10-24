@@ -563,7 +563,7 @@ public class ApiController {
 
   @GetMapping({"/projects/{p}/jobs/{j}", "/projects/{p}/runs/{j}"})
   Object job(@PathVariable String p, @PathVariable String j) {
-    var view=w.job(p,j);view.put("live",worker.live(p,j));return ok(view);
+    var view=w.job(p,j);view.put("live",worker.live(p,j));view.put("progress",worker.comparisonProgress(p,j,view));return ok(view);
   }
 
   @PostMapping("/projects/{p}/runs/{j}/input")

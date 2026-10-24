@@ -470,7 +470,7 @@ public class Workspace {
     var rows =
         db.queryForList(
             "SELECT"
-                + " id::text,type,status,attempt_id::text,result::text,error::text,cancel_requested_at,created_at,finished_at"
+                + " id::text,type,status,attempt_id::text,result::text,error::text,progress::text,cancel_requested_at,created_at,finished_at"
                 + " FROM jobs WHERE project_id=? AND id=?",
             uuid(p),
             uuid(j));
@@ -491,6 +491,8 @@ public class Workspace {
         row.get("attempt_id"),
         "result",
         row.get("result") == null ? null : decode(row.get("result").toString()),
+        "progress",
+        row.get("progress") == null ? null : decode(row.get("progress").toString()),
         "error",
         row.get("error") == null ? null : decode(row.get("error").toString()),
         "cancelRequestedAt",
@@ -499,6 +501,11 @@ public class Workspace {
         row.get("created_at").toString(),
         "finishedAt",
         Objects.toString(row.get("finished_at"), null));
+  }
+
+  boolean jobProgress(String project, String job, String attempt, Map<String,Object> progress) {
+    return db.update("UPDATE jobs SET progress=?::jsonb WHERE project_id=? AND id=? AND attempt_id=? AND status='running' AND lease_until>now()",
+        encode(progress),uuid(project),uuid(job),uuid(attempt)) == 1;
   }
 }
 

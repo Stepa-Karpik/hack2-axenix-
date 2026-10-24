@@ -102,6 +102,7 @@ export interface Execution {
   truncated?: boolean;
 }
 export interface TestResult {
+  elapsedMs?: number | null;
   caseId: string;
   input?: { id: string; name?: string; stdinUtf8: string; argv: string[] };
   verdict: string;
@@ -111,6 +112,7 @@ export interface TestResult {
   difference?: unknown;
 }
 export interface Report {
+  completed?: number;
   wallTimeMs?: number;
   interactive?: boolean;
   inputLines?: { id: string; text: string; eof: boolean }[];
@@ -142,6 +144,8 @@ export interface LiveRun {
   elapsedMs: number;
 }
 export interface Job {
+  progress?: ComparisonProgress | null;
+  cancelRequestedAt?: string | null;
   live?: LiveRun | null;
   id: string;
   type: string;
@@ -153,6 +157,33 @@ export interface Job {
     resultKind?: string;
     report?: Report;
   } | null;
+}
+export interface ComparisonProgress {
+  phase: string;
+  finished: boolean;
+  outcome?: string | null;
+  reason?: string | null;
+  total: number;
+  completed: number;
+  matched: number;
+  elapsedMs: number;
+  plannedRepeatCount: number;
+  binding: {
+    baseRevisionId?: string;
+    candidateRevisionId?: string;
+    suiteVersionId?: string;
+    executionProfileId?: string;
+  };
+  cases: {
+    caseId: string;
+    name: string;
+    status: string;
+    baseObserved: number;
+    candidateObserved: number;
+    completed: boolean;
+    elapsedMs: number | null;
+    reasons: string[];
+  }[];
 }
 export interface Proposal {
   compileExecution?: Execution | null;

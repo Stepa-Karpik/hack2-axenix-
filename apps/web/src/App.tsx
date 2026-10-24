@@ -1,4 +1,6 @@
 import SingleRunOutput from "./SingleRunOutput";
+import TestProgressView from "./TestProgressView";
+import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
 import Workspace, { useWorkspace } from "./Workspace";
@@ -827,7 +829,6 @@ function Workbench({
               setJob(current);
               if (current.result?.comparisonId) {
                 setReportId(current.result.comparisonId);
-                setDock("tests");
               }
             }
           },
@@ -2163,7 +2164,10 @@ function Workbench({
     ),
     tests: (
       <div className="dock-content">
-        {report?.testResults ? (
+        {job?.type === "compare" &&
+        (!report?.testResults || ["queued", "running"].includes(job.status)) ? (
+          <TestProgressView job={job} />
+        ) : report?.testResults ? (
           <ReportView report={report} projectId={projectId} />
         ) : (
           <div className="output-empty">
@@ -3087,17 +3091,28 @@ function ReportView({
           <strong>{labelStatus(report.outcome)}</strong>
           {report.total !== undefined && (
             <span>
-              {report.matched ?? 0} из {report.total} входов
+              Выполнено{" "}
+              {report.completed ??
+                report.testResults?.filter(
+                  (test) =>
+                    test.baseExecutions?.length === 3 &&
+                    test.candidateExecutions?.length === 3,
+                ).length ??
+                0}{" "}
+              из {report.total} · Совпало {report.matched ?? 0}
             </span>
           )}
           <span className="small">
             {report.baseRevisionId &&
               `${short(report.baseRevisionId)} → ${short(report.candidateRevisionId)}`}
           </span>
+          {report.wallTimeMs !== undefined && (
+            <span>{testDuration(report.wallTimeMs)}</span>
+          )}
         </div>
       )}
       {report.inconclusiveReasons?.length ? (
-        <p>{report.inconclusiveReasons.join(" · ")}</p>
+        <p>{report.inconclusiveReasons.map(testReason).join(" · ")}</p>
       ) : null}
       {report.baseCompile && (
         <ExecutionView title="Компиляция базы" execution={report.baseCompile} />
@@ -3124,7 +3139,7 @@ function ReportView({
                 {
                   matched: "Совпало",
                   mismatch: "Расхождение",
-                  inconclusive: "Не завершено",
+                  inconclusive: "Неопределённо",
                   not_run: "Не запущено",
                 } as Record<string, string>
               )[t.verdict] ?? t.verdict}
@@ -3133,6 +3148,11 @@ function ReportView({
               {t.baseExecutions?.length ?? 0} +{" "}
               {t.candidateExecutions?.length ?? 0} наблюдений
             </small>
+            {t.elapsedMs !== undefined && (
+              <small className="test-result-duration">
+                {testDuration(t.elapsedMs)}
+              </small>
+            )}
           </summary>
           {t.input && (
             <div className="test-input">
@@ -3143,7 +3163,9 @@ function ReportView({
               </span>
             </div>
           )}
-          {(t.reasons?.length ?? 0) > 0 && <p>{t.reasons?.join(" · ")}</p>}
+          {(t.reasons?.length ?? 0) > 0 && (
+            <p>{t.reasons?.map(testReason).join(" · ")}</p>
+          )}
           <div className="execution-pair">
             <div>
               {t.baseExecutions?.map((e, i) => (

@@ -1497,6 +1497,26 @@ class WorkspaceIntegrationTest {
     assertEquals(404, post("/projects/" + p + "/exports", map("revisionId", revision, "paths", List.of("missing")), id(), null).status);
   }
 
+  @Test
+  void durableProgressIsScopedToTheLiveAttemptAndNeverPublishesVerification() throws Exception {
+    String p=project(), foreign=project(), job=id(), attempt=id();
+    w.db.update("INSERT INTO jobs(id,project_id,type,status,input,attempt_id,lease_until) VALUES(?,?,'compare','running','{}'::jsonb,?,now()+interval '45 seconds')",uuid(job),uuid(p),uuid(attempt));
+    var progress=map("phase","tests","total",1,"completed",1,"matched",1,"cases",List.of());
+    assertTrue(w.jobProgress(p,job,attempt,progress));
+    var response=obj(send("GET","/projects/"+p+"/jobs/"+job,null,null,null,null));
+    assertEquals(progress,response.get("progress"));
+    assertFalse(w.jobProgress(foreign,job,attempt,map("phase","wrong")));
+    assertFalse(w.jobProgress(p,job,id(),map("phase","wrong")));
+    assertEquals(404,send("GET","/projects/"+foreign+"/jobs/"+job,null,null,null,null).status);
+    assertEquals(0,w.db.queryForObject("SELECT count(*) FROM resources WHERE project_id=? AND kind='comparison'",Integer.class,uuid(p)));
+    assertThrows(ApiError.class,()->w.resource(p,job,"comparison"));
+    w.db.update("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=?",uuid(job));
+    assertFalse(w.jobProgress(p,job,attempt,map("phase","expired")));
+    w.db.update("UPDATE jobs SET status='cancelled',lease_until=now()+interval '45 seconds' WHERE id=?",uuid(job));
+    assertFalse(w.jobProgress(p,job,attempt,map("phase","late")));
+    assertEquals(progress,w.job(p,job).get("progress"));
+  }
+
   Map<String, Object> waitJob(String p, String j) throws Exception {
     long end = System.nanoTime() + Duration.ofSeconds(10).toNanos();
     while (System.nanoTime() < end) {

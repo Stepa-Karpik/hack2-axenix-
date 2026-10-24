@@ -2,6 +2,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  testDuration,
+  visibleTestStatus,
+  progressTitle,
+  testReason,
+} from "./testProgress.ts";
+test("test progress distinguishes measured duration, cancellation and a successful verdict", () => {
+  assert.equal(testDuration(null), "—");
+  assert.equal(testReason("timeout"), "Лимит времени");
+  assert.equal(testDuration(1500), "1.5 с");
+  assert.equal(visibleTestStatus("running", "cancelled"), "cancelled");
+  assert.equal(visibleTestStatus("matched", "cancelled"), "matched");
+  assert.equal(visibleTestStatus("queued", "failed"), "not_run");
+  assert.equal(progressTitle("finished", "cancelled"), "Проверка остановлена");
+  assert.equal(
+    progressTitle("finished", "failed"),
+    "Не удалось завершить проверку",
+  );
+  assert.equal(progressTitle("tests", "running", true), "Останавливаем…");
+});
+import {
   hasChanges,
   canApply,
   nodeAtOffset,
