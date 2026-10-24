@@ -11,7 +11,7 @@ A local Java workbench that connects source code to a structured control-flow gr
 ## Workflow
 
 1. Create a project, then create files and folders or import text files from a ZIP archive or directory. Review the import selection before adding it to the project.
-2. Edit the source. Changes are autosaved and analyzed; **Ctrl+S** saves immediately. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
+2. Edit the source. Drafts persist locally on each edit; the server saves and analyzes after an eight-second idle pause. **Ctrl+S** saves immediately without opening the browser's page-save dialog. Unchanged saves do not add revisions. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
    Compound conditions show the evaluation order of `&&`, `||` and `!`, including branches that skip the right operand. Select an individual test to inspect its source, or its enclosing condition to edit the whole expression.
    Traditional `switch` statements show selector evaluation, case selection, fallthrough and the destination of `break` or an enclosing loop's `continue`.
    Enhanced `for` loops show the source evaluated once, followed by element checks, binding and body repetition. Synthetic iteration steps do not expose source-edit controls.
@@ -37,6 +37,8 @@ The graph is a permanent canvas beneath translucent panels. The dark theme uses 
 
 Workspace preferences are independent of program revisions and graph-node positions. Rearranging windows does not edit source, compile a program or create a revision. Reduced-motion preferences disable layout animation; browsers without backdrop filtering use solid panel backgrounds.
 
+Each method remembers its pan, zoom and unambiguous manually moved nodes across source saves and reanalysis. Automatic nodes reflow around retained positions after structural edits. The graph displays its source revision; the Console identifies output from an older revision even while that run is still waiting for input.
+
 **Share** opens project access settings and copies its URL. Owners can switch account projects between private and public access and grant friends viewer or editor roles. Collaborator presence and simultaneous collaborative editing are not implemented.
 
 Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
@@ -46,6 +48,8 @@ Graph nodes use distinct icons, shapes and restrained semantic colors. Connectio
 The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Enter a new file or folder name and press **Enter** or click elsewhere to create it; **Escape** cancels. Its icon follows the filename extension. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors. A mismatched public Java type offers an explicit filename correction.
 
 Open files appear as tabs with language-specific icons and editor highlighting. Switching, closing and reopening tabs retains the current file's draft, selection and undo history during the project session. File operations save a complete snapshot together with pending text edits. Concurrent changes produce a conflict instead of replacing another saved version.
+
+Select a file or folder and use the trash action to delete it after confirmation. Folder deletion includes its subtree and retains other unsaved files in the new snapshot. Cancellation or a revision conflict preserves the current draft and tabs. Previous snapshots remain recoverable through history.
 
 Import previews support strict UTF-8 text and ZIP archives, with selection before commit and no silent overwrite of existing paths. Archives preserve empty folders; a browser directory picker supplies files and their parent directories, but cannot enumerate empty folders. Unsupported binary files and unsafe or oversized archives are rejected. Build scripts from imported projects are never executed.
 
@@ -57,7 +61,9 @@ Ordinary `try`, ordered `catch` clauses, multi-catch and `finally` are shown as 
 
 Cleanup has a separate continuation for normal completion, return, exception, break and continue. A return expression is evaluated before cleanup; an abrupt completion inside `finally` replaces the pending completion. Nested cleanup runs from the inside out, while a loop or switch jump that stays inside the `try` does not prematurely execute its finalizer. Separate copies of finalizer paths prevent impossible connections between unrelated completions; each copy navigates to the same original source.
 
-Calls and other expressions remain atomic. In methods containing `try`, dashed exceptional edges conservatively show possible failures, including unboxing; they do not infer a unique runtime exception type. Edge metadata records certainty, reason and finalizer completion context. Try-with-resources and its closing/suppression protocol remain explicitly unsupported. Context expansion is bounded to 8192 flow nodes and 24576 edges per method; exceeding either limit preserves the method as read-only opaque source.
+Try-with-resources evaluates resource initializers or captured variable references from left to right and closes acquired resources in reverse order. Null resources skip closing; failed initialization closes only the acquired prefix. A close failure replaces a pending normal return or jump. When an exception is already pending, later close failures pass to `addSuppressed` in cleanup order. The graph shows self-suppression and failures of the suppression call; normal completion preserves the primary exception even when suppression is disabled. Associated catches and explicit `finally` run after resource cleanup. Generated cleanup nodes are read-only; initializer nodes navigate to the original source.
+
+Calls and other expressions remain atomic. In methods containing `try`, dashed exceptional edges conservatively show possible failures, including unboxing, `close` and `addSuppressed`; they do not infer a unique runtime exception type or expand resource implementations. Edge metadata records certainty, reason and completion context. Expansion is bounded to 64 resources per `try`, 8192 flow nodes and 24576 edges per method; exceeding a limit preserves the method as read-only opaque source.
 
 ## Console
 

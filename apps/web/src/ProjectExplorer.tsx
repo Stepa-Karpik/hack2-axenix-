@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Trash2,
 } from "lucide-react";
 import { directoryPaths, languageFor } from "./projectFiles";
 import type { FileSnapshot } from "./projectFiles";
@@ -63,7 +64,7 @@ export default function ProjectExplorer({
   onOpen: (p: string) => void;
   onMethod: (m: Method) => void;
   onChange: (
-    kind: "file" | "folder" | "move",
+    kind: "file" | "folder" | "move" | "delete",
     path: string,
     target: string,
   ) => Promise<void>;
@@ -81,6 +82,8 @@ export default function ProjectExplorer({
   const [target, setTarget] = useState("");
   const [error, setError] = useState("");
   const [drag, setDrag] = useState("");
+  const [deletePath, setDeletePath] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null);
   const submitting = useRef(false);
   const cancelled = useRef(false);
@@ -284,6 +287,17 @@ export default function ProjectExplorer({
           <Move size={15} />
         </button>
         <button
+          aria-label="Удалить выбранный путь"
+          title="Удалить файл или папку"
+          disabled={editingDisabled || !selected}
+          onClick={() => {
+            setDeletePath(selected);
+            setError("");
+          }}
+        >
+          <Trash2 size={15} />
+        </button>
+        <button
           aria-label="Скачать выбранный путь"
           title="Скачать выбранный путь сохранённой версии"
           disabled={disabled || !selected}
@@ -295,6 +309,59 @@ export default function ProjectExplorer({
           Импорт
         </button>
       </div>
+      {deletePath && (
+        <section
+          className="explorer-form"
+          role="alertdialog"
+          aria-labelledby="delete-path-title"
+          aria-describedby="delete-path-description"
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !deleting) {
+              e.stopPropagation();
+              setDeletePath("");
+            }
+          }}
+        >
+          <strong id="delete-path-title">Удалить {deletePath}?</strong>
+          <p id="delete-path-description" className="small">
+            {dirs.includes(deletePath)
+              ? "Папка и всё её содержимое будут удалены."
+              : "Файл будет удалён."}{" "}
+            Несохранённые изменения остальных файлов войдут в новую версию.
+            Удалённое содержимое останется в истории сохранённых версий;
+            несохранённые правки удаляемых файлов будут потеряны.
+          </p>
+          <button
+            autoFocus
+            disabled={deleting}
+            onClick={() => setDeletePath("")}
+          >
+            Отмена
+          </button>
+          <button
+            disabled={editingDisabled || deleting}
+            onClick={async () => {
+              if (editingDisabled || submitting.current) return;
+              submitting.current = true;
+              setDeleting(true);
+              try {
+                await onChange("delete", deletePath, "");
+                setSelected("");
+                setDeletePath("");
+              } catch (e) {
+                setError(
+                  e instanceof Error ? e.message : "Не удалось удалить путь",
+                );
+              } finally {
+                submitting.current = false;
+                setDeleting(false);
+              }
+            }}
+          >
+            Удалить из текущей версии
+          </button>
+        </section>
+      )}
       {action && (
         <form
           className="explorer-form"

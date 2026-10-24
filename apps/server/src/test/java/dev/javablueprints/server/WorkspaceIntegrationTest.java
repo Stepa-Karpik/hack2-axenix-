@@ -657,6 +657,19 @@ class WorkspaceIntegrationTest {
             .get("analyzerVersion"));
   }
 
+  @Test
+  void jobSourceRevisionRemainsBoundAfterHeadChangesWithoutExposingRunInput() throws Exception {
+    String p=project();
+    String first=str(obj(post("/projects/"+p+"/revisions",sources("class Main {}"),id(),"empty")),"id");
+    var queued=w.enqueue(p,"run",map("revisionId",first,"stdinUtf8","private test input","argv",List.of()));
+    assertEquals(first,queued.get("revisionId"));
+    String next=str(obj(post("/projects/"+p+"/revisions",sources("class Main {int value;}"),id(),first)),"id");
+    var recovered=obj(send("GET","/projects/"+p+"/runs/"+queued.get("id"),null,null,null,null));
+    assertEquals(first,recovered.get("revisionId"));
+    assertNotEquals(next,recovered.get("revisionId"));
+    assertFalse(recovered.containsKey("input"));assertFalse(recovered.containsKey("stdinUtf8"));
+  }
+
   Map<String, Object> analyzeRevision(String p, String revision) throws Exception {
     var queued = post("/projects/" + p + "/revisions/" + revision + "/analysis", Map.of(), id(), null);
     assertEquals(202, queued.status, queued.body.toString());

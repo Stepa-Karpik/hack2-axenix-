@@ -52,7 +52,7 @@ async function fixture(page: Page) {
       await page.request.get(base + "/revisions/" + revision.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.11.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.12.0");
   return { id, base, revision, panel, analysis };
 }
 

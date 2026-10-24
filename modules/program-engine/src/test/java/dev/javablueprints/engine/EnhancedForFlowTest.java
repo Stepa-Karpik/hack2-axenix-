@@ -202,7 +202,7 @@ class EnhancedForFlowTest {
     }
 
     @Test void unsupportedBodiesPreserveWholeMethodWithoutPartialIterationNodesOrEdits() {
-        for (String body : List.of("try(java.io.StringReader r=new java.io.StringReader(\"\")){a();}", "outer:while(true){break outer;}", "switch(1){default -> a();}", "Runnable r=()->a();", "synchronized(this){a();}")) {
+        for (String body : List.of("outer:while(true){break outer;}", "switch(1){default -> a();}", "Runnable r=()->a();", "synchronized(this){a();}")) {
             String text = source("for(int v:values()){" + body + "}done();"); Analysis a = analyze(text);
             assertTrue(nodes(a).stream().anyMatch(n -> n.kind().equals("opaque")));
             assertTrue(nodes(a).stream().noneMatch(n -> n.kind().startsWith("foreach_")));

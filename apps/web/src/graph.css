@@ -202,3 +202,10 @@
 [data-theme="dark"] .flow-area .react-flow__edge-path {
   stroke: currentColor;
 }
+
+.flow-area .blueprint-node.resource_primary,
+.flow-area .blueprint-node.resource_throw,
+.flow-area .blueprint-node.resource_suppress {
+  --node-accent: #a78478;
+  --node-fill: color-mix(in srgb, var(--surface) 94%, #a78478);
+}

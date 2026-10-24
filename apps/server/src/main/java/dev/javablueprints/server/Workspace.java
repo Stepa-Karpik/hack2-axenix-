@@ -507,7 +507,7 @@ public class Workspace {
     var rows =
         db.queryForList(
             "SELECT"
-                + " id::text,type,status,attempt_id::text,result::text,error::text,progress::text,cancel_requested_at,created_at,finished_at"
+                + " id::text,type,status,input->>'revisionId' AS source_revision_id,result::text,attempt_id::text,error::text,progress::text,cancel_requested_at,created_at,finished_at"
                 + " FROM jobs WHERE project_id=? AND id=?",
             uuid(p),
             uuid(j));
@@ -522,6 +522,8 @@ public class Workspace {
         p,
         "type",
         row.get("type"),
+        "revisionId",
+        row.get("source_revision_id"),
         "status",
         row.get("status"),
         "attemptId",

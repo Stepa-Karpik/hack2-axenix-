@@ -176,12 +176,12 @@ class ExceptionFlowTest {
         assertFalse(rebuilt.graph().nodes().stream().anyMatch(n->n.label().equals("cleanup(3);")));
     }
 
-    @Test void tryWithResourcesRemainsExplicitlyOpaqueInsteadOfSkippingCloseOrSuppression() {
-        String source="class Main {int f(){try(java.io.StringReader r=new java.io.StringReader(\"x\")){return 1;}}}";
+    @Test void synchronizedRemainsExplicitlyOpaqueInsteadOfInventingMonitorSemantics() {
+        String source="class Main {int f(){synchronized(this){return 1;}}}";
         Analysis a=engine.inspect(bundle(source));
         assertTrue(a.graph().nodes().stream().anyMatch(n->n.kind().equals("opaque")));
         assertTrue(a.graph().nodes().stream().allMatch(n->n.allowedOperations().isEmpty()));
-        assertTrue(a.coverage().stream().anyMatch(c->c.feature().equals("exception_flow")&&c.reason().contains("resources")));
+        assertTrue(a.diagnostics().stream().anyMatch(d->d.code().equals("UNSUPPORTED_CONTROL_FLOW")));
     }
 
     @Test void expansionLimitRollsBackAllPartialFlowAndLeavesReadonlySourceBoundFallback() {

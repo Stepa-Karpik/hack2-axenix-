@@ -64,7 +64,7 @@ public class ApiController {
             "control_flow",
             map("status", "partial", "exceptionalFlow", "structured_conservative"),
             "exception_flow",
-            map("status", "partial", "scope", "ordinary_try_catch_finally", "catchDispatch", "ordered_runtime_type_predicates", "finallyCompletion", "context_specific", "expressionExceptions", "conservative", "tryWithResources", "unsupported"),
+            map("status", "partial", "scope", "try_catch_finally_and_resources", "catchDispatch", "ordered_runtime_type_predicates", "finallyCompletion", "context_specific", "expressionExceptions", "conservative", "tryWithResources", "explicit_cleanup_and_suppression", "resourceMethods", "atomic_conservative"),
             "switch_flow",
             map("status", "partial", "scope", "traditional_statement_switch", "exceptionalFlow", "unknown"),
             "enhanced_for_flow",

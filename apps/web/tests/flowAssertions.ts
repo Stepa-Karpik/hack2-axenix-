@@ -23,12 +23,29 @@ export async function revealPanel(page: Page, id: string, label: string) {
 export async function panToNode(page: Page, node: ReturnType<Page["locator"]>) {
   if (!(await page.locator(".react-flow__pane").isVisible()))
     await revealPanel(page, "graph", "Схема");
+  async function measuredBox(
+    locator: ReturnType<Page["locator"]>,
+  ): Promise<{ x: number; y: number; width: number; height: number }> {
+    let box: Awaited<ReturnType<typeof locator.boundingBox>> = null;
+    // Applying a revision replaces generated node IDs. An attached element can
+    // disappear before its geometry is measured; resolve the locator again.
+    await expect
+      .poll(
+        async () => {
+          box = await locator.boundingBox();
+          return box !== null && box.width > 0 && box.height > 0;
+        },
+        { message: "The current graph element must have measured geometry" },
+      )
+      .toBe(true);
+    return box!;
+  }
   for (let pass = 0; pass < 24; pass++) {
     const aperture = page.locator("[data-graph-aperture]");
-    const area = (await (
-      (await aperture.count()) ? aperture : page.locator(".react-flow__pane")
-    ).boundingBox())!;
-    const box = (await node.boundingBox())!;
+    const area = await measuredBox(
+      (await aperture.count()) ? aperture : page.locator(".react-flow__pane"),
+    );
+    const box = await measuredBox(node);
     const dx = area.x + area.width / 2 - box.x - box.width / 2;
     const dy = area.y + area.height / 2 - box.y - box.height / 2;
     if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;

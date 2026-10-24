@@ -1,4 +1,77 @@
-import type { GraphNode, SemanticModel } from "./types";
+import type { GraphNode, Method, SemanticModel } from "./types";
+// Analysis IDs change after source saves; camera identity describes the declaration.
+export function methodViewKey(
+  projectId: string,
+  method: Method | undefined,
+  methodId: string,
+) {
+  return JSON.stringify([
+    projectId,
+    method?.sourceRange.filePath ?? "",
+    method?.fullyQualifiedName ?? methodId,
+    method?.signature ?? "",
+  ]);
+}
+
+// Migrate only unambiguous nodes: inserting repeated statements must not transfer
+// one statement's manual position to a different equal statement.
+export function stableNodeKeys(nodes: GraphNode[]) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const fingerprints = new Map<string, string>();
+  for (const node of nodes) {
+    const ancestry: string[][] = [];
+    const visited = new Set<string>();
+    let current: GraphNode | undefined = node;
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id);
+      ancestry.push([
+        current.kind,
+        current.executionRole ?? "",
+        current !== node ||
+        ["entry", "block", "BlockStmt"].includes(current.kind)
+          ? ""
+          : current.label,
+      ]);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    fingerprints.set(node.id, JSON.stringify(ancestry));
+  }
+  const counts = new Map<string, number>();
+  for (const key of fingerprints.values())
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  return new Map([...fingerprints].filter(([, key]) => counts.get(key) === 1));
+}
+
+// Keep intentional manual positions fixed while automatic rows reflow around
+// them. Pinning a whole old automatic layout would trap new nodes in old ranks.
+export function placeManualFlow(
+  automatic: Map<string, { x: number; y: number }>,
+  manual: Map<string, { x: number; y: number }>,
+) {
+  const placed = new Map([...manual].filter(([id]) => automatic.has(id)));
+  const rows = new Map<number, [string, { x: number; y: number }][]>();
+  for (const [id, position] of automatic) {
+    if (!placed.has(id)) append(rows, position.y, [id, position]);
+  }
+  const overlaps = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    a.x < b.x + 288 && a.x + 288 > b.x && a.y < b.y + 108 && a.y + 108 > b.y;
+  let shift = 0;
+  for (const [rank, members] of [...rows].sort(([a], [b]) => a - b)) {
+    let y = rank + shift;
+    while (
+      members.some(([, position]) =>
+        [...placed.values()].some((other) =>
+          overlaps({ x: position.x, y }, other),
+        ),
+      )
+    )
+      y += 128;
+    shift = y - rank;
+    for (const [id, position] of members) placed.set(id, { x: position.x, y });
+  }
+  return placed;
+}
+
 export type VisualKind =
   | "method"
   | "terminal"
@@ -15,6 +88,17 @@ export function visualKind(
   node: GraphNode,
   semantics?: SemanticModel | null,
 ): VisualKind {
+  if (
+    ["resource_primary", "resource_throw", "resource_suppress"].includes(
+      node.kind,
+    )
+  )
+    return "return";
+  if (["resource_check", "resource_suppression_check"].includes(node.kind))
+    return "condition";
+  if (node.kind === "resource_init") return "variable";
+  if (node.kind === "resource_close") return "call";
+  if (node.kind === "resource_resume") return "structure";
   if (node.kind === "entry") return "method";
   if (["normal_exit", "exceptional_exit", "exit"].includes(node.kind))
     return "terminal";
@@ -389,11 +473,16 @@ export function flowPorts(source: RouteBox, target: RouteBox, kind: string) {
     } as const;
   const branch = kind === "true" || kind === "false";
   const sideways = Math.abs(dx) > 40 && (branch || Math.abs(dy) < 100);
-  const sourceSide: RouteSide = sideways
-    ? dx < 0
-      ? "left"
-      : "right"
-    : "bottom";
+  const sourceSide: RouteSide =
+    branch && Math.abs(dx) <= 40
+      ? kind === "true"
+        ? "left"
+        : "right"
+      : sideways
+        ? dx < 0
+          ? "left"
+          : "right"
+        : "bottom";
   const targetSide: RouteSide =
     target.y >= source.y + source.height + 24
       ? "top"

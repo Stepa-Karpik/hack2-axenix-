@@ -49,6 +49,9 @@ import {
   flowLabelTitle,
   loopAreas,
   visualKind,
+  methodViewKey,
+  stableNodeKeys,
+  placeManualFlow,
 } from "./flowLayout";
 import { api, projectPath } from "./api";
 import { operationAnchor } from "./state";
@@ -178,6 +181,14 @@ export function kindName(kind: string) {
         loop_back: "Повтор цикла",
         IfStmt: "Если",
         condition_test: "Проверка",
+        resource_init: "Открытие ресурса",
+        resource_primary: "Основное исключение",
+        resource_check: "Ресурс открыт?",
+        resource_close: "Закрытие ресурса",
+        resource_suppression_check: "То же исключение?",
+        resource_suppress: "Подавить исключение",
+        resource_throw: "Ошибка закрытия",
+        resource_resume: "Продолжение после ресурсов",
         try_entry: "Защищённый блок",
         catch_test: "Тип исключения",
         catch_entry: "Обработчик",
@@ -208,7 +219,7 @@ export function kindName(kind: string) {
         expression: "Выражение",
         merge: "Объединение",
         block: "Блок",
-        opaque: "Составной блок",
+        opaque: "Точный поток не поддерживается",
       } as Record<string, string>
     )[kind] ?? kind
   );
@@ -224,6 +235,8 @@ export function isIterationProtocol(
 export function nodeCaption(
   node: Pick<GraphNode, "kind" | "label" | "executionRole">,
 ) {
+  if (node.kind === "opaque")
+    return "Точный поток управления не поддерживается";
   return isIterationProtocol(node) ? kindName(node.kind) : node.label;
 }
 function ShortcutEdge({
@@ -385,7 +398,14 @@ export default function FlowCanvas({
   > | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const viewportWidth = useRef(0);
-  const cameraKey = `java-blueprints:camera:v2:${projectId}:${graph.revisionId}:${graph.analysisId}:${methodId}`;
+  const method = graph.methods.find((candidate) => candidate.id === methodId);
+  const viewKey = methodViewKey(projectId, method, methodId);
+  const cameraKey = `java-blueprints:camera:v3:${viewKey}`;
+  const initializedCamera = useRef<string | null>(null);
+  const initializedManual = useRef(new Set<string>());
+  const manualPositions = useRef(
+    new Map<string, Map<string, { x: number; y: number }>>(),
+  );
   const cameraKeyRef = useRef(cameraKey);
   cameraKeyRef.current = cameraKey;
   function safeArea() {
@@ -456,6 +476,7 @@ export default function FlowCanvas({
     () => graph.nodes.filter((n) => n.methodId === methodId),
     [graph, methodId],
   );
+  const nodeKeys = useMemo(() => stableNodeKeys(methodNodes), [methodNodes]);
   const ids = useMemo(
     () => new Set(executionNodes(methodNodes, graph.edges).map((n) => n.id)),
     [methodNodes, graph.edges],
@@ -517,6 +538,74 @@ export default function FlowCanvas({
   useEffect(() => {
     const visible = executionNodes(methodNodes, edges);
     const positions = arrangeFlow(visible, edges, methodNodes);
+    let remembered = manualPositions.current.get(viewKey);
+    if (!remembered) {
+      remembered = new Map();
+      try {
+        const saved: unknown = JSON.parse(
+          localStorage.getItem(`java-blueprints:positions:v2:${viewKey}`) ??
+            "null",
+        );
+        if (Array.isArray(saved)) {
+          initializedManual.current.add(viewKey);
+          for (const entry of saved) {
+            if (
+              Array.isArray(entry) &&
+              typeof entry[0] === "string" &&
+              entry[1] &&
+              Number.isFinite(entry[1].x) &&
+              Number.isFinite(entry[1].y)
+            )
+              remembered.set(entry[0], entry[1]);
+          }
+        }
+      } catch {}
+      manualPositions.current.set(viewKey, remembered);
+    }
+    const savedLayout =
+      layout?.analysisId === graph.analysisId && layout.methodId === methodId
+        ? layout
+        : null;
+    if (savedLayout && !initializedManual.current.has(viewKey)) {
+      // Legacy API layouts contain every coordinate. Only deviations from the
+      // canonical layout are evidence that a node was moved intentionally.
+      for (const position of savedLayout.positions) {
+        const key = nodeKeys.get(position.nodeId);
+        const automatic = positions.get(position.nodeId);
+        if (
+          key &&
+          automatic &&
+          (Math.abs(position.x - automatic.x) > 0.5 ||
+            Math.abs(position.y - automatic.y) > 0.5)
+        )
+          remembered.set(key, { x: position.x, y: position.y });
+      }
+      initializedManual.current.add(viewKey);
+      try {
+        localStorage.setItem(
+          `java-blueprints:positions:v2:${viewKey}`,
+          JSON.stringify([...remembered]),
+        );
+      } catch {}
+    }
+    const pinned = new Map<string, { x: number; y: number }>();
+    // Current-analysis server layouts remain exact, including ambiguous equal
+    // statements; only stable, explicit manual keys migrate to another analysis.
+    for (const position of savedLayout?.positions ?? []) {
+      const automatic = positions.get(position.nodeId);
+      if (
+        automatic &&
+        (Math.abs(position.x - automatic.x) > 0.5 ||
+          Math.abs(position.y - automatic.y) > 0.5)
+      )
+        pinned.set(position.nodeId, { x: position.x, y: position.y });
+    }
+    for (const node of visible) {
+      const key = nodeKeys.get(node.id);
+      const manual = key ? remembered.get(key) : undefined;
+      if (manual) pinned.set(node.id, manual);
+    }
+    const arranged = placeManualFlow(positions, pinned);
     let selectedVisible = selectedRef.current;
     const visited = new Set<string>();
     while (
@@ -531,8 +620,7 @@ export default function FlowCanvas({
     }
     setNodes(
       visible.map((n, i) => {
-        const pos = layout?.positions.find((p) => p.nodeId === n.id) ??
-          positions.get(n.id) ?? { x: 300, y: i * 135 };
+        const pos = arranged.get(n.id) ?? { x: 300, y: i * 135 };
         return {
           id: n.id,
           type: "blueprint",
@@ -570,7 +658,23 @@ export default function FlowCanvas({
     );
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (scopeRef.current !== scope) return;
+        if (
+          scopeRef.current !== scope ||
+          initializedCamera.current === cameraKey
+        )
+          return;
+        // A layout response selects the first viewport only. Later saves and
+        // reanalysis must not reposition a method the user is already viewing.
+        if (
+          (!layoutError &&
+            (!layout ||
+              layout.analysisId !== graph.analysisId ||
+              layout.methodId !== methodId)) ||
+          !flow.current ||
+          !visible.length
+        )
+          return;
+        initializedCamera.current = cameraKey;
         viewportWidth.current =
           container.current?.clientWidth || viewportWidth.current || 500;
         let camera: { x: number; y: number; zoom: number } | null = null;
@@ -586,22 +690,31 @@ export default function FlowCanvas({
           )
             camera = saved;
         } catch {}
-        if (camera) void flow.current?.setViewport(camera);
-        else if (layout?.positions.length)
-          void flow.current?.setViewport(layout.viewport);
+        if (camera) void flow.current?.setViewport(camera).then(persistCamera);
+        else if (
+          layout?.analysisId === graph.analysisId &&
+          layout.methodId === methodId &&
+          layout.positions.length
+        )
+          void flow.current?.setViewport(layout.viewport).then(persistCamera);
         else {
           const entry = visible.find((node) => node.kind === "entry");
           const entryPosition = entry ? positions.get(entry.id) : undefined;
           const area = safeArea();
-          void flow.current?.setViewport({
-            x: area.x + area.width / 2 - ((entryPosition?.x ?? 0) + 132) * 0.85,
-            y: area.y + 120 - (entryPosition?.y ?? 0) * 0.85,
-            zoom: 0.85,
-          });
+          void flow.current
+            ?.setViewport({
+              x:
+                area.x +
+                area.width / 2 -
+                ((entryPosition?.x ?? 0) + 132) * 0.85,
+              y: area.y + 120 - (entryPosition?.y ?? 0) * 0.85,
+              zoom: 0.85,
+            })
+            .then(persistCamera);
         }
       }),
     );
-  }, [methodNodes, edges, layout]);
+  }, [methodNodes, edges, layout, layoutError, cameraKey, viewKey, nodeKeys]);
   // Binding availability can change while the editor has a dirty draft. Only
   // update visual categories; never reinitialize positions, selection or camera.
   useEffect(() => {
@@ -686,9 +799,12 @@ export default function FlowCanvas({
           ? flowPorts(sourceBox, targetBox, edge.kind)
           : { sourceSide: "bottom" as const, targetSide: "top" as const };
       const kind = source?.data.visualKind;
-      const exceptional = ["throw", "exception", "uncaught"].includes(
-        edge.kind,
-      );
+      const exceptional = [
+        "throw",
+        "exception",
+        "uncaught",
+        "resource_exception",
+      ].includes(edge.kind);
       const color =
         exceptional || kind === "return"
           ? "var(--graph-return)"
@@ -791,10 +907,12 @@ export default function FlowCanvas({
       viewportWidth.current = next;
       if (width && next && width !== next && flow.current) {
         const viewport = flow.current.getViewport();
-        void flow.current.setViewport({
-          ...viewport,
-          x: viewport.x + (next - width) / 2,
-        });
+        void flow.current
+          .setViewport({
+            ...viewport,
+            x: viewport.x + (next - width) / 2,
+          })
+          .then(persistCamera);
       }
     });
     observer.observe(element);
@@ -813,8 +931,19 @@ export default function FlowCanvas({
       ),
     [],
   );
-  async function saveLayout() {
+  async function saveLayout(dragged: Node<FlowData>) {
     if (!layout || stale || readOnly) return;
+    const remembered = new Map(manualPositions.current.get(viewKey));
+    const key = nodeKeys.get(dragged.id);
+    if (key) remembered.set(key, { ...dragged.position });
+    initializedManual.current.add(viewKey);
+    manualPositions.current.set(viewKey, remembered);
+    try {
+      localStorage.setItem(
+        `java-blueprints:positions:v2:${viewKey}`,
+        JSON.stringify([...remembered]),
+      );
+    } catch {}
     try {
       const requestedScope = scope;
       const saved = await api<Layout>(
@@ -826,7 +955,10 @@ export default function FlowCanvas({
             methodId,
             sourceMapVersion: graph.sourceMapVersion,
             layoutVersion: layout.layoutVersion,
-            positions: nodes.map((n) => ({ nodeId: n.id, ...n.position })),
+            positions: nodes.map((n) => ({
+              nodeId: n.id,
+              ...(n.id === dragged.id ? dragged.position : n.position),
+            })),
             collapsedNodeIds: layout.collapsedNodeIds,
             viewport: flow.current?.getViewport() ?? layout.viewport,
           },
@@ -920,9 +1052,12 @@ export default function FlowCanvas({
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         onNodesChange={changes}
-        onNodeDragStop={() => void saveLayout()}
+        onNodeDragStop={(_, node) => void saveLayout(node)}
         onMoveEnd={(event, viewport) => {
-          if (!event) return;
+          // Controls finish programmatic animations too. Ignore only the default
+          // viewport before this method's first initialization.
+          if (!event && initializedCamera.current !== cameraKeyRef.current)
+            return;
           try {
             localStorage.setItem(
               cameraKeyRef.current,

@@ -11,6 +11,9 @@ import {
   flowPorts,
   routePort,
   branchLabelPosition,
+  methodViewKey,
+  stableNodeKeys,
+  placeManualFlow,
 } from "./flowLayout.ts";
 
 test("short condition branches leave toward their real targets without an exterior detour", () => {
@@ -467,4 +470,155 @@ test("sequential steps retain one readable top-to-bottom lane", () => {
   assert.equal(new Set(points.map((p) => p.x)).size, 1);
   for (let i = 1; i < points.length; i++)
     assert.ok(points[i].y - points[i - 1].y >= 128);
+});
+
+test("method camera identity survives analysis IDs and source shifts but isolates declarations and projects", () => {
+  const method = {
+    id: "old",
+    sourceRange: { filePath: "Main.java", startOffset: 10 },
+    fullyQualifiedName: "Main.answer",
+    signature: "answer(boolean)",
+  };
+  const key = methodViewKey("project", method, method.id);
+  assert.equal(
+    methodViewKey(
+      "project",
+      {
+        ...method,
+        id: "new",
+        sourceRange: { ...method.sourceRange, startOffset: 200 },
+      },
+      "new",
+    ),
+    key,
+  );
+  for (const changed of [
+    { ...method, signature: "answer(int)" },
+    { ...method, fullyQualifiedName: "Other.answer" },
+    { ...method, sourceRange: { filePath: "Other.java" } },
+  ])
+    assert.notEqual(methodViewKey("project", changed, "other"), key);
+  assert.notEqual(methodViewKey("other-project", method, method.id), key);
+});
+
+test("manual positions migrate only unambiguous node identities across regenerated IDs and block body changes", () => {
+  const before = [
+    { id: "entry", kind: "entry", label: "old method body", parentId: null },
+    { id: "block", kind: "block", label: "old block body", parentId: "entry" },
+    { id: "return", kind: "ReturnStmt", label: "return 1;", parentId: "block" },
+  ];
+  const after = before.map((node) => ({
+    ...node,
+    id: "new-" + node.id,
+    parentId: node.parentId ? "new-" + node.parentId : null,
+    label: node.kind === "ReturnStmt" ? node.label : "changed body",
+  }));
+  const oldKeys = stableNodeKeys(before),
+    newKeys = stableNodeKeys(after);
+  assert.equal(oldKeys.get("return"), newKeys.get("new-return"));
+  const repeated = stableNodeKeys([
+    ...before,
+    { ...before[2], id: "other-return" },
+  ]);
+  assert.equal(repeated.has("return"), false);
+  assert.equal(repeated.has("other-return"), false);
+});
+
+test("vertically aligned saved branch targets retain distinct side ports and labels", () => {
+  const source = { id: "condition", x: 0, y: 0, width: 264, height: 84 };
+  const target = { id: "return", x: 0, y: 180, width: 264, height: 84 };
+  const yes = flowPorts(source, target, "true"),
+    no = flowPorts(source, target, "false");
+  assert.equal(yes.sourceSide, "left");
+  assert.equal(no.sourceSide, "right");
+  assert.notDeepEqual(
+    branchLabelPosition(routePort(source, yes.sourceSide), yes.sourceSide),
+    branchLabelPosition(routePort(source, no.sourceSide), no.sourceSide),
+  );
+  for (const ports of [yes, no]) {
+    const route = routeOrthogonal(
+      routePort(source, ports.sourceSide),
+      routePort(target, ports.targetSide),
+      400,
+      [source, target],
+      22,
+      ports.sourceSide,
+      22,
+      ports.targetSide,
+      true,
+    );
+    assert.equal(route.complete, true);
+    for (let i = 1; i < route.points.length; i++)
+      assert.ok(
+        [source, target].every(
+          (box) => !segmentHitsBox(route.points[i - 1], route.points[i], box),
+        ),
+      );
+  }
+});
+
+test("resource protocol nodes preserve restrained operation categories", () => {
+  for (const [kind, expected] of Object.entries({
+    resource_init: "variable",
+    resource_close: "call",
+    resource_check: "condition",
+    resource_suppression_check: "condition",
+    resource_primary: "return",
+    resource_suppress: "return",
+    resource_throw: "return",
+    resource_resume: "structure",
+  }))
+    assert.equal(visualKind({ kind }), expected);
+});
+
+test("structural reanalysis reflows automatic nodes and preserves only the dragged node", () => {
+  const previous = new Map([
+    ["entry", { x: 0, y: 0 }],
+    ["markA", { x: 0, y: 128 }],
+    ["ifFalse", { x: 0, y: 256 }],
+    ["exit", { x: 0, y: 384 }],
+  ]);
+  const wrapped = new Map([
+    ["entry", { x: 0, y: 0 }],
+    ["markA", { x: 0, y: 128 }],
+    ["newLoopCheck", { x: 0, y: 256 }],
+    ["ifFalse", { x: 0, y: 384 }],
+    ["exit", { x: 0, y: 512 }],
+  ]);
+  const manuallyMoved = new Map([["markA", { x: 100, y: 148 }]]);
+  const placed = placeManualFlow(wrapped, manuallyMoved);
+  assert.deepEqual(placed.get("markA"), { x: 100, y: 148 });
+  assert.deepEqual(placed.get("ifFalse"), wrapped.get("ifFalse"));
+  assert.notDeepEqual(placed.get("ifFalse"), previous.get("ifFalse"));
+  assert.notDeepEqual(placed.get("ifFalse"), placed.get("newLoopCheck"));
+  assert.deepEqual(previous.get("ifFalse"), { x: 0, y: 256 });
+});
+
+test("new automatic rows avoid retained manual nodes without moving the manual layout or reversing later ranks", () => {
+  const automatic = new Map([
+    ["entry", { x: 0, y: 0 }],
+    ["moved", { x: 0, y: 128 }],
+    ["newCheck", { x: 0, y: 256 }],
+    ["ifFalse", { x: 0, y: 384 }],
+    ["exit", { x: 0, y: 512 }],
+  ]);
+  const manual = new Map([
+    ["moved", { x: 0, y: 256 }],
+    ["removed", { x: 0, y: 640 }],
+  ]);
+  const snapshot = JSON.stringify([...automatic]);
+  const placed = placeManualFlow(automatic, manual);
+  assert.deepEqual(placed.get("moved"), { x: 0, y: 256 });
+  assert.equal(placed.has("removed"), false);
+  assert.ok(placed.get("newCheck").y > 256);
+  assert.ok(placed.get("ifFalse").y > placed.get("newCheck").y);
+  assert.ok(placed.get("exit").y > placed.get("ifFalse").y);
+  const boxes = [...placed].map(([id, p]) => ({ id, ...p }));
+  for (let i = 0; i < boxes.length; i++)
+    for (const other of boxes.slice(i + 1))
+      assert.ok(
+        Math.abs(boxes[i].x - other.x) >= 264 ||
+          Math.abs(boxes[i].y - other.y) >= 84,
+      );
+  assert.equal(JSON.stringify([...automatic]), snapshot);
 });

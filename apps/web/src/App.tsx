@@ -444,9 +444,13 @@ function Workbench({
   directoriesRef.current = directories;
   const [tabs, setTabs] = useState<string[]>(initialView.tabs ?? []);
   const modelIds = useRef<Record<string, string>>({});
+  const retiredModelIds = useRef<string[]>([]);
   useEffect(
     () => () => {
-      disposeEditorModels(Object.values(modelIds.current));
+      disposeEditorModels([
+        ...Object.values(modelIds.current),
+        ...retiredModelIds.current,
+      ]);
     },
     [],
   );
@@ -939,7 +943,8 @@ function Workbench({
   useEffect(() => {
     if (!dirty || conflict || readOnly || !revision || manualSaveRequired)
       return;
-    const timer = setTimeout(() => void save(), 1800);
+    // Local drafts persist on every edit; publish after a longer idle pause.
+    const timer = setTimeout(() => void save(), 8000);
     return () => clearTimeout(timer);
   }, [
     files,
@@ -955,6 +960,7 @@ function Workbench({
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
+        e.stopPropagation();
         void save();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !accessReadOnly) {
@@ -971,8 +977,9 @@ function Workbench({
         workspace.setMaximized(null);
       }
     };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
+    // Capture Save before Monaco handles it and stops the event bubbling.
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
   }, [save, dirty, accessReadOnly]);
   useEffect(() => {
     setReportId(undefined);
@@ -1070,7 +1077,7 @@ function Workbench({
     );
   }
   function edit(text: string) {
-    if (readOnly) return;
+    if (readOnly || filesRef.current[file] === text) return;
     proposalEpoch.current++;
     const next = { ...filesRef.current, [file]: text };
     filesRef.current = next;
@@ -1139,6 +1146,15 @@ function Workbench({
       throw new Error(
         "Дождитесь завершения действия или разрешите конфликт версий.",
       );
+    if (
+      revision &&
+      !hasChanges(snapshot.files, filesOf(revision)) &&
+      JSON.stringify(directoryPaths(snapshot.files, snapshot.directories)) ===
+        JSON.stringify(
+          directoryPaths(filesOf(revision), revision.directories ?? []),
+        )
+    )
+      return;
     savingRef.current = true;
     setSaving(true);
     setTreeSaving(true);
@@ -1196,7 +1212,7 @@ function Workbench({
     }
   }
   async function changePath(
-    kind: "file" | "folder" | "move",
+    kind: "file" | "folder" | "move" | "delete",
     from: string,
     to: string,
   ) {
@@ -1204,10 +1220,31 @@ function Workbench({
       files: filesRef.current,
       directories: directoriesRef.current,
     };
+    const affected = (path: string) =>
+      path === from || path.startsWith(from + "/");
+    if (
+      kind === "delete" &&
+      !Object.hasOwn(snapshot.files, from) &&
+      !directoryPaths(snapshot.files, snapshot.directories).includes(from)
+    )
+      throw new Error("Файл или папка больше не существует.");
     const next =
-      kind === "move"
-        ? movePath(snapshot, from, to)
-        : addPath(snapshot, to, kind === "folder");
+      kind === "delete"
+        ? {
+            files: Object.fromEntries(
+              Object.entries(snapshot.files).filter(
+                ([path]) => !affected(path),
+              ),
+            ),
+            // Preserve parents made empty by deleting their last file.
+            directories: directoryPaths(
+              snapshot.files,
+              snapshot.directories,
+            ).filter((path) => !affected(path)),
+          }
+        : kind === "move"
+          ? movePath(snapshot, from, to)
+          : addPath(snapshot, to, kind === "folder");
     const identity = selectedMethodIdentity.current;
     const selections = methodSelections.current;
     const mapped = (p: string) =>
@@ -1231,6 +1268,27 @@ function Workbench({
           modelIds.current = remapModels(modelIds.current, from, to);
           setTabs((old) => old.map(mapped));
           setFile((old) => mapped(old));
+        } else if (kind === "delete") {
+          setTabs((old) => old.filter((path) => !affected(path)));
+          setFile((old) =>
+            affected(old) ? (Object.keys(next.files)[0] ?? "") : old,
+          );
+          methodSelections.current = Object.fromEntries(
+            Object.entries(selections).filter(([path]) => !affected(path)),
+          );
+          if (identity && affected(identity.filePath))
+            selectedMethodIdentity.current = undefined;
+          // Recreating a deleted path must not reuse its old undo model.
+          retiredModelIds.current.push(
+            ...Object.entries(modelIds.current)
+              .filter(([path]) => affected(path))
+              .map(([, id]) => id),
+          );
+          modelIds.current = Object.fromEntries(
+            Object.entries(modelIds.current).filter(
+              ([path]) => !affected(path),
+            ),
+          );
         } else if (kind === "file") setFile(to);
       });
     } catch (e) {
@@ -1837,7 +1895,20 @@ function Workbench({
         <div className="editor-caption">
           <span>СХЕМА МЕТОДА</span>
           <span>{method ? method.signature : "Выберите метод"}</span>
+          {graph && (
+            <span title={graph.revisionId}>
+              Версия {short(graph.revisionId)}
+              {stale ? " · схема сохранённого кода" : " · актуальная схема"}
+            </span>
+          )}
         </div>
+        {graph && stale && (
+          <p className="small quiet" role="status">
+            {dirty
+              ? "Редактор содержит локальный черновик. Схема показывает сохранённую версию; Ctrl+S сохранит код и обновит схему."
+              : "Схема относится к предыдущей сохранённой версии; обновление ещё не завершено."}
+          </p>
+        )}
         {graph && methodId ? (
           <FlowCanvas
             graph={graph}
@@ -2065,6 +2136,20 @@ function Workbench({
     ),
     analysis: (
       <aside className="inspector">
+        {graph?.nodes.some(
+          (node) => node.methodId === methodId && node.kind === "opaque",
+        ) && (
+          <div
+            className="notice"
+            role="status"
+            data-testid="opaque-method-notice"
+          >
+            Внутренний поток этого метода не раскрыт: есть неподдерживаемая
+            конструкция или превышен лимит анализа. Составной блок показывает
+            исходный код целиком, а не полную схему ветвлений. Причина указана в
+            диагностике анализа.
+          </div>
+        )}
         <CodeInsights
           analysis={analysis}
           methodId={methodId}
@@ -2460,6 +2545,23 @@ function Workbench({
     console: (
       <div className="dock-content">
         <>
+          {job?.type === "run" &&
+            (dirty ||
+              ((job.revisionId ?? report?.revisionId) &&
+                (job.revisionId ?? report?.revisionId) !== revision?.id)) && (
+              <div
+                className="notice"
+                role="status"
+                data-testid="run-source-provenance"
+              >
+                {(job.revisionId ?? report?.revisionId)
+                  ? `Вывод запуска версии ${short(job.revisionId ?? report?.revisionId)}.`
+                  : "Вывод запуска сохранённой версии."}
+                {dirty
+                  ? " Локальный черновик ещё не запускался."
+                  : " Это запуск предыдущей версии. Текущая версия кода отличается; запустите её для нового вывода."}
+              </div>
+            )}
           {job?.type === "run" && ["queued", "running"].includes(job.status) ? (
             <LiveConsole
               projectId={projectId}

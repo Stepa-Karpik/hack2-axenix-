@@ -198,6 +198,7 @@ export interface LiveRun {
   elapsedMs: number;
 }
 export interface Job {
+  revisionId?: string | null;
   progress?: ComparisonProgress | null;
   cancelRequestedAt?: string | null;
   live?: LiveRun | null;

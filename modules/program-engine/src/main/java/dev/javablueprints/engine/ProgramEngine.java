@@ -25,7 +25,7 @@ import java.util.function.Supplier;
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.11.0"; }
+    private static String analyzerVersion() { return "engine-0.12.0"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -33,6 +33,7 @@ public final class ProgramEngine {
     private static final int MAX_FOREACH_LOOPS_PER_METHOD = 1024;
     private static final int MAX_FLOW_NODES_PER_METHOD = 8192;
     private static final int MAX_FLOW_EDGES_PER_METHOD = 24576;
+    private static final int MAX_RESOURCES_PER_TRY = 64;
     public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
     public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
@@ -349,11 +350,17 @@ public final class ProgramEngine {
     }
 
     private static boolean unsupportedFlow(Node body) {
-        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt t && !t.getResources().isEmpty() || s instanceof SwitchStmt sw && !supportedSwitch(sw)
+        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt t && t.getResources().stream().anyMatch(r -> !supportedResource(r)) || s instanceof SwitchStmt sw && !supportedSwitch(sw)
                 || s instanceof LabeledStmt || s instanceof SynchronizedStmt
                 || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
                 || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
                 || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
+    }
+
+    private static boolean supportedResource(Expression resource) {
+        return resource instanceof NameExpr || resource instanceof FieldAccessExpr
+                || resource instanceof VariableDeclarationExpr declaration && declaration.getVariables().size() == 1
+                && declaration.getVariable(0).getInitializer().isPresent();
     }
 
     private static boolean supportedSwitch(SwitchStmt statement) {
@@ -519,8 +526,8 @@ public final class ProgramEngine {
                 });
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
-                new Capability("control_flow", "partial", "Structured conditions/loops/colon switch and ordinary try/catch/finally with pending abrupt completion; calls/expressions are atomic, exception types conservative, resource protocols and opaque constructs are not complete CFG"),
-                new Capability("exception_flow", builder.invalid ? "not_requested" : "partial", "Ordinary try/catch/finally: ordered runtime-type predicates, multi-catch, nested context-specific cleanup, return/throw/break/continue including overrides. Potential atomic-expression exceptions conservative, no interprocedural type proof. Try-with-resources remains opaque. Expansion bounded to8192 nodes/24576edges per method"),
+                new Capability("control_flow", "partial", "Structured conditions/loops/colon switch, try/catch/finally and try-with-resources cleanup. Calls/expressions and resource methods remain atomic; opaque constructs and runtime type inference are not complete CFG"),
+                new Capability("exception_flow", builder.invalid ? "not_requested" : "partial", "Ordered catches and context-specific finally/resource cleanup: left-to-right acquisition, reverse close, null skip, primary/suppressed exceptions, return/throw/break/continue overrides. Atomic-expression/close/addSuppressed failures conservative, no interprocedural type proof. Bounded to64 resources per try and8192 nodes/24576edges per method"),
                 new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Short-circuit &&/||/!/parentheses in supported if/while/do/for conditions, at most4096 tests/method; each atom evaluated once. In try-containing methods conservative exceptional exits (including unboxing) target active handler, otherwise normal-only projection. Opaque methods unsupported"),
                 new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
                 new Capability("enhanced_for_flow", builder.invalid ? "not_requested" : "partial", "Normal iteration abstraction, source evaluated once, synthetic check/bind/advance; at most 1024 enhanced-for loops per method. Advance means continuation, not Iterator.next; array/Iterable protocol details and exceptional flow are unknown. Type validity requires isolated compilation"),
@@ -668,7 +675,7 @@ public final class ProgramEngine {
             if (buildingFlow && nodes.size() - methodNodeStart >= MAX_FLOW_NODES_PER_METHOD) throw new FlowLimit();
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
-            boolean readOnly = Set.of("condition_test", "switch_selector", "switch_case", "foreach_source", "catch_test", "catch_entry", "finally_entry", "try_entry").contains(kind);
+            boolean readOnly = Set.of("condition_test", "switch_selector", "switch_case", "foreach_source", "catch_test", "catch_entry", "finally_entry", "try_entry", "resource_init").contains(kind);
             if (!opaqueMethod && !readOnly && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
                 fieldRanges = Map.of("expression", map.range(expression));
             } else if (!opaqueMethod && condition(ast) != null) {
@@ -748,7 +755,8 @@ public final class ProgramEngine {
                         : switchLimit ? "Method preserved; switch entry/label budget exceeded"
                         : iterationLimit ? "Method preserved; enhanced-for iteration budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure";
                 diagnostics.add(new Diagnostic(id(), "warning", code, reason, map.range(body)));
-                edge(first, normalExit, "normal"); edge(first, exceptionalExit, "throw");
+                edge(first, normalExit, "normal", null, null, "conservative", "Opaque method may complete normally");
+                edge(first, exceptionalExit, "throw", null, null, "conservative", "Opaque method may complete exceptionally");
             } else {
                 buildingFlow = true;
                 try { first = flow(body, normalExit, null, null, root); }
@@ -928,6 +936,7 @@ public final class ProgramEngine {
             return current;
         }
         String tryFlow(TryStmt statement, String next, FlowContext outer, String parent) {
+            if (statement.getResources().size() > MAX_RESOURCES_PER_TRY) throw new FlowLimit();
             String entry = node(statement, "try_entry", parent, "try");
             Finalizer cleanup = new Finalizer(statement.getFinallyBlock().orElse(null), outer, entry);
             FlowContext handler = new FlowContext(() -> cleanup.to("return", outer.returned()),
@@ -948,8 +957,24 @@ public final class ProgramEngine {
                 return cursor;
             }));
             FlowContext body = new FlowContext(handler.returned(), dispatch, handler.broken(), handler.continued(), outer.tag(), true);
-            edge(entry, flow(statement.getTryBlock(), after, body, entry), "normal");
+            edge(entry, resourceFlow(statement, 0, after, body, entry), "normal");
             return entry;
+        }
+        String resourceFlow(TryStmt statement, int index, String next, FlowContext outer, String parent) {
+            if (index == statement.getResources().size()) return flow(statement.getTryBlock(), next, outer, parent);
+            Expression resource = statement.getResources().get(index);
+            String name = resource instanceof VariableDeclarationExpr declaration
+                    ? declaration.getVariable(0).getNameAsString() : raw(resource);
+            String init = node(resource, "resource_init", parent, raw(resource));
+            ResourceFinalizer cleanup = new ResourceFinalizer(name, outer, init);
+            FlowContext acquired = new FlowContext(() -> cleanup.to("return", outer.returned()),
+                    () -> cleanup.to("throw", outer.thrown()), () -> cleanup.to("break", outer.broken()),
+                    () -> cleanup.to("continue", outer.continued()), outer.tag(), true);
+            String after = cleanup.to("normal", () -> next);
+            edge(init, resourceFlow(statement, index + 1, after, acquired, init), "normal");
+            // Initialization failure is outside this resource's cleanup, but inside earlier resources.
+            mayThrow(init, resource, outer);
+            return init;
         }
         String inContext(String tag, Supplier<String> build) {
             String previous = completionContext; completionContext = tag;
@@ -987,6 +1012,58 @@ public final class ProgramEngine {
                 String first = flow(body, resume, outer.tagged(tag), entry);
                 edge(entry, first, "finally", title, tag, "exact", "Execute cleanup before resuming the saved completion");
                 return entry;
+            }
+        }
+        /** JLS14.20.3 resource wrapper, applied recursively in acquisition order. */
+        private final class ResourceFinalizer {
+            private final String name;
+            private final FlowContext outer;
+            private final String parent;
+            private final Map<String,String> copies = new HashMap<>();
+            ResourceFinalizer(String name, FlowContext outer, String parent) {
+                this.name = name; this.outer = outer; this.parent = parent;
+            }
+            String to(String completion, Supplier<String> continuation) {
+                String target = continuation.get();
+                if (target == null) return null;
+                String key = completion + ":" + target;
+                if (copies.containsKey(key)) return copies.get(key);
+                return inContext(outer.tag(), () -> {
+                    String tag = parent + ":resource:" + key;
+                    boolean primary = completion.equals("throw");
+                    String title = switch (completion) {
+                        case "return" -> "возврат"; case "throw" -> "исключение";
+                        case "break" -> "выход из цикла"; case "continue" -> "следующая итерация";
+                        default -> "продолжение";
+                    };
+                    String check = node(null, "resource_check", parent, name + " != null");
+                    String entry = primary ? node(null, "resource_primary", parent, "Сохранить основное исключение · " + name) : check;
+                    copies.put(key, entry);
+                    String resume = node(null, "resource_resume", parent, "Продолжить: " + title + " · " + name);
+                    String close = node(null, "resource_close", parent, name + ".close()");
+                    String thrown = outer.thrown().get();
+                    if (primary) edge(entry, check, "resource_close", "сохранить исключение", tag, "exact", "Capture the pending Throwable before closing this resource");
+                    edge(check, close, "true", "да", tag, "exact", "Close the captured resource snapshot only when non-null; do not reevaluate its initializer/reference");
+                    edge(check, resume, "false", "нет", tag, "exact", "Null resource is skipped");
+                    edge(close, resume, "normal", "закрыт", tag, "exact", "close completed normally; retain the pending completion");
+                    edge(resume, target, "resume", primary ? "основное исключение" : title, tag, "exact", "Resume only this saved completion after resource cleanup");
+                    String failed = node(null, "resource_throw", parent, "Ошибка " + (primary ? "addSuppressed" : "close") + " заменяет " + title + " · " + name);
+                    edge(failed, thrown, "resource_exception", "новое исключение", tag, "exact", "The newly thrown close/suppression exception replaces the pending completion; enclosing acquired resources still close");
+                    if (!primary) {
+                        edge(close, failed, "exception", "ошибка close", tag, "conservative", "The atomic captured resource.close() call may throw; runtime exception type is not inferred");
+                    } else {
+                        String same = node(null, "resource_suppression_check", parent, "ошибка close == основное исключение · " + name);
+                        String suppress = node(null, "resource_suppress", parent, "основное.addSuppressed(ошибка close) · " + name);
+                        String self = node(null, "resource_throw", parent, "IllegalArgumentException · самоподавление · " + name);
+                        edge(close, same, "exception", "ошибка close", tag, "conservative", "close may throw while a primary Throwable is pending; compare exception identity before adding suppression");
+                        edge(same, self, "true", "да", tag, "exact", "Self-suppression throws a new IllegalArgumentException even when suppression is disabled");
+                        edge(self, thrown, "resource_exception", "новое исключение", tag, "exact", "Self-suppression replaces the primary Throwable; enclosing resources receive the new exception");
+                        edge(same, suppress, "false", "нет", tag, "exact", "Distinct close failure is passed to primary.addSuppressed");
+                        edge(suppress, resume, "suppressed", "основное сохранено", tag, "exact", "Atomic addSuppressed returns normally: preserve the primary; append the close failure only if suppression is enabled");
+                        edge(suppress, failed, "exception", "ошибка addSuppressed", tag, "conservative", "addSuppressed may fail, for example due to allocation failure; the newly thrown exception replaces the primary");
+                    }
+                    return entry;
+                });
             }
         }
         void mayThrow(String source, Expression expression, FlowContext context) {

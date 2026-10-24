@@ -1,0 +1,88 @@
+[
+  {
+    "id": "left-to-right-reverse-close",
+    "argv": ["ordered"],
+    "expectedStdout": "+A+Bbody-B-Adone"
+  },
+  { "id": "null-skip", "argv": ["null"], "expectedStdout": "+A+Cbody-C-A" },
+  {
+    "id": "later-initializer-failure",
+    "argv": ["init", "false"],
+    "expectedStdout": "+A+B-A|IllegalStateException:initB[]"
+  },
+  {
+    "id": "initializer-primary-close-suppressed",
+    "argv": ["init", "true"],
+    "expectedStdout": "+A+B-A|IllegalStateException:initB[closeA;]"
+  },
+  {
+    "id": "body-primary-two-suppressed",
+    "argv": ["primary", "true"],
+    "expectedStdout": "+A+Bbody-B-A|IllegalArgumentException:body[closeB;closeA;]"
+  },
+  {
+    "id": "normal-close-primary",
+    "argv": ["primary", "false"],
+    "expectedStdout": "+A+Bbody-B-A|IllegalArgumentException:closeB[closeA;]"
+  },
+  {
+    "id": "return-preserved",
+    "argv": ["return", "false"],
+    "expectedStdout": "+Areturn-A7"
+  },
+  {
+    "id": "close-overrides-return",
+    "argv": ["return", "true"],
+    "expectedStdout": "+Areturn-A|IllegalArgumentException:closeA[]"
+  },
+  {
+    "id": "break-preserved",
+    "argv": ["jump", "false", "false"],
+    "expectedStdout": "+A0-Adone"
+  },
+  {
+    "id": "continue-preserved",
+    "argv": ["jump", "true", "false"],
+    "expectedStdout": "+A0-A+A1-Adone"
+  },
+  {
+    "id": "close-overrides-break",
+    "argv": ["jump", "false", "true"],
+    "expectedStdout": "+A0-Acaughttail+A1-Acaughttaildone"
+  },
+  {
+    "id": "close-overrides-continue",
+    "argv": ["jump", "true", "true"],
+    "expectedStdout": "+A0-Acaughttail+A1-Acaughttaildone"
+  },
+  {
+    "id": "nested-before-catch-finally",
+    "argv": ["nested"],
+    "expectedStdout": "+A+Bbody-B-A|IllegalArgumentException:body[closeB;closeA;]finally"
+  },
+  {
+    "id": "existing-effectively-final",
+    "argv": ["existing"],
+    "expectedStdout": "+A+Bbody-B-A"
+  },
+  {
+    "id": "self-suppression",
+    "argv": ["self"],
+    "expectedStdout": "+Abody-A|IllegalArgumentException:cause=true:suppressed=0"
+  },
+  {
+    "id": "suppression-disabled",
+    "argv": ["disabled"],
+    "expectedStdout": "+A+Bbody-B-A|Quiet:quiet[]"
+  },
+  {
+    "id": "checked-close",
+    "argv": ["checked"],
+    "expectedStdout": "+Abody-A|IOException:checked[]"
+  },
+  {
+    "id": "error-primary-and-close",
+    "argv": ["error"],
+    "expectedStdout": "+Abody-A|AssertionError:bodyError[closeError;]"
+  }
+]
