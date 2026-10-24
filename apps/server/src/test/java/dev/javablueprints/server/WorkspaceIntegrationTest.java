@@ -1565,6 +1565,43 @@ class WorkspaceIntegrationTest {
     assertEquals(progress,w.job(p,job).get("progress"));
   }
 
+  @Test
+  void projectSearchFindsOldNamesAndPaginatesStableTiesWithoutDuplicates() throws Exception {
+    String prefix = "find-" + id();
+    List<String> matching = new ArrayList<>();
+    for (int i=0;i<25;i++) {
+      String p=obj(post("/projects",map("name",prefix+" ПРОБА "+i),id(),null)).get("id").toString();
+      matching.add(p);
+      w.db.update("UPDATE projects SET created_at='2000-01-01T00:00:00Z'::timestamptz WHERE id=?",uuid(p));
+    }
+    for(int i=0;i<21;i++) project();
+    var recent=(List<Map<String,Object>>)data(send("GET","/projects",null,null,null,null));
+    assertTrue(recent.stream().noneMatch(p->matching.contains(p.get("id").toString())));
+    String query=java.net.URLEncoder.encode(prefix+" проба",java.nio.charset.StandardCharsets.UTF_8);
+    Reply first=send("GET","/projects?limit=20&q="+query,null,null,null,null);
+    assertEquals(200,first.status());var page=(List<Map<String,Object>>)data(first);assertEquals(20,page.size());
+    matching.sort(Comparator.reverseOrder());
+    assertEquals(matching.subList(0,20),page.stream().map(p->p.get("id").toString()).toList());
+    var next=(List<Map<String,Object>>)data(send("GET","/projects?limit=20&q="+query+"&before="+page.getLast().get("id"),null,null,null,null));
+    assertEquals(matching.subList(20,25),next.stream().map(p->p.get("id").toString()).toList());
+    assertEquals(0,((List<?>)data(send("GET","/projects?q="+query+"&before="+next.getLast().get("id"),null,null,null,null))).size());
+  }
+
+  @Test
+  void projectSearchTreatsWildcardsLiterallyAndRejectsInvalidBounds() throws Exception {
+    var capabilities=obj(send("GET","/capabilities",null,null,null,null));
+    assertTrue(((List<?>)capabilities.get("implementedCommands")).contains("optimize_membership"));
+    String name="literal-"+id()+" Смета %_\\O'Reilly";
+    String p=obj(post("/projects",map("name",name),id(),null)).get("id").toString();
+    String q=java.net.URLEncoder.encode(name.toLowerCase(Locale.ROOT),java.nio.charset.StandardCharsets.UTF_8);
+    var matches=(List<Map<String,Object>>)data(send("GET","/projects?q="+q,null,null,null,null));
+    assertEquals(List.of(p),matches.stream().map(row->row.get("id").toString()).toList());
+    assertEquals(400,send("GET","/projects?q="+"x".repeat(121),null,null,null,null).status());
+    assertEquals(400,send("GET","/projects?before=../bad",null,null,null,null).status());
+    assertEquals(404,send("GET","/projects?before="+id(),null,null,null,null).status());
+    assertEquals(400,send("GET","/projects?limit=101",null,null,null,null).status());
+  }
+
   Map<String, Object> waitJob(String p, String j) throws Exception {
     long end = System.nanoTime() + Duration.ofSeconds(10).toNanos();
     while (System.nanoTime() < end) {

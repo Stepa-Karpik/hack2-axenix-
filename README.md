@@ -22,6 +22,8 @@ A local Java workbench that connects source code to a structured control-flow gr
 
 A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
 
+The project list searches all stored names and loads older projects in pages. Search treats punctuation literally; switching queries cancels the previous list request. Opening or searching for a project does not change its source revisions.
+
 ## Workspace
 
 The graph is a permanent canvas beneath translucent panels. The dark theme uses a black canvas and flat near-black surfaces with backdrop blur; the light theme uses the same layout with light surfaces. The compact bottom dock has its own reserved row and never overlaps the tiled windows.
@@ -210,6 +212,8 @@ The optional engine benchmark parses and analyzes the fixture without compiling 
 ## Data and API
 
 The API lives under `/api/v1`. `GET /session` establishes a local cookie and returns a session-bound CSRF token. Mutations require the token and an idempotency UUID. Head mutations also require `If-Match` with the current revision UUID, or `empty` for a project without a head. A concurrent change returns a conflict instead of overwriting another save.
+
+`GET /projects` accepts `limit` (default 20, maximum 100), optional `q` (literal case-insensitive name substring, maximum 120 characters), and optional `before` (an existing project UUID). Pages use descending creation time with UUID as the stable tie-breaker; the next cursor is the last displayed project. The response keeps its project array shape.
 
 Revisions retain canonical UTF-8 text with LF line endings, directory entries and a SHA-256 tree hash. The separate bundle hash covers the Java subset and is absent when there are no Java sources. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
 

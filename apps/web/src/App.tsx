@@ -4,6 +4,8 @@ import CodeInsights from "./CodeInsights";
 import TestCasesEditor from "./TestCasesEditor";
 import { parseCases } from "./testCases";
 import { readPrepared, writePrepared, clearPrepared } from "./preparedProposal";
+import { useProjectList } from "./useProjectList";
+import "./projectList.css";
 import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
@@ -182,18 +184,13 @@ export default function App() {
   );
 }
 function Projects() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const list = useProjectList();
+  const projects = list.rows,
+    loading = list.loading;
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    api<Project[]>("/projects")
-      .then(setProjects)
-      .catch((e) => setError(message(e)))
-      .finally(() => setLoading(false));
-  }, []);
   async function create(sample = false, files?: FileList | null) {
     setBusy(true);
     setError("");
@@ -276,13 +273,33 @@ function Projects() {
           hidden
           onChange={(e) => void create(false, e.target.files)}
         />
-        {error && (
+        <div className="project-search">
+          <Icon name="search" size={18} />
+          <input
+            aria-label="Поиск проектов"
+            placeholder="Найти проект"
+            maxLength={120}
+            value={list.query}
+            onChange={(event) => list.setQuery(event.target.value)}
+          />
+          {list.query && (
+            <button
+              aria-label="Очистить поиск проектов"
+              onClick={() => list.setQuery("")}
+            >
+              <Icon name="close" />
+            </button>
+          )}
+        </div>
+        {(error || list.error) && (
           <div className="notice error" role="alert">
-            {error}
-            <button onClick={() => location.reload()}>Повторить</button>
+            {error || list.error}
+            <button onClick={() => (error ? location.reload() : list.retry())}>
+              Повторить
+            </button>
           </div>
         )}
-        <div className="project-list">
+        <div className="project-list" aria-busy={loading || list.loadingMore}>
           {loading ? (
             <p className="quiet">Загрузка проектов…</p>
           ) : (
@@ -312,7 +329,21 @@ function Projects() {
               </button>
             ))
           )}
+          {!loading && !projects.length && !list.error && (
+            <p className="quiet">
+              {list.query.trim() ? "Ничего не найдено" : "Проектов пока нет"}
+            </p>
+          )}
         </div>
+        {!loading && list.hasMore && (
+          <button
+            className="projects-more"
+            disabled={list.loadingMore}
+            onClick={list.loadMore}
+          >
+            {list.loadingMore ? "Загрузка…" : "Показать ещё"}
+          </button>
+        )}
         <button
           className="sample-row"
           disabled={busy}

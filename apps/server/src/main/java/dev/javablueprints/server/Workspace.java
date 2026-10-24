@@ -121,9 +121,19 @@ public class Workspace {
   }
 
   List<Map<String, Object>> projects(int limit) {
+    return projects(limit, "", null);
+  }
+
+  List<Map<String, Object>> projects(int limit, String query, String before) {
+    if (query.length() > 120) throw new ApiError(400, "INVALID_REQUEST", "Project search is limited to 120 characters");
+    String filter = query.strip();
+    UUID cursor = before == null ? null : uuid(before);
+    if (cursor != null) project(cursor.toString());
     return db
         .queryForList(
-            "SELECT id::text FROM projects ORDER BY created_at DESC,id DESC LIMIT ?", limit)
+            "SELECT id::text FROM projects WHERE (?='' OR position(lower(?) in lower(name))>0)"
+                + " AND (?::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM projects WHERE id=?::uuid))"
+                + " ORDER BY created_at DESC,id DESC LIMIT ?", filter, filter, cursor, cursor, limit)
         .stream()
         .map(r -> project(r.get("id").toString()))
         .toList();

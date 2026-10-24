@@ -53,7 +53,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else"),
+            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership"),
             "symbols",
             map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
                 dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
@@ -81,8 +81,10 @@ public class ApiController {
   }
 
   @GetMapping("/projects")
-  Object projects(@RequestParam(defaultValue = "20") int limit) {
-    return ok(w.projects(limit(limit)));
+  Object projects(@RequestParam(defaultValue = "20") int limit,
+      @RequestParam(defaultValue = "") String q,
+      @RequestParam(required = false) String before) {
+    return ok(w.projects(limit(limit), q, before));
   }
 
   @PostMapping("/projects")

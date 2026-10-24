@@ -1,0 +1,29 @@
+.project-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  margin-top: 12px;
+  color: var(--quiet);
+}
+.project-search:focus-within {
+  border-color: var(--green);
+}
+.project-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.project-search button {
+  border: 0;
+  background: transparent;
+  padding: 8px;
+}
+.projects-more {
+  display: block;
+  margin: -10px auto 28px;
+}
