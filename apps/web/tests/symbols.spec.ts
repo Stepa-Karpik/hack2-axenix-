@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { revealPanel } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
 
@@ -126,7 +127,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
     crossFile.id,
   );
   await page.getByRole("button", { name: "К объявлению", exact: true }).click();
-  await expect(page.locator(".workbench-context")).toContainText("Helper.java");
+  await expect(page.locator(".canvas-breadcrumb")).toContainText("Helper.java");
   await expect(page.locator(".monaco-editor")).toContainText("value * 2");
   await expect(
     page.locator(".monaco-editor .code-binding").first(),
@@ -169,10 +170,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
     (await (await page.request.get(base)).json()).data.headRevisionId,
   ).toBe(project.headRevisionId);
   for (const theme of ["dark", "light"]) {
-    const toggle = page.getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    });
-    if (await toggle.count()) await toggle.click();
+    await setTheme(page, theme);
     await cursor(page, source, inside(external));
     await page.locator(".symbol-inspector").scrollIntoViewIfNeeded();
     expect(

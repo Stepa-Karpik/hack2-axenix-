@@ -7,6 +7,7 @@ import "./refinement.css";
 import "./graph.css";
 import "./workspace.css";
 import "./files.css";
+import "./glass.css";
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>

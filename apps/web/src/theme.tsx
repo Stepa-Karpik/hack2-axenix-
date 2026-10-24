@@ -12,9 +12,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const stored = localStorage.getItem("java-blueprints:theme");
       if (stored === "light" || stored === "dark") return stored;
     } catch {}
-    return matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
+    return "dark";
   });
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

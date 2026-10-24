@@ -503,3 +503,39 @@ export function flowLabelTitle(
     .filter(Boolean)
     .join("\n");
 }
+
+// Round only the existing obstacle-safe polyline corners; preserve route topology.
+export function roundedRoute(
+  points: { x: number; y: number }[],
+  radius = 16,
+  boxes: RouteBox[] = [],
+) {
+  if (!points.length) return "";
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const a = points[i - 1],
+      b = points[i],
+      c = points[i + 1];
+    const ab = Math.hypot(b.x - a.x, b.y - a.y),
+      bc = Math.hypot(c.x - b.x, c.y - b.y);
+    const r = Math.min(radius, ab / 2, bc / 2);
+    if (!ab || !bc) continue;
+    const x1 = b.x + ((a.x - b.x) * r) / ab,
+      y1 = b.y + ((a.y - b.y) * r) / ab;
+    const x2 = b.x + ((c.x - b.x) * r) / bc,
+      y2 = b.y + ((c.y - b.y) * r) / bc;
+    // A clear polyline may touch an obstacle corner. Never round into that box.
+    const intersects = boxes.some(
+      (box) =>
+        Math.min(x1, b.x, x2) < box.x + box.width - 0.5 &&
+        Math.max(x1, b.x, x2) > box.x + 0.5 &&
+        Math.min(y1, b.y, y2) < box.y + box.height - 0.5 &&
+        Math.max(y1, b.y, y2) > box.y + 0.5,
+    );
+    path += intersects
+      ? ` L ${b.x} ${b.y}`
+      : ` L ${x1} ${y1} Q ${b.x} ${b.y} ${x2} ${y2}`;
+  }
+  const end = points[points.length - 1];
+  return path + ` L ${end.x} ${end.y}`;
+}

@@ -1,4 +1,4 @@
-// @ts-nocheck -- Native Node test runner; browser app has no Node type dependency.
+// @ts-nocheck -- Native Node test runner.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -11,150 +11,215 @@ import {
   revealPanel,
   validateLayout,
   visiblePanels,
+  visibleRoot,
+  readLayout,
+  layoutKey,
 } from "./workspaceLayout.ts";
-
-test("all presets contain each stable panel once and serialize", () => {
-  for (const preset of ["default", "code", "review"] as const) {
-    const layout = defaultLayout(preset);
-    assert.ok(validateLayout(JSON.parse(JSON.stringify(layout))));
-    assert.deepEqual(visiblePanels(layout).sort(), [...panelIds].sort());
+import { tileGeometry, tileDrop } from "./tileGeometry.ts";
+const all = (l) =>
+  groups(l.root)
+    .flatMap((g) => g.tabs)
+    .sort();
+test("presets retain every panel exactly once, including hidden slots", () => {
+  for (const name of ["default", "code", "review"]) {
+    const l = defaultLayout(name);
+    assert.ok(validateLayout(JSON.parse(JSON.stringify(l))));
+    assert.deepEqual(all(l), [...panelIds].sort());
   }
 });
-test("center drop swaps panel identities without losing tabs", () => {
-  const before = defaultLayout();
-  const after = movePanel(before, "graph", "code", "center");
-  assert.deepEqual(groups(after.root).find((g) => g.id === "code")?.tabs, [
-    "graph",
-  ]);
-  assert.deepEqual(groups(after.root).find((g) => g.id === "graph")?.tabs, [
-    "code",
-  ]);
-  assert.ok(validateLayout(after));
-  assert.deepEqual(before, defaultLayout());
+test("canvas cannot be hidden, dragged or merged into an output tile", () => {
+  const l = defaultLayout();
+  assert.deepEqual(hidePanel(l, "graph"), l);
+  for (const edge of ["center", "left", "right", "top", "bottom", "tabs"])
+    assert.deepEqual(movePanel(l, "graph", "output", edge), l);
 });
-test("edge docking collapses empty source and preserves every panel", () => {
-  for (const edge of ["left", "right", "top", "bottom"] as const) {
-    const after = movePanel(defaultLayout(), "project", "graph", edge);
-    assert.ok(validateLayout(after));
-    assert.deepEqual(visiblePanels(after).sort(), [...panelIds].sort());
-    assert.equal(
-      groups(after.root).filter((g) => g.tabs.includes("project")).length,
-      1,
-    );
-  }
-});
-test("tab can be split away from its own group", () => {
-  const after = movePanel(defaultLayout(), "tests", "output", "left");
-  assert.ok(validateLayout(after));
+test("center drop swaps ordinary windows and preserves hidden tab slots", () => {
+  const l = defaultLayout(),
+    moved = movePanel(l, "code", "analysis", "center");
   assert.equal(
-    groups(after.root).find((g) => g.tabs.includes("tests"))?.tabs.length,
+    groups(moved.root).find((g) => g.id === "analysis").active,
+    "code",
+  );
+  assert.equal(
+    groups(moved.root).find((g) => g.id === "code").active,
+    "analysis",
+  );
+  assert.deepEqual(all(moved), all(l));
+  assert.deepEqual(moved.hidden, l.hidden);
+  assert.deepEqual(l, defaultLayout());
+});
+test("edge docking, tab merge and self split preserve source identities", () => {
+  for (const edge of ["left", "right", "top", "bottom", "tabs"]) {
+    const moved = movePanel(defaultLayout(), "code", "graph", edge);
+    assert.ok(validateLayout(moved));
+    assert.deepEqual(all(moved), [...panelIds].sort());
+  }
+  const tab = movePanel(
+    revealPanel(defaultLayout(), "tests"),
+    "tests",
+    "output",
+    "left",
+  );
+  assert.equal(
+    groups(tab.root).find((g) => g.tabs.includes("tests")).tabs.length,
     1,
   );
-  assert.deepEqual(groups(after.root).find((g) => g.id === "output")?.tabs, [
-    "console",
-    "changes",
-  ]);
-});
-test("hide collapses branches, reveal restores hidden panel, last panel survives", () => {
-  let layout = defaultLayout();
-  for (const panel of panelIds.filter((p) => p !== "graph"))
-    layout = hidePanel(layout, panel);
-  assert.deepEqual(visiblePanels(layout), ["graph"]);
-  assert.deepEqual(hidePanel(layout, "graph"), layout);
-  const shown = revealPanel(layout, "code");
-  assert.deepEqual(visiblePanels(shown), ["graph", "code"]);
-  assert.equal(groups(shown.root)[0].active, "code");
-  assert.ok(validateLayout(shown));
-});
-test("revealing an existing tab activates it without duplicates", () => {
-  const after = revealPanel(defaultLayout(), "tests");
-  assert.equal(
-    groups(after.root).find((g) => g.id === "output")?.active,
-    "tests",
+  assert.deepEqual(
+    movePanel(defaultLayout(), "code", "missing", "left"),
+    defaultLayout(),
   );
-  assert.equal(visiblePanels(after).filter((p) => p === "tests").length, 1);
 });
-test("resize clamps ratios and rejects nonfinite inputs", () => {
+test("hide and reveal preserve the exact slot, split ratios and active tab after JSON reload", () => {
+  let l = resizeSplit(defaultLayout(), "bottom", 0.47);
+  l = movePanel(l, "analysis", "code", "center");
+  const root = structuredClone(l.root);
+  const hidden = hidePanel(l, "analysis");
+  assert.deepEqual(hidden.root, root);
+  assert.ok(!visiblePanels(hidden).includes("analysis"));
+  const restored = revealPanel(JSON.parse(JSON.stringify(hidden)), "analysis");
+  assert.deepEqual(restored.root, root);
+  assert.deepEqual(restored.hidden, l.hidden);
+});
+test("all tools may be hidden while perpetual canvas remains and restoring any tool uses its original slot", () => {
+  let l = defaultLayout();
+  for (const p of panelIds) l = hidePanel(l, p);
+  assert.deepEqual(visiblePanels(l), ["graph"]);
+  assert.equal(visibleRoot(l).active, "graph");
+  const shown = revealPanel(l, "code");
+  assert.deepEqual(visiblePanels(shown), ["graph", "code"]);
+  assert.equal(
+    groups(shown.root).find((g) => g.tabs.includes("code")).id,
+    "code",
+  );
+});
+test("resize clamps hostile inputs and hidden ratios remain reserved", () => {
+  const l = hidePanel(defaultLayout(), "code");
   for (const ratio of [-1, 0, 0.4, 1, 100]) {
-    const after = resizeSplit(defaultLayout(), "root", ratio);
-    assert.ok(validateLayout(after));
-    assert.equal(
-      after.root.type === "split" && after.root.ratio,
-      Math.max(0.15, Math.min(0.85, ratio)),
-    );
+    const a = resizeSplit(l, "root", ratio);
+    assert.ok(validateLayout(a));
+    assert.equal(a.root.ratio, Math.max(0.15, Math.min(0.85, ratio)));
+    assert.deepEqual(a.hidden, l.hidden);
   }
-  assert.deepEqual(resizeSplit(defaultLayout(), "root", NaN), defaultLayout());
+  assert.deepEqual(resizeSplit(l, "root", NaN), l);
 });
-test("persisted data rejects unknown version, panel, duplicates, IDs, active tab and ratios", () => {
-  const invalid = [
+test("validation rejects corrupt hidden state, unknown panels, repeated IDs and deep data", () => {
+  const l = defaultLayout();
+  for (const value of [
     null,
     {},
-    { version: 2, root: defaultLayout().root },
+    { ...l, version: 2 },
+    { ...l, hidden: ["graph"] },
+    { ...l, hidden: ["code", "code"] },
+    { ...l, hidden: ["alien"] },
+    { ...l, root: { ...l.root, ratio: 0.99 } },
     {
-      version: 1,
-      root: { type: "group", id: "g", tabs: ["bogus"], active: "bogus" },
+      ...l,
+      root: { type: "group", id: "x", tabs: ["code", "code"], active: "code" },
     },
-    {
-      version: 1,
-      root: { type: "group", id: "g", tabs: ["code", "code"], active: "code" },
-    },
-    { version: 1, root: { type: "group", id: "g", tabs: [], active: "code" } },
-    {
-      version: 1,
-      root: { type: "group", id: "g", tabs: ["code"], active: "graph" },
-    },
-    { version: 1, root: { ...defaultLayout().root, ratio: Infinity } },
-    { version: 1, root: { ...defaultLayout().root, ratio: 0.99 } },
+  ])
+    assert.equal(validateLayout(value), false);
+});
+test("tiling geometry remains inside its reserved area and never overlaps after moves or hide/reveal", () => {
+  const bounds = { x: 12, y: 78, width: 1512, height: 864 };
+  const variants = [
+    defaultLayout(),
+    ...["left", "right", "top", "bottom", "center", "tabs"].map((e) =>
+      movePanel(defaultLayout(), "code", "analysis", e),
+    ),
+    hidePanel(defaultLayout(), "analysis"),
   ];
-  for (const value of invalid) assert.equal(validateLayout(value), false);
-  const duplicated = defaultLayout();
-  if (duplicated.root.type === "split")
-    duplicated.root.second.id = duplicated.root.first.id;
-  assert.equal(validateLayout(duplicated), false);
+  for (const l of variants) {
+    const tiles = tileGeometry(visibleRoot(l), bounds).tiles;
+    for (let i = 0; i < tiles.length; i++) {
+      const a = tiles[i].rect;
+      assert.ok(
+        a.x >= bounds.x &&
+          a.y >= bounds.y &&
+          a.x + a.width <= bounds.x + bounds.width + 0.001 &&
+          a.y + a.height <= bounds.y + bounds.height + 0.001,
+      );
+      for (let j = i + 1; j < tiles.length; j++) {
+        const b = tiles[j].rect;
+        assert.ok(
+          Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) <=
+            0.001 ||
+            Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) <=
+              0.001,
+        );
+      }
+    }
+  }
 });
-test("invalid targets and a one-panel self drop leave layout untouched", () => {
-  const before = defaultLayout();
-  assert.deepEqual(movePanel(before, "code", "missing", "left"), before);
-  assert.deepEqual(movePanel(before, "code", "code", "left"), before);
+test("drop intent uses nearby edges and leaves a calm center swap region", () => {
+  const r = { x: 50, y: 50, width: 500, height: 400 };
+  assert.equal(tileDrop(r, 55, 250), "left");
+  assert.equal(tileDrop(r, 545, 250), "right");
+  assert.equal(tileDrop(r, 250, 55), "top");
+  assert.equal(tileDrop(r, 250, 445), "bottom");
+  assert.equal(tileDrop(r, 250, 250), "center");
 });
-
-test("tab merge removes empty source and keeps target tabs in order", () => {
-  const after = movePanel(defaultLayout(), "graph", "output", "tabs");
-  assert.ok(validateLayout(after));
-  const target = groups(after.root).find((g) => g.id === "output");
-  assert.deepEqual(target?.tabs, ["console", "tests", "changes", "graph"]);
-  assert.equal(target?.active, "graph");
-  assert.equal(
-    groups(after.root).some((g) => g.id === "graph"),
-    false,
-  );
-  assert.deepEqual(visiblePanels(after).sort(), [...panelIds].sort());
-});
-test("legacy preferences migrate but corrupt new layouts default safely", async () => {
-  const { readLayout, layoutKey } = await import("./workspaceLayout.ts");
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  const values = new Map<string, string>();
+test("project scoped persistence migrates v1 and survives unavailable or corrupted storage", () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage"),
+    values = new Map();
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
-    value: { getItem: (key: string) => values.get(key) ?? null },
+    value: { getItem: (k) => values.get(k) ?? null },
   });
   try {
-    values.set(
-      "java-blueprints:view:p",
-      JSON.stringify({ mode: "graph", inspector: false }),
+    assert.notEqual(layoutKey("one"), layoutKey("two"));
+    const custom = hidePanel(
+      resizeSplit(defaultLayout(), "root", 0.3),
+      "console",
     );
-    const migrated = readLayout("p");
-    assert.equal(visiblePanels(migrated).includes("code"), false);
-    assert.equal(visiblePanels(migrated).includes("analysis"), false);
-    assert.ok(validateLayout(migrated));
-    values.set(layoutKey("p"), JSON.stringify(defaultLayout("review")));
-    assert.deepEqual(readLayout("p"), defaultLayout("review"));
-    values.set(layoutKey("p"), "{invalid");
-    assert.deepEqual(readLayout("p"), defaultLayout());
-    values.set(layoutKey("p"), '{"version":9}');
-    assert.deepEqual(readLayout("p"), defaultLayout());
+    values.set(layoutKey("one"), JSON.stringify(custom));
+    assert.deepEqual(readLayout("one"), custom);
+    assert.deepEqual(readLayout("two"), defaultLayout());
+    values.set("java-blueprints:workspace:v1:old", JSON.stringify(custom));
+    assert.deepEqual(readLayout("old"), custom);
+    values.set(layoutKey("one"), "{bad");
+    assert.deepEqual(readLayout("one"), defaultLayout());
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get: () => {
+        throw Error("disabled");
+      },
+    });
+    assert.deepEqual(readLayout("one"), defaultLayout());
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous);
-    else delete (globalThis as { localStorage?: unknown }).localStorage;
+    else delete globalThis.localStorage;
   }
+});
+
+test("swap uses the visible tab rather than a hidden remembered active tab", () => {
+  let l = revealPanel(defaultLayout(), "tests");
+  l = hidePanel(l, "tests");
+  const moved = movePanel(l, "code", "output", "center");
+  assert.equal(
+    groups(visibleRoot(moved)).find((g) => g.id === "code").active,
+    "console",
+  );
+  assert.equal(
+    groups(visibleRoot(moved)).find((g) => g.id === "output").active,
+    "code",
+  );
+});
+test("dock activation distinguishes inactive tabs from shown windows", async () => {
+  const { activePanels } = await import("./workspaceLayout.ts");
+  const l = revealPanel(defaultLayout(), "tests");
+  assert.ok(visiblePanels(l).includes("console"));
+  assert.ok(!activePanels(l).includes("console"));
+  assert.ok(activePanels(l).includes("tests"));
+});
+
+test("both pointer and keyboard docking reject a split that cannot hold two usable panes", async () => {
+  const { canDockTile } = await import("./tileGeometry.ts");
+  const rect = { x: 0, y: 0, width: 300, height: 200 };
+  assert.equal(canDockTile(rect, "left"), false);
+  assert.equal(canDockTile(rect, "bottom"), false);
+  assert.equal(canDockTile(rect, "center"), true);
+  assert.equal(
+    canDockTile({ ...rect, width: 368, height: 248 }, "right"),
+    true,
+  );
 });

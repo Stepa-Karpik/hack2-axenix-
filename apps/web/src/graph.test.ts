@@ -233,3 +233,66 @@ test("ordinary find loop false paths have distinct corridors and no false join",
       );
   assert.equal(JSON.stringify(edges), original);
 });
+
+test("rounded routes preserve endpoints and bound corner radii", async () => {
+  const { roundedRoute } = await import("./flowLayout.ts");
+  assert.equal(roundedRoute([]), "");
+  assert.equal(
+    roundedRoute([
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+    ]),
+    "M 0 0 L 100 0",
+  );
+  assert.equal(
+    roundedRoute(
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+      ],
+      20,
+    ),
+    "M 0 0 L 80 0 Q 100 0 100 20 L 100 100",
+  );
+  assert.equal(
+    roundedRoute([
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+    ]),
+    "M 0 0 L 10 10",
+  );
+});
+
+test("smoothing never cuts a clear route's tangent obstacle corner", async () => {
+  const { roundedRoute } = await import("./flowLayout.ts");
+  const points = [
+    { x: 20, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: 20 },
+  ];
+  assert.equal(
+    roundedRoute(points, 16, [
+      { id: "block", x: 0, y: 0, width: 20, height: 20 },
+    ]),
+    "M 20 0 L 0 0 L 0 20",
+  );
+});
+
+test("sequential steps retain one readable top-to-bottom lane", () => {
+  const nodes = Array.from({ length: 12 }, (_, i) => ({
+    id: String(i),
+    kind: i === 0 ? "entry" : "ExpressionStmt",
+    executionRole: i === 0 ? "structural" : "statement",
+    parentId: null,
+  }));
+  const edges = nodes
+    .slice(1)
+    .map((n, i) => ({ source: String(i), target: n.id, kind: "normal" }));
+  const positions = arrangeFlow(nodes, edges);
+  const points = nodes.map((n) => positions.get(n.id)!);
+  assert.equal(new Set(points.map((p) => p.x)).size, 1);
+  for (let i = 1; i < points.length; i++)
+    assert.ok(points[i].y - points[i - 1].y >= 128);
+});

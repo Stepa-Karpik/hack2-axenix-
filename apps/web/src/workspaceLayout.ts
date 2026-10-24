@@ -13,9 +13,9 @@ export const panelLabels: Record<PanelId, string> = {
   project: "Проект",
   palette: "Блоки",
   graph: "Схема",
-  code: "Код",
-  analysis: "Инспектор",
-  console: "Вывод",
+  code: "Код Java",
+  analysis: "Анализ",
+  console: "Консоль",
   tests: "Тесты",
   changes: "Изменения",
 };
@@ -34,7 +34,11 @@ export type Split = {
   second: LayoutNode;
 };
 export type LayoutNode = Group | Split;
-export type WorkspaceLayout = { version: 1; root: LayoutNode };
+export type WorkspaceLayout = {
+  version: 1;
+  root: LayoutNode;
+  hidden?: PanelId[];
+};
 export type DropEdge = "center" | "left" | "right" | "top" | "bottom" | "tabs";
 const group = (id: string, tabs: PanelId[], active = tabs[0]): Group => ({
   type: "group",
@@ -88,6 +92,7 @@ export function defaultLayout(
     };
   return {
     version: 1,
+    hidden: ["palette", "tests", "changes"],
     root: split(
       "root",
       "horizontal",
@@ -102,18 +107,18 @@ export function defaultLayout(
       split(
         "main",
         "vertical",
-        0.65,
+        0.7,
         split(
           "top",
           "horizontal",
-          0.74,
+          0.8,
           group("graph", ["graph"]),
           group("analysis", ["analysis"]),
         ),
         split(
           "bottom",
           "horizontal",
-          0.64,
+          0.53,
           group("code", ["code"]),
           group("output", ["console", "tests", "changes"]),
         ),
@@ -127,7 +132,31 @@ export function groups(node: LayoutNode): Group[] {
     : [...groups(node.first), ...groups(node.second)];
 }
 export function visiblePanels(layout: WorkspaceLayout): PanelId[] {
-  return groups(layout.root).flatMap((g) => g.tabs);
+  return groups(layout.root)
+    .flatMap((g) => g.tabs)
+    .filter((p) => !layout.hidden?.includes(p));
+}
+// Pruning is a projection only: hidden tabs retain their exact split and ratio.
+export function visibleRoot(layout: WorkspaceLayout): LayoutNode {
+  function prune(node: LayoutNode): LayoutNode | null {
+    if (node.type === "group") {
+      const tabs = node.tabs.filter((p) => !layout.hidden?.includes(p));
+      return tabs.length
+        ? {
+            ...node,
+            tabs,
+            active: tabs.includes(node.active) ? node.active : tabs[0],
+          }
+        : null;
+    }
+    const first = prune(node.first),
+      second = prune(node.second);
+    return first && second ? { ...node, first, second } : (first ?? second);
+  }
+  return prune(layout.root) ?? group("graph", ["graph"]);
+}
+export function activePanels(layout: WorkspaceLayout): PanelId[] {
+  return groups(visibleRoot(layout)).map((g) => g.active);
 }
 export function validateLayout(value: unknown): value is WorkspaceLayout {
   if (
@@ -172,7 +201,15 @@ export function validateLayout(value: unknown): value is WorkspaceLayout {
       valid(n.second, depth + 1)
     );
   }
-  return valid((value as WorkspaceLayout).root, 0);
+  const l = value as WorkspaceLayout;
+  return (
+    valid(l.root, 0) &&
+    (l.hidden === undefined ||
+      (Array.isArray(l.hidden) &&
+        new Set(l.hidden).size === l.hidden.length &&
+        !l.hidden.includes("graph") &&
+        l.hidden.every((p) => panelIds.includes(p) && panels.has(p))))
+  );
 }
 export function readLayout(projectId: string): WorkspaceLayout {
   try {
@@ -186,6 +223,46 @@ export function readLayout(projectId: string): WorkspaceLayout {
   }
   let layout = defaultLayout();
   try {
+    const previous = JSON.parse(
+      localStorage.getItem("java-blueprints:workspace:v1:" + projectId) ??
+        "null",
+    );
+    if (validateLayout(previous)) {
+      const oldDefault = split(
+        "root",
+        "horizontal",
+        0.18,
+        split(
+          "left",
+          "vertical",
+          0.7,
+          group("project", ["project"]),
+          group("palette", ["palette"]),
+        ),
+        split(
+          "main",
+          "vertical",
+          0.65,
+          split(
+            "top",
+            "horizontal",
+            0.74,
+            group("graph", ["graph"]),
+            group("analysis", ["analysis"]),
+          ),
+          split(
+            "bottom",
+            "horizontal",
+            0.64,
+            group("code", ["code"]),
+            group("output", ["console", "tests", "changes"]),
+          ),
+        ),
+      );
+      return JSON.stringify(previous.root) === JSON.stringify(oldDefault)
+        ? defaultLayout()
+        : previous;
+    }
     const legacy = JSON.parse(
       localStorage.getItem("java-blueprints:view:" + projectId) ?? "null",
     );
@@ -196,7 +273,7 @@ export function readLayout(projectId: string): WorkspaceLayout {
   return layout;
 }
 export const layoutKey = (projectId: string) =>
-  "java-blueprints:workspace:v1:" + projectId;
+  "java-blueprints:workspace:v2:" + projectId;
 function mapNode(
   node: LayoutNode,
   fn: (node: LayoutNode) => LayoutNode,
@@ -230,8 +307,9 @@ export function hidePanel(
   layout: WorkspaceLayout,
   panel: PanelId,
 ): WorkspaceLayout {
-  const root = remove(layout.root, panel);
-  return root ? { version: 1, root } : layout;
+  if (panel === "graph" || !visiblePanels(layout).includes(panel))
+    return layout;
+  return { ...layout, hidden: [...(layout.hidden ?? []), panel] };
 }
 export function revealPanel(
   layout: WorkspaceLayout,
@@ -240,7 +318,8 @@ export function revealPanel(
   const target = groups(layout.root).find((g) => g.tabs.includes(panel));
   const id = target?.id ?? groups(layout.root)[0].id;
   return {
-    version: 1,
+    ...layout,
+    hidden: layout.hidden?.filter((p) => p !== panel),
     root: mapNode(layout.root, (n) =>
       n.type === "group" && n.id === id
         ? {
@@ -259,7 +338,7 @@ export function resizeSplit(
 ): WorkspaceLayout {
   if (!Number.isFinite(ratio)) return layout;
   return {
-    version: 1,
+    ...layout,
     root: mapNode(layout.root, (n) =>
       n.type === "split" && n.id === id
         ? { ...n, ratio: Math.max(0.15, Math.min(0.85, ratio)) }
@@ -273,9 +352,11 @@ export function movePanel(
   targetId: string,
   edge: DropEdge,
 ): WorkspaceLayout {
-  const target = groups(layout.root).find((g) => g.id === targetId);
+  const target = groups(visibleRoot(layout)).find((g) => g.id === targetId);
   const source = groups(layout.root).find((g) => g.tabs.includes(panel));
+  if (target?.active === "graph" && edge === "center") edge = "right";
   if (
+    panel === "graph" ||
     !target ||
     !source ||
     (source.id === target.id && (edge === "center" || source.tabs.length === 1))
@@ -286,7 +367,7 @@ export function movePanel(
     const root = remove(layout.root, panel);
     return root
       ? {
-          version: 1,
+          ...layout,
           root: mapNode(root, (n) =>
             n.type === "group" && n.id === targetId
               ? { ...n, tabs: [...n.tabs, panel], active: panel }
@@ -298,7 +379,7 @@ export function movePanel(
   if (edge === "center") {
     const other = target.active;
     return {
-      version: 1,
+      ...layout,
       root: mapNode(layout.root, (n) =>
         n.type !== "group"
           ? n
@@ -335,7 +416,7 @@ export function movePanel(
     return prefix + i;
   };
   const result: WorkspaceLayout = {
-    version: 1,
+    ...layout,
     root: mapNode(root, (n) => {
       if (n.id !== targetId) return n;
       const added = group(fresh("group-"), [panel]);

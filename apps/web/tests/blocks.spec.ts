@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import {
   expect,
   test,
@@ -305,10 +306,7 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
     .scrollIntoViewIfNeeded();
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const theme of ["light", "dark"] as const) {
-    const toggle = page.getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    });
-    if (await toggle.count()) await toggle.click();
+    await setTheme(page, theme);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     await page.waitForTimeout(250);
     await page.screenshot({
@@ -407,6 +405,10 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
     await page.locator(".method-item").filter({ hasText: "main(" }).click();
     await page.locator(".monaco-editor .native-edit-context").focus();
     await page.keyboard.press("Control+End");
+    // Monaco virtualizes short panes; reveal the preserved comment with Find.
+    await page.keyboard.press("Control+f");
+    await page.keyboard.insertText("keep trailing");
+    await page.keyboard.press("Escape");
     await expect(page.locator(".monaco-editor")).toContainText("keep trailing");
   }
   expect(await output(page.request, base, original.id)).toBe("AB");

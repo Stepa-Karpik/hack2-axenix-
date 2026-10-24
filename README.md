@@ -24,15 +24,19 @@ A saved syntax error remains a valid draft. Its analysis reports the error; an o
 
 ## Workspace
 
-The workbench has independent project, block palette, graph, code, inspector, output, tests and changes panels. Use **View → Configure layout** (`Вид → Настроить расположение`) or the **Layout** (`Расположение`) button to move them:
+The graph is a permanent canvas beneath translucent panels. The dark theme uses a black canvas and flat near-black surfaces with backdrop blur; the light theme uses the same layout with light surfaces. The compact bottom dock has its own reserved row and never overlaps the tiled windows.
 
-- Drop onto the center of another panel to swap positions, onto an edge to split the area, or onto its header to combine panels into tabs. The panel menu provides the same operations without dragging.
-- Resize separators with the pointer or arrow keys. Hide or maximize a panel from its header; restore hidden panels through **View**.
-- Choose a code or review preset, or reset the layout. Each project's layout is saved in the current browser. Narrow windows use a panel selector while retaining the desktop arrangement.
+- Drag a panel by its six-dot handle. Nearby windows animate into the preview arrangement before you release the pointer. Drop in the center to swap windows, or near an edge to split the area. Press **Escape** to cancel. The handle also opens a keyboard-accessible move menu.
+- Resize separators with the pointer or arrow keys. Hide or maximize a window from its header. The dock toggles Code, Console and Tests; **Windows** (`Окна`) restores other panels and resets the arrangement.
+- Hidden windows keep their original slot and split ratios. Reopening a window retains its live editor, caret, undo history and output. Layout, visibility, active tabs and maximized state are saved separately for each project in the current browser.
+- Reload restores the workspace and saved drafts. Editor view state and the graph camera are stored locally; editor undo history lasts for the current project session. Narrow screens use a panel selector while retaining the desktop layout.
+- **Ctrl+K** focuses project search. The sole Run control is in the bottom dock, alongside its options and the stop action while a job is active. File, edit, view and export actions are available in the sidebar's project menu.
 
-Moving panels retains editor drafts and undo history, graph selection and viewport, and the active proposal or run. Workspace preferences are separate from program revisions and graph-node positions. Browsers supporting View Transitions animate arrangement changes; reduced-motion preferences and browsers without that API use direct updates.
+Workspace preferences are independent of program revisions and graph-node positions. Rearranging windows does not edit source, compile a program or create a revision. Reduced-motion preferences disable layout animation; browsers without backdrop filtering use solid panel backgrounds.
 
-Graph nodes use distinct icons, shapes and restrained semantic colors. Conditions expose labeled true/false ports; loop regions are derived from the engine's ancestry rather than source-text guesses. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Orthogonal routing avoids node obstacles within a bounded search and marks routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
+**Share** copies the local project URL. Accounts, collaborator presence and permission-based sharing are not implemented yet.
+
+Graph nodes use distinct icons, shapes and restrained semantic colors. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Green connections emphasize primary forward links or the selected node's adjacent routes; they are not a runtime execution trace. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
 
 ## Files and folders
 

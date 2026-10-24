@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { expect, test } from "@playwright/test";
 import { fixture, head, headers, source, unzip, zip } from "./fileFixtures";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -352,7 +353,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   await page.screenshot({
     path: testInfo.outputPath("explorer-tabs-light.png"),
   });
-  await page.getByRole("button", { name: "Включить тёмную тему" }).click();
+  await setTheme(page, "dark");
   await page.screenshot({
     path: testInfo.outputPath("explorer-tabs-dark.png"),
   });

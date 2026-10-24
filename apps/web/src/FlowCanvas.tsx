@@ -3,6 +3,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  ControlButton,
   Handle,
   Position,
   MarkerType,
@@ -20,6 +21,7 @@ import type {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
+  Maximize2,
   Braces,
   CircleStop,
   CornerDownLeft,
@@ -38,6 +40,7 @@ import {
   executionNodes,
   routeFlowEdges,
   routeOrthogonal,
+  roundedRoute,
   compactFlowLabel,
   dispatchLabelPosition,
   flowLabelTitle,
@@ -94,7 +97,7 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
       />
       {isIterationProtocol(data) ? (
         <div className="node-label">{data.label}</div>
-      ) : data.executionRole === "structural" ? (
+      ) : data.executionRole === "structural" && data.kind !== "entry" ? (
         <>
           <div className="node-label">{data.label}</div>
           <span className="structural-line">{data.line}</span>
@@ -164,7 +167,7 @@ export function kindName(kind: string) {
   return (
     (
       {
-        entry: "Вход",
+        entry: "Метод",
         exit: "Выход",
         normal_exit: "Завершение",
         exceptional_exit: "Исключение",
@@ -239,6 +242,7 @@ function ShortcutEdge({
     returning?: boolean;
     departure?: number;
     arrival?: number;
+    highlighted?: boolean;
   }>
 >) {
   const routeX = data!.routeX;
@@ -255,9 +259,7 @@ function ShortcutEdge({
       ),
     [sourceX, sourceY, targetX, targetY, routeX, data],
   );
-  const path = route.points
-    .map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`)
-    .join(" ");
+  const path = roundedRoute(route.points, 16, data?.boxes ?? []);
   const horizontal = route.points
     .slice(1)
     .findIndex(
@@ -281,6 +283,7 @@ function ShortcutEdge({
         data-shortcut-target={target}
         data-route-status={route.complete ? "clear" : "limited"}
         data-route-source={source}
+        data-route-highlighted={data?.highlighted || undefined}
         data-route-target={target}
         data-route-returning={data?.returning || undefined}
       >
@@ -342,6 +345,64 @@ export default function FlowCanvas({
   > | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const viewportWidth = useRef(0);
+  const cameraKey = `java-blueprints:camera:v2:${projectId}:${graph.revisionId}:${graph.analysisId}:${methodId}`;
+  const cameraKeyRef = useRef(cameraKey);
+  cameraKeyRef.current = cameraKey;
+  function safeArea() {
+    const viewport = container.current?.getBoundingClientRect();
+    const area = container.current
+      ?.closest(".glass-workspace")
+      ?.querySelector("[data-graph-aperture]")
+      ?.getBoundingClientRect();
+    return viewport && area
+      ? {
+          x: area.x - viewport.x,
+          y: area.y - viewport.y,
+          width: area.width,
+          height: area.height,
+        }
+      : {
+          x: 0,
+          y: 0,
+          width: viewport?.width ?? 500,
+          height: viewport?.height ?? 500,
+        };
+  }
+  function persistCamera() {
+    try {
+      const viewport = flow.current?.getViewport();
+      if (viewport)
+        localStorage.setItem(cameraKeyRef.current, JSON.stringify(viewport));
+    } catch {}
+  }
+  function fitCanvas() {
+    if (!nodes.length) return;
+    const area = safeArea();
+    const left = Math.min(...nodes.map((n) => n.position.x)),
+      top = Math.min(...nodes.map((n) => n.position.y));
+    const right = Math.max(
+        ...nodes.map((n) => n.position.x + (n.measured?.width ?? 264)),
+      ),
+      bottom = Math.max(
+        ...nodes.map((n) => n.position.y + (n.measured?.height ?? 84)),
+      );
+    const zoom = Math.max(
+      0.15,
+      Math.min(
+        1,
+        (area.width - 100) / Math.max(1, right - left),
+        (area.height - 150) / Math.max(1, bottom - top),
+      ),
+    );
+    void flow.current
+      ?.setViewport({
+        x: area.x + area.width / 2 - ((left + right) / 2) * zoom,
+        y: area.y + 100 + (area.height - 120) / 2 - ((top + bottom) / 2) * zoom,
+        zoom,
+      })
+      .then(persistCamera);
+  }
+
   const scope = `${projectId}/${graph.revisionId}/${graph.analysisId}/${methodId}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -438,10 +499,11 @@ export default function FlowCanvas({
             label:
               n.kind === "switch_case"
                 ? compactFlowLabel(n.label, 26)
-                : n.executionRole === "structural"
-                  ? kindName(n.kind)
-                  : n.kind === "entry"
-                    ? "Начало"
+                : n.kind === "entry"
+                  ? (graph.methods.find((m) => m.id === methodId)?.signature ??
+                    "Начало")
+                  : n.executionRole === "structural"
+                    ? kindName(n.kind)
                     : n.kind === "normal_exit"
                       ? "Завершение"
                       : n.kind === "exceptional_exit"
@@ -465,17 +527,29 @@ export default function FlowCanvas({
         if (scopeRef.current !== scope) return;
         viewportWidth.current =
           container.current?.clientWidth || viewportWidth.current || 500;
-        if (layout?.positions.length)
+        let camera: { x: number; y: number; zoom: number } | null = null;
+        try {
+          const saved = JSON.parse(
+            localStorage.getItem(cameraKeyRef.current) ?? "null",
+          );
+          if (
+            saved &&
+            [saved.x, saved.y, saved.zoom].every(Number.isFinite) &&
+            saved.zoom >= 0.15 &&
+            saved.zoom <= 1.5
+          )
+            camera = saved;
+        } catch {}
+        if (camera) void flow.current?.setViewport(camera);
+        else if (layout?.positions.length)
           void flow.current?.setViewport(layout.viewport);
         else {
           const entry = visible.find((node) => node.kind === "entry");
           const entryPosition = entry ? positions.get(entry.id) : undefined;
+          const area = safeArea();
           void flow.current?.setViewport({
-            x:
-              (container.current?.clientWidth || viewportWidth.current || 500) /
-                2 -
-              ((entryPosition?.x ?? 0) + 132) * 0.85,
-            y: 35 - (entryPosition?.y ?? 0) * 0.85,
+            x: area.x + area.width / 2 - ((entryPosition?.x ?? 0) + 132) * 0.85,
+            y: area.y + 120 - (entryPosition?.y ?? 0) * 0.85,
             zoom: 0.85,
           });
         }
@@ -543,6 +617,9 @@ export default function FlowCanvas({
         type: "shortcut",
         data: {
           ...edge.data,
+          highlighted: selected
+            ? edge.source === selected || edge.target === selected
+            : ["normal", "next", "true"].includes(edge.kind),
           routeX:
             routes.get(edge.id) ??
             ((source?.position.x ?? 0) + (target?.position.x ?? 0)) / 2 + 132,
@@ -558,7 +635,7 @@ export default function FlowCanvas({
         },
       };
     });
-  }, [nodes, edges]);
+  }, [nodes, edges, selected]);
   const renderedNodes = useMemo(() => {
     const boxes = nodes.map((node) => ({
       id: node.id,
@@ -676,6 +753,15 @@ export default function FlowCanvas({
         nodeTypes={nodeTypes}
         onNodesChange={changes}
         onNodeDragStop={() => void saveLayout()}
+        onMoveEnd={(event, viewport) => {
+          if (!event) return;
+          try {
+            localStorage.setItem(
+              cameraKeyRef.current,
+              JSON.stringify(viewport),
+            );
+          } catch {}
+        }}
         onNodeClick={(_, n) => {
           const source = methodNodes.find((s) => s.id === n.id);
           if (source) onSelect(source);
@@ -688,7 +774,21 @@ export default function FlowCanvas({
         attributionPosition="bottom-left"
       >
         <Background gap={22} size={1} color="var(--graph-grid, #d8ddcf)" />
-        <Controls showInteractive={false} />
+        <Controls
+          showInteractive={false}
+          showFitView={false}
+          onZoomIn={() => requestAnimationFrame(persistCamera)}
+          onZoomOut={() => requestAnimationFrame(persistCamera)}
+        >
+          <ControlButton
+            className="react-flow__controls-fitview"
+            onClick={fitCanvas}
+            title="Показать всю схему"
+            aria-label="Показать всю схему"
+          >
+            <Maximize2 size={14} />
+          </ControlButton>
+        </Controls>
       </ReactFlow>
       {layoutError && (
         <span className="canvas-note" role="status">

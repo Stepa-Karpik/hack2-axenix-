@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { panToNode, revealPanel } from "./flowAssertions";
 
@@ -85,6 +86,10 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await expect(
     page.getByText("Нет доступных действий", { exact: true }),
   ).toBeVisible();
+  await page
+    .locator(".sidebar-navigation > button")
+    .filter({ hasText: "История" })
+    .click();
   const restore = page.getByRole("button", {
     name: "Восстановить версию " + inserted.slice(0, 8),
     exact: true,
@@ -116,12 +121,9 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await page.reload();
   await expect(page.locator(".monaco-editor")).toContainText("inserted");
   for (const theme of ["dark", "light"]) {
-    const toggle = page.getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    });
-    if (await toggle.count()) await toggle.click();
+    await setTheme(page, theme);
     await panToNode(page, page.locator(".blueprint-node.entry"));
-  await page.locator(".blueprint-node.entry").click();
+    await page.locator(".blueprint-node.entry").click();
     await expect(page.getByLabel("Java оператор")).toBeVisible();
     expect(
       await page.evaluate(
@@ -152,6 +154,10 @@ test("structural edits and historical restore use explicit compiled proposals", 
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("structural-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
+  await page
+    .locator(".sidebar-navigation > button")
+    .filter({ hasText: "История" })
+    .click();
   // Local edits block restore before the autosave debounce can replace the draft.
   await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+End");

@@ -1,6 +1,21 @@
 import { ThemeToggle } from "./theme";
 import Workspace, { useWorkspace } from "./Workspace";
 import WorkspaceMenu from "./WorkspaceMenu";
+import { activePanels } from "./workspaceLayout";
+import {
+  FolderOpen,
+  House,
+  History,
+  Settings2,
+  Share2,
+  MousePointer2,
+  Plus,
+  PanelsTopLeft,
+  Square,
+  ChevronDown,
+  CircleUserRound,
+  Check,
+} from "lucide-react";
 
 import Icon from "./Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -46,6 +61,7 @@ import FlowCanvas, {
   isIterationProtocol,
 } from "./FlowCanvas";
 import SymbolInspector from "./SymbolInspector";
+import { executionNodes } from "./flowLayout";
 import { currentBindings, referenceAt } from "./symbols";
 import { sampleSource } from "./sample";
 function message(e: unknown) {
@@ -130,7 +146,9 @@ function Brand() {
         navigate("/");
       }}
     >
-      <span className="brand-mark">jb</span>
+      <span className="brand-mark">
+        <img src="/brand-lockup.png" alt="JB" />
+      </span>
       <span>
         Java<span className="brand-light">Blueprints</span>
       </span>
@@ -351,6 +369,19 @@ function Workbench({
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [range, setRange] = useState<SourceRange | null>(null);
   const workspace = useWorkspace(projectId);
+  const [shareCopied, setShareCopied] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const listener = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInput.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
+
   const editorCommands = useRef<{
     undo: () => void;
     redo: () => void;
@@ -1256,22 +1287,20 @@ function Workbench({
       onJump={jumpDeclaration}
     />
   );
+  const methodExecutionNodes = graph
+    ? executionNodes(
+        graph.nodes.filter((n) => n.methodId === methodId),
+        graph.edges,
+      )
+    : [];
+  const methodNodeIds = new Set(methodExecutionNodes.map((n) => n.id));
   const panels = {
     project: (
       <aside className="sidebar">
-        <div className="panel-caption">
-          ПРОЕКТ <span>JAVA 21</span>
+        <div className="project-root">
+          <FolderOpen size={16} />
+          <span>{project?.name ?? "Проект"}</span>
         </div>
-        <label className="search">
-          <Icon name="search" size={14} />
-          <input
-            aria-label="Поиск файлов и методов"
-            placeholder="Найти файл или метод"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <kbd>/</kbd>
-        </label>
         <ProjectExplorer
           snapshot={{ files, directories }}
           active={file}
@@ -1300,8 +1329,8 @@ function Workbench({
           onDownload={(p) => void exportRevision([p])}
           createCommand={createCommand}
         />
-        <div className="sidebar-bottom">
-          <div className="panel-caption">
+        <details className="sidebar-bottom" id="project-history">
+          <summary className="panel-caption">
             ИСТОРИЯ{" "}
             <button
               title="Обновить историю"
@@ -1310,7 +1339,7 @@ function Workbench({
             >
               <Icon name="refresh" size={14} />
             </button>
-          </div>
+          </summary>
           <div className="revision-list">
             {historyRows.map((r, i) => (
               <div className="revision-row" key={r.id}>
@@ -1367,9 +1396,10 @@ function Workbench({
               </div>
             ))}
           </div>
-          <div className="local-label">
-            <span className="connection-dot" /> Локальное хранилище
-          </div>
+        </details>
+        <div className="local-label" role="status" aria-live="polite">
+          <span className={"connection-dot " + (dirty ? "unsaved" : "")} />
+          {saving ? "Сохранение…" : dirty ? "Есть локальные изменения" : status}
         </div>
       </aside>
     ),
@@ -1511,19 +1541,14 @@ function Workbench({
                 </button>
               </div>
             ))}
-        </div>
-        <div className="editor-caption">
-          <span>{file || "ИСХОДНИК"}</span>
-          <span>
-            {historical ? "Только чтение" : languageFor(file).toUpperCase()}
-            <button
-              onClick={() => void save()}
-              disabled={!dirty || saving || conflict || historical}
-              title="Ctrl+S"
-            >
-              {saving ? "Сохранение…" : "Сохранить"}
-            </button>
-          </span>
+          <button
+            className="file-tabs-save"
+            disabled={!dirty || saving || conflict || historical}
+            onClick={() => void save()}
+            title="Ctrl+S"
+          >
+            {saving ? "Сохранение…" : "Сохранить"}
+          </button>
         </div>
         {file ? (
           <CodeEditor
@@ -1564,6 +1589,27 @@ function Workbench({
     ),
     analysis: (
       <aside className="inspector">
+        <div className="analysis-summary">
+          <strong>
+            <Check size={21} />
+            {stale
+              ? "Есть изменения"
+              : analysis?.parseStatus === "valid"
+                ? "Синтаксис проверен"
+                : "Проверка исходника"}
+          </strong>
+          <dl>
+            <dt>Узлы</dt>
+            <dd>{methodExecutionNodes.length || "—"}</dd>
+            <dt>Связи</dt>
+            <dd>
+              {graph?.edges.filter(
+                (e) =>
+                  methodNodeIds.has(e.source) && methodNodeIds.has(e.target),
+              ).length ?? "—"}
+            </dd>
+          </dl>
+        </div>
         {selected ? (
           <>
             <div
@@ -2019,114 +2065,41 @@ function Workbench({
         .catch((e) => setError(message(e)));
   }
   return (
-    <div className="workbench configurable-workbench">
-      <header className="toolbar">
-        <Brand />
-        <WorkspaceMenu
-          workspace={workspace}
-          actions={{
-            createFile: () => {
-              workspace.reveal("project");
-              setCreateCommand({ kind: "file", id: Date.now() });
-            },
-            createFolder: () => {
-              workspace.reveal("project");
-              setCreateCommand({ kind: "folder", id: Date.now() });
-            },
-            save: () => void save(),
-            import: () => setImportChooser(true),
-            export: () => void exportRevision(),
-            projects: () => navigate("/"),
-            run: () => setDialog("run"),
-            compare: () => setDialog("compare"),
-            stop: stopJob,
-            edit: (command) => {
-              void workspace.reveal("code").then(() => {
-                if (mounted.current) editorCommands.current?.[command]();
-              });
-            },
-            editDisabled: !file || historical || busy || loadingRevision,
-            saveDisabled: !dirty || saving || conflict || historical,
-            runDisabled:
-              !revision ||
-              dirty ||
-              busy ||
-              !Object.keys(files).some((p) => p.endsWith(".java")),
-            exportDisabled: !revision || busy,
-            importDisabled: busy,
-            stopDisabled: !job || !["queued", "running"].includes(job.status),
-          }}
-        />
-        <a
-          className="project-title"
-          href={"/projects/" + projectId}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/projects/" + projectId);
-          }}
-        >
-          {project?.name ?? "Проект"}
-        </a>
-        <span
-          className="version-badge"
-          title={revision?.bundleHash ?? undefined}
-        >
-          {short(revision?.id)}
-        </span>
+    <div className="workbench configurable-workbench glass-workbench">
+      <header className="toolbar glass-topbar">
+        <label className="global-search">
+          <Icon name="search" size={17} />
+          <input
+            ref={searchInput}
+            aria-label="Поиск файлов и методов"
+            placeholder="Поиск по проекту"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              if (e.target.value) void workspace.reveal("project");
+            }}
+          />
+          <kbd>Ctrl K</kbd>
+        </label>
         <span className="toolbar-spacer" />
+        <span className="local-presence" title="Локальная сессия">
+          <CircleUserRound size={23} />
+        </span>
         <button
-          className={
-            "layout-configure " + (workspace.editing ? "selected" : "")
-          }
-          onClick={() => workspace.setEditing(!workspace.editing)}
-          aria-pressed={workspace.editing}
+          className="share-button"
+          title="Скопировать ссылку на проект"
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(location.origin + "/projects/" + projectId)
+              .then(() => {
+                setShareCopied(true);
+                setTimeout(() => setShareCopied(false), 2000);
+              })
+              .catch(() => setError("Не удалось скопировать ссылку"));
+          }}
         >
-          Расположение
-        </button>
-        <ThemeToggle />
-        <button onClick={() => setImportChooser(true)} disabled={busy}>
-          <Icon name="upload" /> <span className="hide-narrow">Импорт</span>
-        </button>
-        <button
-          onClick={() => setDialog("run")}
-          disabled={
-            !revision ||
-            dirty ||
-            busy ||
-            !Object.keys(files).some((p) => p.endsWith(".java"))
-          }
-        >
-          <Icon name="play" /> Запуск
-        </button>
-        <button
-          className="icon-button"
-          title="Остановить выполнение"
-          aria-label="Остановить выполнение"
-          disabled={!job || !["queued", "running"].includes(job.status)}
-          onClick={stopJob}
-        >
-          ■
-        </button>
-        <button
-          className="primary"
-          onClick={() => setDialog("compare")}
-          disabled={
-            !revision ||
-            dirty ||
-            busy ||
-            !Object.keys(files).some((p) => p.endsWith(".java"))
-          }
-        >
-          <Icon name="compare" /> Сравнить
-        </button>
-        <button
-          className="icon-button"
-          title="Экспорт выбранной версии"
-          aria-label="Экспорт выбранной версии"
-          onClick={() => void exportRevision()}
-          disabled={!revision || busy}
-        >
-          <Icon name="download" />
+          {shareCopied ? <Check size={16} /> : <Share2 size={16} />}{" "}
+          {shareCopied ? "Скопировано" : "Share"}
         </button>
         <input
           type="file"
@@ -2138,15 +2111,6 @@ function Workbench({
         />
       </header>
       <main className="workbench-body">
-        <div className="workbench-context">
-          <span>
-            {file || "Нет файлов"}
-            {method ? " / " + method.signature.split("(")[0] : ""}
-          </span>
-          <span className="small quiet">
-            {job ? labelStatus(job.status) + " · " + short(job.id) : "Java 21"}
-          </span>
-        </div>
         <div className="workspace-notices">
           {" "}
           {error && (
@@ -2181,24 +2145,277 @@ function Workbench({
             </div>
           )}
         </div>
-        <Workspace controller={workspace} panels={panels} />
+        <Workspace
+          controller={workspace}
+          panels={panels}
+          canvasTitle={
+            <>
+              <div className="canvas-breadcrumb">
+                {project?.name ?? "Проект"}
+                <span>›</span>
+                {file}
+              </div>
+              <h1>{file.split("/").pop() || "JavaBlueprints"}</h1>
+              <p>{method?.signature ?? "Выберите метод"}</p>
+            </>
+          }
+          sidebarChrome={
+            <>
+              <Brand />
+              <nav
+                className="sidebar-navigation"
+                aria-label="Навигация проекта"
+              >
+                <button onClick={() => navigate("/")}>
+                  <House size={19} />
+                  Проекты
+                </button>
+                <button
+                  className="active"
+                  onClick={() => void workspace.reveal("graph")}
+                >
+                  <Icon name="file" size={19} />
+                  Редактор
+                </button>
+                <button
+                  onClick={() => {
+                    void workspace
+                      .reveal("project")
+                      .then(() =>
+                        document
+                          .getElementById("project-history")
+                          ?.setAttribute("open", ""),
+                      );
+                  }}
+                >
+                  <History size={19} />
+                  История
+                </button>
+                <details className="sidebar-settings">
+                  <summary>
+                    <Settings2 size={19} />
+                    Настройки
+                  </summary>
+                  <div className="sidebar-settings-body">
+                    <ThemeToggle />
+                    <button onClick={() => void workspace.preset("default")}>
+                      Сбросить расположение
+                    </button>
+                  </div>
+                </details>
+              </nav>
+              <details className="sidebar-command-menu">
+                <summary>
+                  Меню проекта
+                  <ChevronDown size={14} />
+                </summary>
+                <WorkspaceMenu
+                  workspace={workspace}
+                  actions={{
+                    createFile: () => {
+                      workspace.reveal("project");
+                      setCreateCommand({ kind: "file", id: Date.now() });
+                    },
+                    createFolder: () => {
+                      workspace.reveal("project");
+                      setCreateCommand({ kind: "folder", id: Date.now() });
+                    },
+                    save: () => void save(),
+                    import: () => setImportChooser(true),
+                    export: () => void exportRevision(),
+                    projects: () => navigate("/"),
+                    run: () => setDialog("run"),
+                    compare: () => setDialog("compare"),
+                    stop: stopJob,
+                    edit: (command) => {
+                      void workspace.reveal("code").then(() => {
+                        if (mounted.current)
+                          editorCommands.current?.[command]();
+                      });
+                    },
+                    editDisabled:
+                      !file || historical || busy || loadingRevision,
+                    saveDisabled: !dirty || saving || conflict || historical,
+                    runDisabled:
+                      !revision ||
+                      dirty ||
+                      busy ||
+                      !Object.keys(files).some((p) => p.endsWith(".java")),
+                    exportDisabled: !revision || busy,
+                    importDisabled: busy,
+                    stopDisabled:
+                      !job || !["queued", "running"].includes(job.status),
+                  }}
+                />
+              </details>
+            </>
+          }
+        />
       </main>
-      <footer className="statusbar">
-        <span className={"connection-dot " + (dirty ? "unsaved" : "")} />
-        <span role="status" aria-live="polite">
-          {saving ? "Сохранение…" : dirty ? "Есть локальные изменения" : status}
-        </span>
-        <span className="toolbar-spacer" />
-        <span>
-          {analysis?.parseStatus === "valid"
-            ? "✓ Разобрано"
-            : analysis
-              ? labelStatus(analysis.parseStatus)
-              : ""}
-        </span>
-        <span>UTF-8</span>
-        <span>LF</span>
-        <span>Java 21</span>
+      <footer
+        className="workspace-dock-row"
+        aria-label="Инструменты рабочего пространства"
+      >
+        <div className="workspace-dock">
+          <button
+            className="dock-icon"
+            aria-label="Схема"
+            title="Схема"
+            onClick={() => void workspace.reveal("graph")}
+          >
+            <MousePointer2 size={20} />
+          </button>
+          <button
+            className="dock-icon"
+            aria-label="Добавить блок"
+            title="Блоки"
+            aria-pressed={activePanels(workspace.layout).includes("palette")}
+            onClick={() =>
+              activePanels(workspace.layout).includes("palette")
+                ? void workspace.hide("palette")
+                : void workspace.reveal("palette")
+            }
+          >
+            <Plus size={21} />
+          </button>
+          <span className="dock-divider" />
+          {(
+            [
+              ["code", "code", "Код"],
+              ["console", "terminal", "Консоль"],
+              ["tests", "compare", "Тесты"],
+            ] as const
+          ).map(([panel, icon, label]) => (
+            <button
+              key={panel}
+              aria-pressed={activePanels(workspace.layout).includes(panel)}
+              onClick={() =>
+                activePanels(workspace.layout).includes(panel)
+                  ? void workspace.hide(panel)
+                  : void workspace.reveal(panel)
+              }
+            >
+              <Icon name={icon} size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+          <details className="dock-windows-menu">
+            <summary aria-label="Окна" title="Окна">
+              <PanelsTopLeft size={18} />
+            </summary>
+            <div className="dock-run-popup">
+              {(["project", "palette", "analysis", "changes"] as const).map(
+                (panel) => (
+                  <button
+                    key={panel}
+                    aria-pressed={activePanels(workspace.layout).includes(
+                      panel,
+                    )}
+                    onClick={(e) => {
+                      activePanels(workspace.layout).includes(panel)
+                        ? void workspace.hide(panel)
+                        : void workspace.reveal(panel);
+                      e.currentTarget
+                        .closest("details")
+                        ?.removeAttribute("open");
+                    }}
+                  >
+                    {
+                      {
+                        project: "Проект",
+                        palette: "Блоки",
+                        analysis: "Анализ",
+                        changes: "Изменения",
+                      }[panel]
+                    }
+                  </button>
+                ),
+              )}
+              <button
+                onClick={(e) => {
+                  void workspace.preset("default");
+                  e.currentTarget.closest("details")?.removeAttribute("open");
+                }}
+              >
+                Сбросить расположение
+              </button>
+            </div>
+          </details>
+          <span className="dock-divider" />
+          <button
+            className="dock-icon"
+            aria-label="Сравнить"
+            title="Сравнить версии"
+            disabled={
+              !revision ||
+              dirty ||
+              busy ||
+              !Object.keys(files).some((p) => p.endsWith(".java"))
+            }
+            onClick={() => setDialog("compare")}
+          >
+            <Icon name="compare" size={18} />
+          </button>
+          <div className="dock-run-control">
+            <button
+              className="dock-run"
+              disabled={
+                !revision ||
+                dirty ||
+                busy ||
+                !Object.keys(files).some((p) => p.endsWith(".java"))
+              }
+              onClick={() => setDialog("run")}
+            >
+              <Icon name="play" size={20} />
+              {job && ["queued", "running"].includes(job.status)
+                ? "В процессе"
+                : "Запуск"}
+            </button>
+            <details className="dock-run-menu">
+              <summary aria-label="Параметры запуска">
+                <ChevronDown size={16} />
+              </summary>
+              <div className="dock-run-popup">
+                <button
+                  disabled={!revision || dirty || busy}
+                  onClick={(e) => {
+                    setDialog("run");
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  Настроить запуск
+                </button>
+                <button
+                  disabled={!revision || dirty || busy}
+                  onClick={(e) => {
+                    setDialog("compare");
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  Сравнить версии
+                </button>
+                <button
+                  onClick={(e) => {
+                    void workspace.reveal("tests");
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  Результаты тестов
+                </button>
+              </div>
+            </details>
+          </div>
+          {job && ["queued", "running"].includes(job.status) && (
+            <button
+              className="dock-icon stop-job"
+              aria-label="Остановить выполнение"
+              onClick={stopJob}
+            >
+              <Square size={17} />
+            </button>
+          )}
+        </div>
       </footer>
       <input
         type="file"

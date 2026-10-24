@@ -49,10 +49,10 @@ monaco.editor.defineTheme("blueprints-dark", {
     { token: "string", foreground: "B9D58D" },
   ],
   colors: {
-    "editor.background": "#1B1D22",
+    "editor.background": "#00000000",
     "editor.foreground": "#D5D9E0",
-    "editor.lineHighlightBackground": "#24272F",
-    "editorLineNumber.foreground": "#626A78",
+    "editor.lineHighlightBackground": "#ffffff04",
+    "editorLineNumber.foreground": "#707672",
     "editor.selectionBackground": "#3B4A2D",
     "editorCursor.foreground": "#C8ED83",
   },
@@ -89,6 +89,8 @@ export default function CodeEditor({
   }) => void;
 }) {
   const { theme } = useTheme();
+  const viewPath = useRef(path);
+  viewPath.current = path;
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const decorations = useRef<monaco.editor.IEditorDecorationsCollection | null>(
     null,
@@ -156,10 +158,11 @@ export default function CodeEditor({
         readOnly,
         fontSize: 13,
         fontFamily: "'Cascadia Code', 'Consolas', monospace",
-        lineHeight: 22,
+        lineHeight: 21,
         minimap: { enabled: false },
+        stickyScroll: { enabled: false },
         scrollBeyondLastLine: false,
-        padding: { top: 22, bottom: 22 },
+        padding: { top: 10, bottom: 10 },
         automaticLayout: true,
         tabSize: 4,
         renderLineHighlight: "line",
@@ -184,6 +187,45 @@ export default function CodeEditor({
         });
         decorations.current = instance.createDecorationsCollection();
         instance.onDidChangeModel(() => highlight.current());
+        try {
+          const view = JSON.parse(
+            localStorage.getItem(
+              "java-blueprints:editor-view:" + viewPath.current,
+            ) ?? "null",
+          );
+          if (view) instance.restoreViewState(view);
+        } catch {}
+        let saveTimer: ReturnType<typeof setTimeout>;
+        const saveView = () => {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            const key = viewPath.current;
+            if (key)
+              try {
+                localStorage.setItem(
+                  "java-blueprints:editor-view:" + key,
+                  JSON.stringify(instance.saveViewState()),
+                );
+              } catch {}
+          }, 180);
+        };
+        const flushView = () => {
+          try {
+            localStorage.setItem(
+              "java-blueprints:editor-view:" + viewPath.current,
+              JSON.stringify(instance.saveViewState()),
+            );
+          } catch {}
+        };
+        window.addEventListener("pagehide", flushView);
+        const scrollListener = instance.onDidScrollChange(saveView);
+        const cursorListener = instance.onDidChangeCursorPosition(saveView);
+        instance.onDidDispose(() => {
+          clearTimeout(saveTimer);
+          window.removeEventListener("pagehide", flushView);
+          scrollListener.dispose();
+          cursorListener.dispose();
+        });
         highlight.current();
         instance.onDidChangeCursorPosition((e) => {
           const model = instance.getModel();

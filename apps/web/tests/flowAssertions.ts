@@ -6,35 +6,59 @@ export async function revealPanel(page: Page, id: string, label: string) {
     const tab = page.locator(`[data-panel-tab="${id}"]`);
     if (await tab.count()) await tab.click();
     else {
-      const view = page.locator(".workspace-menu").filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
-      if (await view.getAttribute("open") === null) await view.locator("summary").click();
-      await view.getByRole("button", { name: new RegExp(label + "$" ) }).click();
+      const command = page.locator(".sidebar-command-menu");
+      if ((await command.getAttribute("open")) === null)
+        await command.locator(":scope > summary").click();
+      const view = page
+        .locator(".workspace-menu")
+        .filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
+      if ((await view.getAttribute("open")) === null)
+        await view.locator("summary").click();
+      await view.getByRole("button", { name: new RegExp(label + "$") }).click();
       await page.keyboard.press("Escape");
     }
   }
   await expect(page.locator(`[data-panel-id="${id}"]`)).toBeVisible();
 }
 export async function panToNode(page: Page, node: ReturnType<Page["locator"]>) {
-  if (!(await page.locator(".react-flow__pane").isVisible())) await revealPanel(page, "graph", "Схема");
+  if (!(await page.locator(".react-flow__pane").isVisible()))
+    await revealPanel(page, "graph", "Схема");
   for (let pass = 0; pass < 24; pass++) {
-    const area = (await page.locator(".react-flow__pane").boundingBox())!;
+    const aperture = page.locator("[data-graph-aperture]");
+    const area = (await (
+      (await aperture.count()) ? aperture : page.locator(".react-flow__pane")
+    ).boundingBox())!;
     const box = (await node.boundingBox())!;
     const dx = area.x + area.width / 2 - box.x - box.width / 2;
     const dy = area.y + area.height / 2 - box.y - box.height / 2;
     if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
     let start: { x: number; y: number } | null = null;
-    await expect.poll(async () => start = await page.locator(".react-flow__pane").evaluate(pane => {
-      const box = pane.getBoundingClientRect();
-      for (let row = 1; row < 10; row++) for (let column = 1; column < 10; column++) {
-        const x = box.x + box.width * column / 10, y = box.y + box.height * row / 10;
-        if (document.elementFromPoint(x, y) === pane) return { x, y };
-      }
-      return null;
-    })).not.toBeNull();
+    await expect
+      .poll(
+        async () =>
+          (start = await page.locator(".react-flow__pane").evaluate((pane) => {
+            const box =
+              document
+                .querySelector("[data-graph-aperture]")
+                ?.getBoundingClientRect() ?? pane.getBoundingClientRect();
+            for (let row = 1; row < 10; row++)
+              for (let column = 1; column < 10; column++) {
+                const x = box.x + (box.width * column) / 10,
+                  y = box.y + (box.height * row) / 10;
+                if (document.elementFromPoint(x, y) === pane) return { x, y };
+              }
+            return null;
+          })),
+      )
+      .not.toBeNull();
     await page.keyboard.down("Space");
     await page.mouse.move(start!.x, start!.y);
     await page.mouse.down();
-    await page.mouse.move(start!.x + Math.max(-area.width / 3, Math.min(area.width / 3, dx)), start!.y + Math.max(-area.height / 3, Math.min(area.height / 3, dy)), { steps: 5 });
+    await page.mouse.move(
+      start!.x + Math.max(-area.width / 3, Math.min(area.width / 3, dx)),
+      start!.y + Math.max(-area.height / 3, Math.min(area.height / 3, dy)),
+      { steps: 5 },
+    );
     await page.mouse.up();
     await page.keyboard.up("Space");
   }
@@ -52,7 +76,9 @@ export async function assertRoutes(page: Page) {
     .locator("g[data-shortcut-source]")
     .evaluateAll((groups) => {
       const boxes = Array.from(
-        document.querySelectorAll(".react-flow__node:not(.react-flow__node-loopArea)"),
+        document.querySelectorAll(
+          ".react-flow__node:not(.react-flow__node-loopArea)",
+        ),
       ).map((node) => ({
         id: node.getAttribute("data-id"),
         r: node.getBoundingClientRect(),
@@ -99,25 +125,77 @@ export async function assertRoutes(page: Page) {
     });
   expect(crossings).toEqual([]);
 }
-export async function assertDistinctFalseRoutes(page: Page, edges: { source: string; target: string }[]) {
+export async function assertDistinctFalseRoutes(
+  page: Page,
+  edges: { source: string; target: string }[],
+) {
   const routes = [];
   for (const edge of edges) {
-    const path = page.locator(`g[data-route-source="${edge.source}"][data-route-target="${edge.target}"] path.react-flow__edge-path`);
+    const path = page.locator(
+      `g[data-route-source="${edge.source}"][data-route-target="${edge.target}"] path.react-flow__edge-path`,
+    );
     await expect(path).toHaveCount(1);
-    const points = await path.evaluate(node => {
-      const numbers = node.getAttribute("d")!.match(/-?[0-9.]+/g)!.map(Number);
-      return Array.from({ length: numbers.length / 2 }, (_, i) => ({ x: numbers[i * 2], y: numbers[i * 2 + 1] }));
+    const points = await path.evaluate((node) => {
+      const numbers = node
+        .getAttribute("d")!
+        .match(/-?[0-9.]+/g)!
+        .map(Number);
+      return Array.from({ length: numbers.length / 2 }, (_, i) => ({
+        x: numbers[i * 2],
+        y: numbers[i * 2 + 1],
+      }));
     });
     routes.push({ ...edge, points });
   }
-  const overlaps = routes.flatMap((a, index) => routes.slice(index + 1).flatMap(b => {
-    if (a.target === b.target) return [];
-    return a.points.slice(1).flatMap((endA, i) => b.points.slice(1).flatMap((endB, j) => {
-      const startA = a.points[i], startB = b.points[j];
-      const vertical = startA.x === endA.x && startB.x === endB.x && startA.x === startB.x && Math.min(Math.max(startA.y, endA.y), Math.max(startB.y, endB.y)) - Math.max(Math.min(startA.y, endA.y), Math.min(startB.y, endB.y)) > 1;
-      const horizontal = startA.y === endA.y && startB.y === endB.y && startA.y === startB.y && Math.min(Math.max(startA.x, endA.x), Math.max(startB.x, endB.x)) - Math.max(Math.min(startA.x, endA.x), Math.min(startB.x, endB.x)) > 1;
-      return vertical || horizontal ? [{ a: a.source, b: b.source, segmentA: i, segmentB: j }] : [];
-    }));
-  }));
+  const overlaps = routes.flatMap((a, index) =>
+    routes.slice(index + 1).flatMap((b) => {
+      if (a.target === b.target) return [];
+      return a.points.slice(1).flatMap((endA, i) =>
+        b.points.slice(1).flatMap((endB, j) => {
+          const startA = a.points[i],
+            startB = b.points[j];
+          const vertical =
+            startA.x === endA.x &&
+            startB.x === endB.x &&
+            startA.x === startB.x &&
+            Math.min(Math.max(startA.y, endA.y), Math.max(startB.y, endB.y)) -
+              Math.max(Math.min(startA.y, endA.y), Math.min(startB.y, endB.y)) >
+              1;
+          const horizontal =
+            startA.y === endA.y &&
+            startB.y === endB.y &&
+            startA.y === startB.y &&
+            Math.min(Math.max(startA.x, endA.x), Math.max(startB.x, endB.x)) -
+              Math.max(Math.min(startA.x, endA.x), Math.min(startB.x, endB.x)) >
+              1;
+          return vertical || horizontal
+            ? [{ a: a.source, b: b.source, segmentA: i, segmentB: j }]
+            : [];
+        }),
+      );
+    }),
+  );
   expect(overlaps).toEqual([]);
+}
+
+export async function setTheme(page: Page, theme: string) {
+  if ((await page.locator("html").getAttribute("data-theme")) === theme) return;
+  const settings = page.locator(".sidebar-settings");
+  if (await settings.count()) {
+    if (!(await settings.isVisible()))
+      await revealPanel(page, "project", "Проект");
+    if ((await settings.getAttribute("open")) === null)
+      await settings.locator(":scope > summary").click();
+  }
+  await page
+    .getByRole("button", {
+      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
+    })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  if (
+    (await settings.count()) &&
+    (await settings.getAttribute("open")) !== null
+  )
+    await settings.locator(":scope > summary").click();
 }

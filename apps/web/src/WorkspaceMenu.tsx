@@ -133,17 +133,12 @@ export default function WorkspaceMenu({
       {menu(
         "Вид",
         <>
-          {item(
-            w.editing ? "Завершить настройку" : "Настроить расположение",
-            () => w.setEditing(!w.editing),
-          )}
-          <hr />
           {panelIds.map((panel) => (
             <button
               type="button"
               key={panel}
               aria-pressed={shown.includes(panel)}
-              disabled={shown.length === 1 && shown.includes(panel)}
+              disabled={panel === "graph"}
               onClick={() =>
                 shown.includes(panel) ? w.hide(panel) : w.reveal(panel)
               }
@@ -158,19 +153,6 @@ export default function WorkspaceMenu({
           {item("Работа с кодом", () => w.preset("code"))}
           {item("Проверка изменений", () => w.preset("review"))}
           {item("Сбросить расположение", () => w.preset("default"))}
-        </>,
-      )}
-      {menu(
-        "Запуск",
-        <>
-          {item("Запустить…", actions.run, actions.runDisabled, "Ctrl+Enter")}
-          {item(
-            "Сравнить версии…",
-            actions.compare,
-            actions.runDisabled,
-            "Ctrl+Shift+Enter",
-          )}
-          {item("Остановить", actions.stop, actions.stopDisabled)}
         </>,
       )}
       {menu(

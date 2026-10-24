@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, CSSProperties } from "react";
 import { createPortal, flushSync } from "react-dom";
+import { GripVertical, X, Maximize2, Minimize2 } from "lucide-react";
 import {
   defaultLayout,
   groups,
@@ -13,57 +14,59 @@ import {
   resizeSplit,
   revealPanel,
   visiblePanels,
+  visibleRoot,
 } from "./workspaceLayout";
 import type {
   DropEdge,
   Group,
-  LayoutNode,
   PanelId,
   WorkspaceLayout,
 } from "./workspaceLayout";
+import {
+  tileGeometry,
+  tileDrop,
+  minimumExtent,
+  canDockTile,
+} from "./tileGeometry";
+import type { TileRect, Divider } from "./tileGeometry";
 export function useWorkspace(projectId: string) {
-  const [layout, setLayout] = useState(() => readLayout(projectId));
-  const [editing, setEditing] = useState(false);
-  const [maximized, setMaximized] = useState<PanelId | null>(null);
-  const [focused, setFocused] = useState<PanelId>("graph");
-  const transition = useRef<{ skipTransition: () => void } | null>(null);
-  const pending = useRef<Promise<void>>(Promise.resolve());
-  const alive = useRef(true);
+  const [initial] = useState(() => {
+    const layout = readLayout(projectId);
+    try {
+      const state = JSON.parse(
+        localStorage.getItem("java-blueprints:window-state:" + projectId) ??
+          "null",
+      );
+      return {
+        layout,
+        focused: panelIds.includes(state?.focused)
+          ? (state.focused as PanelId)
+          : ("graph" as PanelId),
+        maximized:
+          panelIds.includes(state?.maximized) &&
+          !layout.hidden?.includes(state.maximized)
+            ? (state.maximized as PanelId)
+            : null,
+      };
+    } catch {
+      return { layout, focused: "graph" as PanelId, maximized: null };
+    }
+  });
+  const [layout, setLayout] = useState(initial.layout);
+  const [maximized, setMaximized] = useState<PanelId | null>(initial.maximized);
+  const [focused, setFocused] = useState<PanelId>(initial.focused);
   useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      transition.current?.skipTransition();
-    };
-  }, []);
+    try {
+      localStorage.setItem(
+        "java-blueprints:window-state:" + projectId,
+        JSON.stringify({ focused, maximized }),
+      );
+    } catch {}
+  }, [projectId, focused, maximized]);
   function animate(change: () => void): Promise<void> {
-    // Serialize state updates, not animation completion. Skipping a snapshot does
-    // not cancel its pending callback, so the next callback waits for that update.
-    const run = () => {
-      if (!alive.current) return Promise.resolve();
-      transition.current?.skipTransition();
-      if (
-        document.startViewTransition &&
-        !matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        const current = document.startViewTransition(() => {
-          if (alive.current) flushSync(change);
-        });
-        transition.current = current;
-        void current.ready.catch(() => {});
-        void current.finished
-          .catch(() => {})
-          .finally(() => {
-            if (transition.current === current) transition.current = null;
-          });
-        return current.updateCallbackDone;
-      }
-      flushSync(change);
-      return Promise.resolve();
-    };
-    const completion = pending.current.then(run, run);
-    pending.current = completion.catch(() => {});
-    return completion;
+    // CSS geometry transitions preserve live content; no screenshot overlays.
+    flushSync(change);
+    return Promise.resolve();
   }
   useEffect(() => {
     try {
@@ -76,8 +79,6 @@ export function useWorkspace(projectId: string) {
     animateLayout: (update: (layout: WorkspaceLayout) => WorkspaceLayout) =>
       animate(() => setLayout(update)),
     maximize: (panel: PanelId | null) => animate(() => setMaximized(panel)),
-    editing,
-    setEditing,
     maximized,
     setMaximized,
     focused,
@@ -109,207 +110,346 @@ export function useWorkspace(projectId: string) {
   };
 }
 export type WorkspaceController = ReturnType<typeof useWorkspace>;
+type Drag = {
+  panel: PanelId;
+  base: WorkspaceLayout;
+  preview: WorkspaceLayout;
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  source: TileRect;
+  moved: boolean;
+  target: string | null;
+  edge: DropEdge;
+};
 export default function Workspace({
   controller: c,
   panels,
+  sidebarChrome,
+  canvasTitle,
 }: {
   controller: WorkspaceController;
   panels: Record<PanelId, ReactNode>;
+  sidebarChrome?: ReactNode;
+  canvasTitle?: ReactNode;
 }) {
-  const [narrow, setNarrow] = useState(
-    () => matchMedia("(max-width: 980px)").matches,
-  );
-  const [dragging, setDragging] = useState<PanelId | null>(null);
-  const [over, setOver] = useState<string | null>(null);
-  const storage = useRef<HTMLDivElement>(null);
-  const container = useRef<HTMLDivElement>(null);
+  const container = useRef<HTMLDivElement>(null),
+    storage = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const observer = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (box) setSize({ width: box.width, height: box.height });
-    });
-    if (container.current) observer.observe(container.current);
-    return () => observer.disconnect();
-  }, []);
-  // These DOM hosts and their portals never change identity when a layout slot moves.
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const dragRef = useRef<Drag | null>(null),
+    wasDrag = useRef(false);
   const [hosts] = useState(
     () =>
       Object.fromEntries(
-        panelIds.map((id) => [
-          id,
-          (() => {
-            const host = document.createElement("div");
-            host.className = "workspace-panel-host";
-            host.dataset.panelId = id;
-            host.style.viewTransitionName = "workspace-" + id;
-            return host;
-          })(),
-        ]),
+        panelIds.map((id) => {
+          const host = document.createElement("div");
+          host.className = "workspace-panel-host";
+          host.dataset.panelId = id;
+          return [id, host];
+        }),
       ) as Record<PanelId, HTMLDivElement>,
   );
-  useEffect(() => {
-    const media = matchMedia("(max-width: 980px)");
-    const change = () => setNarrow(media.matches);
-    media.addEventListener("change", change);
-    return () => media.removeEventListener("change", change);
-  }, []);
-  useEffect(() => {
-    if (!c.editing) {
-      setDragging(null);
-      setOver(null);
-    }
-  }, [c.editing]);
-  useEffect(() => {
-    for (const panel of panelIds)
-      if (!hosts[panel].isConnected && storage.current) {
-        hosts[panel].inert = true;
-        storage.current.appendChild(hosts[panel]);
-      }
-  });
-  function mount(panel: PanelId, slot: HTMLDivElement | null) {
-    const host = hosts[panel];
-    host.className = "workspace-panel-host";
-    host.dataset.panelId = panel;
-    if (slot) {
-      host.inert = false;
-      slot.appendChild(host);
-    } else if (storage.current) {
-      host.inert = true;
-      storage.current.appendChild(host);
-    }
-  }
-  const mountCallbacks = useMemo(
+  const mounts = useMemo(
     () =>
       Object.fromEntries(
         panelIds.map((panel) => [
           panel,
-          (slot: HTMLDivElement | null) => mount(panel, slot),
+          (slot: HTMLDivElement | null) => {
+            const host = hosts[panel];
+            if (slot) {
+              host.inert = false;
+              slot.appendChild(host);
+            } else if (storage.current) {
+              host.inert = true;
+              storage.current.appendChild(host);
+            }
+          },
         ]),
       ) as Record<PanelId, (slot: HTMLDivElement | null) => void>,
     [hosts],
   );
-  function canSplit(targetId: string, edge: DropEdge) {
-    if (["center", "tabs"].includes(edge)) return true;
-    const slot = document.querySelector('[data-group-id="' + targetId + '"]');
-    const size = slot?.getBoundingClientRect();
-    return (
-      !!size &&
-      (["left", "right"].includes(edge)
-        ? size.width >= 320
-        : size.height >= 220)
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) =>
+      setSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      }),
     );
-  }
-  function move(panel: PanelId, targetId: string, edge: DropEdge) {
-    if (canSplit(targetId, edge))
-      c.animateLayout((l) => movePanel(l, panel, targetId, edge));
-    else
-      setMoveNotice(
-        "Для разделения увеличьте панель или выберите объединение вкладок.",
+    if (container.current) observer.observe(container.current);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    for (const id of panelIds)
+      if (!hosts[id].isConnected && storage.current) {
+        hosts[id].inert = true;
+        storage.current.appendChild(hosts[id]);
+      }
+  });
+  const compact = size.width > 0 && size.width < 980;
+  const bounds = {
+    x: 12,
+    y: 78,
+    width: Math.max(1, size.width - 24),
+    height: Math.max(1, size.height - 160),
+  };
+  const layout = drag?.moved ? drag.preview : c.layout;
+  const root = visibleRoot(layout);
+  const geometry = tileGeometry(root, bounds);
+  const shown = visiblePanels(layout);
+  const focus =
+    c.maximized ??
+    (compact ? (shown.includes(c.focused) ? c.focused : "graph") : null);
+  useLayoutEffect(() => {
+    hosts.graph.inert = !!focus && focus !== "graph";
+  }, [focus, hosts]);
+  useEffect(() => {
+    if (dragRef.current && c.layout !== dragRef.current.base) {
+      dragRef.current = null;
+      setDrag(null);
+      document.body.classList.remove("is-tiling");
+    }
+  }, [c.layout]);
+  const projectTile = geometry.tiles.find(
+    (t) =>
+      t.group.active === "project" &&
+      t.rect.x === bounds.x &&
+      t.rect.y === bounds.y,
+  );
+  useLayoutEffect(() => {
+    const shell = container.current?.closest<HTMLElement>(".workbench");
+    shell?.style.setProperty(
+      "--sidebar-width",
+      !compact && projectTile ? projectTile.rect.width + 24 + "px" : "20px",
+    );
+  }, [projectTile?.rect.width, compact]);
+  const aperture =
+    geometry.tiles.find((t) => t.group.active === "graph")?.rect ?? bounds;
+  useEffect(() => {
+    function move(event: PointerEvent) {
+      const current = dragRef.current,
+        box = container.current?.getBoundingClientRect();
+      if (!current || !box) return;
+      const x = event.clientX - box.left,
+        y = event.clientY - box.top;
+      const moved =
+        current.moved || Math.hypot(x - current.startX, y - current.startY) > 6;
+      if (!moved) return;
+      event.preventDefault();
+      const targets = tileGeometry(visibleRoot(current.base), bounds).tiles;
+      const target = targets.find(
+        (t) =>
+          x >= t.rect.x &&
+          x <= t.rect.x + t.rect.width &&
+          y >= t.rect.y &&
+          y <= t.rect.y + t.rect.height &&
+          !t.group.tabs.includes(current.panel),
       );
-  }
-  const [moveNotice, setMoveNotice] = useState("");
-  function target(group: Group, edge: Exclude<DropEdge, "tabs">) {
-    return (
-      <div
-        key={edge}
-        className={
-          "workspace-drop-zone drop-" +
-          edge +
-          (over === group.id + edge ? " over" : "")
+      let preview = current.base,
+        edge: DropEdge = "center";
+      if (target) {
+        edge = tileDrop(target.rect, x, y);
+        if (target.group.active === "graph" && edge === "center")
+          edge = "right";
+        if (canDockTile(target.rect, edge))
+          preview = movePanel(
+            current.base,
+            current.panel,
+            target.group.id,
+            edge,
+          );
+      }
+      dragRef.current = {
+        ...current,
+        x,
+        y,
+        moved,
+        preview,
+        target: target?.group.id ?? null,
+        edge,
+      };
+      setDrag(dragRef.current);
+    }
+    function finish(event: PointerEvent) {
+      if (!dragRef.current) return;
+      if (event.type === "pointerup" && dragRef.current.moved)
+        c.setLayout(dragRef.current.preview);
+      wasDrag.current = dragRef.current.moved;
+      dragRef.current = null;
+      setDrag(null);
+      document.body.classList.remove("is-tiling");
+    }
+    function closeMenus(event: PointerEvent) {
+      container.current
+        ?.querySelectorAll<HTMLDetailsElement>(".workspace-move-menu[open]")
+        .forEach((menu) => {
+          if (!menu.contains(event.target as Node)) menu.open = false;
+        });
+    }
+    function cancel(event: KeyboardEvent) {
+      if (event.key === "Escape" && !dragRef.current) {
+        const menu = container.current?.querySelector<HTMLDetailsElement>(
+          ".workspace-move-menu[open]",
+        );
+        if (menu) {
+          menu.open = false;
+          menu.querySelector<HTMLElement>("summary")?.focus();
         }
-        data-drop-zone={edge}
-        aria-label={panelLabels[group.active] + ": " + edge}
-        onDragOver={(e) => {
-          if (dragging) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            setOver(group.id + edge);
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          if (dragging) move(dragging, group.id, edge);
-          setDragging(null);
-          setOver(null);
-        }}
-      >
-        {edge === "center"
-          ? "Поменять местами"
-          : { left: "Слева", right: "Справа", top: "Сверху", bottom: "Снизу" }[
-              edge
-            ]}
-      </div>
+      }
+      if (event.key === "Escape" && dragRef.current) {
+        dragRef.current = null;
+        setDrag(null);
+        document.body.classList.remove("is-tiling");
+      }
+    }
+    document.addEventListener("pointerdown", closeMenus);
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    window.addEventListener("keydown", cancel);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenus);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      window.removeEventListener("keydown", cancel);
+      document.body.classList.remove("is-tiling");
+    };
+  }, [size.width, size.height, c.setLayout]);
+  function begin(panel: PanelId, event: React.PointerEvent) {
+    if (compact || event.button !== 0 || panel === "graph") return;
+    const box = container.current!.getBoundingClientRect();
+    const tile = tileGeometry(visibleRoot(c.layout), bounds).tiles.find((t) =>
+      t.group.tabs.includes(panel),
     );
+    if (!tile) return;
+    const x = event.clientX - box.left,
+      y = event.clientY - box.top;
+    wasDrag.current = false;
+    dragRef.current = {
+      panel,
+      base: c.layout,
+      preview: c.layout,
+      x,
+      y,
+      startX: x,
+      startY: y,
+      source:
+        panel === "project" &&
+        tile.rect.x === bounds.x &&
+        tile.rect.y === bounds.y
+          ? {
+              ...tile.rect,
+              y: 10,
+              height:
+                tile.rect.height +
+                bounds.y -
+                10 +
+                (Math.abs(
+                  tile.rect.y + tile.rect.height - bounds.y - bounds.height,
+                ) < 1
+                  ? 72
+                  : 0),
+            }
+          : tile.rect,
+      moved: false,
+      target: null,
+      edge: "center",
+    };
+    setDrag(dragRef.current);
+    document.body.classList.add("is-tiling");
   }
-  function renderGroup(group: Group) {
+  function groupView(group: Group, initial: TileRect) {
+    if (group.active === "graph")
+      return (
+        <div
+          key="graph-aperture"
+          className="graph-aperture"
+          data-graph-aperture
+          data-group-id={group.id}
+          style={{
+            left: initial.x,
+            top: initial.y,
+            width: initial.width,
+            height: initial.height,
+          }}
+        />
+      );
+    let rect = initial;
+    const sidebar =
+      group.active === "project" &&
+      initial.x === bounds.x &&
+      initial.y === bounds.y &&
+      !focus;
+    if (sidebar)
+      rect = {
+        ...rect,
+        y: 10,
+        height:
+          initial.height +
+          bounds.y -
+          10 +
+          (Math.abs(initial.y + initial.height - bounds.y - bounds.height) < 1
+            ? 72
+            : 0),
+      };
+    if (focus)
+      rect = {
+        x: 12,
+        y: 78,
+        width: Math.max(1, size.width - 24),
+        height: Math.max(1, size.height - 160),
+      };
+    const moving = drag?.panel === group.active && drag.moved;
+    const style: CSSProperties = moving
+      ? {
+          left: drag.source.x + drag.x - drag.startX,
+          top: drag.source.y + drag.y - drag.startY,
+          width: drag.source.width,
+          height: drag.source.height,
+        }
+      : { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
     return (
       <section
-        className="workspace-group"
-        data-group-id={group.id}
-        key={group.id}
+        key={group.active}
+        className={
+          "workspace-group glass-tile" +
+          (moving ? " tile-dragging" : "") +
+          (sidebar ? " project-shell" : "")
+        }
         aria-label={panelLabels[group.active]}
+        data-group-id={group.id}
+        data-tile-panel={group.active}
+        style={style}
       >
+        {group.active === "project" && sidebarChrome && (
+          <div className="workspace-sidebar-chrome">{sidebarChrome}</div>
+        )}
         <header
           className="workspace-panel-header"
           data-panel-header={group.active}
-          data-drop-zone="tabs"
-          onDragOver={(e) => {
-            if (dragging) {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              setOver(group.id + "tabs");
-            }
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            if (dragging) move(dragging, group.id, "tabs");
-            setDragging(null);
-            setOver(null);
-          }}
         >
           <div
             className="workspace-panel-tabs"
             role="tablist"
             aria-label="Панели"
           >
-            {group.tabs.map((panel) => (
-              <button
-                key={panel}
-                type="button"
-                role="tab"
-                aria-selected={group.active === panel}
-                className={group.active === panel ? "active" : ""}
-                draggable={c.editing}
-                data-panel-tab={panel}
-                onDragStart={(e) => {
-                  setDragging(panel);
-                  e.dataTransfer.effectAllowed = "move";
-                  e.dataTransfer.setData("text/plain", panel);
-                }}
-                onDragEnd={() => {
-                  setDragging(null);
-                  setOver(null);
-                }}
-                onClick={() => c.reveal(panel)}
-                title={
-                  c.editing
-                    ? "Перетащите панель за заголовок"
-                    : panelLabels[panel]
-                }
-              >
-                {c.editing && <span aria-hidden="true">⠿</span>}
-                {panelLabels[panel]}
-              </button>
-            ))}
+            {group.tabs
+              .filter((p) => p !== "graph")
+              .map((panel) => (
+                <button
+                  key={panel}
+                  role="tab"
+                  aria-selected={panel === group.active}
+                  data-panel-tab={panel}
+                  className={panel === group.active ? "active" : ""}
+                  onClick={() => void c.reveal(panel)}
+                >
+                  {panelLabels[panel]}
+                </button>
+              ))}
           </div>
-          {c.editing && (
-            <MovePanelMenu
-              panel={group.active}
-              layout={c.layout}
-              onMove={(targetId, edge) => move(group.active, targetId, edge)}
-            />
-          )}
           <button
             className="workspace-panel-action"
             aria-label={
@@ -317,101 +457,120 @@ export default function Workspace({
                 ? "Восстановить панель"
                 : "Развернуть " + panelLabels[group.active]
             }
-            title="Развернуть панель"
             onClick={() =>
-              c.maximize(c.maximized === group.active ? null : group.active)
+              void c.maximize(
+                c.maximized === group.active ? null : group.active,
+              )
             }
           >
-            {c.maximized === group.active ? "↙" : "↗"}
+            {c.maximized === group.active ? (
+              <Minimize2 size={13} />
+            ) : (
+              <Maximize2 size={13} />
+            )}
           </button>
           <button
             className="workspace-panel-action"
             aria-label={"Скрыть " + panelLabels[group.active]}
-            title="Скрыть панель"
-            disabled={visiblePanels(c.layout).length === 1}
-            onClick={() => c.hide(group.active)}
+            onClick={() => void c.hide(group.active)}
           >
-            ×
+            <X size={14} />
           </button>
+          <MovePanelMenu
+            panel={group.active}
+            layout={c.layout}
+            onMove={(target, edge) =>
+              void c.animateLayout((l) =>
+                movePanel(l, group.active, target, edge),
+              )
+            }
+            onPointerDown={(e) => begin(group.active, e)}
+            suppressClick={() => wasDrag.current}
+            canMove={(targetId, edge) => {
+              const tile = geometry.tiles.find((t) => t.group.id === targetId);
+              return (
+                !!tile &&
+                canDockTile(
+                  tile.rect,
+                  edge === "center" && tile.group.active === "graph"
+                    ? "right"
+                    : edge,
+                )
+              );
+            }}
+          />
         </header>
-        <div
-          className="workspace-panel-slot"
-          ref={mountCallbacks[group.active]}
-        />
-        {dragging && (
-          <div className="workspace-drop-targets">
-            {(["left", "right", "top", "bottom", "center"] as const).map(
-              (edge) => target(group, edge),
-            )}
-          </div>
-        )}
+        <div className="workspace-panel-slot" ref={mounts[group.active]} />
       </section>
     );
   }
-  function render(node: LayoutNode): ReactNode {
-    if (node.type === "group") return renderGroup(node);
-    return (
-      <div className={"workspace-split axis-" + node.axis} key={node.id}>
-        <div className="workspace-branch" style={{ flex: node.ratio }}>
-          {render(node.first)}
-        </div>
-        <WorkspaceSeparator
-          node={node}
-          onChange={(ratio) =>
-            c.setLayout((l) => resizeSplit(l, node.id, ratio))
-          }
-        />
-        <div className="workspace-branch" style={{ flex: 1 - node.ratio }}>
-          {render(node.second)}
-        </div>
-      </div>
-    );
-  }
-  const shown = visiblePanels(c.layout);
-  const focus = shown.includes(c.focused) ? c.focused : shown[0];
-  const compact =
-    narrow ||
-    (size.width > 0 &&
-      !fitsLayout(c.layout.root, size.width, Math.max(1, size.height - 40)));
-  const solo = c.maximized ?? (compact ? focus : null);
-  const soloGroup = solo
-    ? { type: "group" as const, id: "focused", tabs: [solo], active: solo }
-    : null;
+  const tiles = focus
+    ? [
+        {
+          group: {
+            type: "group" as const,
+            id: "focused",
+            tabs: [focus],
+            active: focus,
+          },
+          rect: bounds,
+        },
+      ]
+    : geometry.tiles;
   return (
     <div
-      className={"configurable-workspace" + (c.editing ? " is-editing" : "")}
+      className="configurable-workspace glass-workspace"
+      style={
+        {
+          "--canvas-left": aperture.x + "px",
+          "--canvas-top": aperture.y + "px",
+          "--canvas-width": aperture.width + "px",
+          "--canvas-height": aperture.height + "px",
+        } as CSSProperties
+      }
       ref={container}
+      data-workspace-dragging={drag?.moved || undefined}
     >
+      <div className="workspace-canvas-background" ref={mounts.graph} />
+      {!focus || focus === "graph" ? (
+        <div
+          className="canvas-heading"
+          style={{
+            left: aperture.x + 22,
+            top: aperture.y + 9,
+            maxWidth: aperture.width - 44,
+          }}
+        >
+          {canvasTitle}
+        </div>
+      ) : null}
       {compact && (
-        <nav className="workspace-mobile-panels" aria-label="Выбрать панель">
+        <nav className="workspace-mobile-panels">
           <select
             aria-label="Открытая панель"
-            value={solo ?? focus}
-            onChange={(e) => c.reveal(e.target.value as PanelId)}
+            value={focus ?? "graph"}
+            onChange={(e) => void c.reveal(e.target.value as PanelId)}
           >
-            {panelIds.map((panel) => (
-              <option key={panel} value={panel}>
-                {panelLabels[panel]}
+            {panelIds.map((p) => (
+              <option key={p} value={p}>
+                {panelLabels[p]}
               </option>
             ))}
           </select>
-          <button onClick={() => c.preset("default")}>Сбросить вид</button>
         </nav>
       )}
-      {c.editing && !compact && (
-        <div className="workspace-edit-hint">
-          Перетащите заголовок: центр — обмен, край — разделить, заголовок —
-          вкладки. <button onClick={() => c.setEditing(false)}>Готово</button>
-        </div>
-      )}
-      {moveNotice && (
-        <div className="workspace-edit-hint" role="status">
-          {moveNotice}
-          <button onClick={() => setMoveNotice("")}>Закрыть</button>
-        </div>
-      )}
       <div className="workspace-layout">
-        {soloGroup ? renderGroup(soloGroup) : render(c.layout.root)}
+        {tiles.map((t) => groupView(t.group, t.rect))}
+        {!focus &&
+          geometry.dividers.map((d) => (
+            <TileSeparator
+              key={d.node.id}
+              divider={d}
+              onChange={(ratio) =>
+                c.setLayout((l) => resizeSplit(l, d.node.id, ratio))
+              }
+            />
+          ))}
       </div>
       <div hidden inert ref={storage} data-workspace-storage="true" />
       {panelIds.map((panel) =>
@@ -420,69 +579,51 @@ export default function Workspace({
     </div>
   );
 }
-function WorkspaceSeparator({
-  node,
+function TileSeparator({
+  divider: d,
   onChange,
 }: {
-  node: Extract<LayoutNode, { type: "split" }>;
+  divider: Divider;
   onChange: (ratio: number) => void;
 }) {
-  const start = useRef<{ at: number; ratio: number; span: number } | null>(
-    null,
-  );
-  const horizontal = node.axis === "horizontal";
-  const element = useRef<HTMLDivElement>(null);
-  function bounds() {
-    const span =
-      (horizontal
-        ? element.current?.parentElement?.clientWidth
-        : element.current?.parentElement?.clientHeight) ?? 0;
-    const available = Math.max(1, span - 7);
-    return {
-      min: Math.max(0.15, minimumExtent(node.first, node.axis) / available),
-      max: Math.min(
-        0.85,
-        1 - minimumExtent(node.second, node.axis) / available,
-      ),
-    };
-  }
-  const [limits, setLimits] = useState({ min: 0.15, max: 0.85 });
-  useEffect(() => {
-    const parent = element.current?.parentElement;
-    const observer = new ResizeObserver(() => {
-      const next = bounds();
-      setLimits(
-        next.min <= next.max ? next : { min: node.ratio, max: node.ratio },
-      );
-    });
-    if (parent) observer.observe(parent);
-    return () => observer.disconnect();
-  }, [node.first, node.second, node.axis]);
-  function resize(ratio: number) {
-    const { min, max } = bounds();
-    if (min <= max) onChange(Math.max(min, Math.min(max, ratio)));
-  }
-
+  const start = useRef<{ at: number; ratio: number } | null>(null);
+  const horizontal = d.node.axis === "horizontal",
+    span = (horizontal ? d.parent.width : d.parent.height) - 8;
+  const min = Math.max(
+      0.15,
+      minimumExtent(d.node.first, d.node.axis) / Math.max(1, span),
+    ),
+    max = Math.min(
+      0.85,
+      1 - minimumExtent(d.node.second, d.node.axis) / Math.max(1, span),
+    );
+  const resize = (value: number) => {
+    if (min <= max) onChange(Math.max(min, Math.min(max, value)));
+  };
   return (
     <div
-      className="workspace-separator"
-      data-split-id={node.id}
-      ref={element}
+      className={
+        "workspace-separator " +
+        (horizontal ? "resize-horizontal" : "resize-vertical")
+      }
+      style={{
+        left: d.rect.x,
+        top: d.rect.y,
+        width: d.rect.width,
+        height: d.rect.height,
+      }}
       role="separator"
       tabIndex={0}
+      data-split-id={d.node.id}
       aria-label={horizontal ? "Ширина панелей" : "Высота панелей"}
       aria-orientation={horizontal ? "vertical" : "horizontal"}
-      aria-valuemin={limits.min * 100}
-      aria-valuemax={limits.max * 100}
-      aria-valuenow={node.ratio * 100}
+      aria-valuemin={Math.min(min, max) * 100}
+      aria-valuemax={Math.max(min, max) * 100}
+      aria-valuenow={d.node.ratio * 100}
       onPointerDown={(e) => {
         start.current = {
           at: horizontal ? e.clientX : e.clientY,
-          ratio: node.ratio,
-          span:
-            (horizontal
-              ? e.currentTarget.parentElement?.clientWidth
-              : e.currentTarget.parentElement?.clientHeight) ?? 1,
+          ratio: d.node.ratio,
         };
         e.currentTarget.setPointerCapture(e.pointerId);
         e.preventDefault();
@@ -491,8 +632,7 @@ function WorkspaceSeparator({
         if (start.current)
           resize(
             start.current.ratio +
-              ((horizontal ? e.clientX : e.clientY) - start.current.at) /
-                start.current.span,
+              ((horizontal ? e.clientX : e.clientY) - start.current.at) / span,
           );
       }}
       onPointerUp={() => {
@@ -502,57 +642,61 @@ function WorkspaceSeparator({
         start.current = null;
       }}
       onKeyDown={(e) => {
-        const delta = horizontal
-          ? e.key === "ArrowLeft"
-            ? -0.03
-            : e.key === "ArrowRight"
-              ? 0.03
-              : 0
-          : e.key === "ArrowUp"
-            ? -0.03
-            : e.key === "ArrowDown"
-              ? 0.03
-              : 0;
+        const delta = (horizontal ? e.key === "ArrowLeft" : e.key === "ArrowUp")
+          ? -0.03
+          : (horizontal ? e.key === "ArrowRight" : e.key === "ArrowDown")
+            ? 0.03
+            : 0;
         if (delta) {
           e.preventDefault();
-          resize(node.ratio + delta);
+          resize(d.node.ratio + delta);
         }
       }}
     />
   );
 }
-
 function MovePanelMenu({
   panel,
   layout,
   onMove,
+  onPointerDown,
+  suppressClick,
+  canMove,
 }: {
   panel: PanelId;
   layout: WorkspaceLayout;
   onMove: (target: string, edge: DropEdge) => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  suppressClick: () => boolean;
+  canMove: (target: string, edge: DropEdge) => boolean;
 }) {
-  const destinations = groups(layout.root).filter(
+  const destinations = groups(visibleRoot(layout)).filter(
     (g) => !g.tabs.includes(panel),
   );
   const [target, setTarget] = useState("");
   const [edge, setEdge] = useState<DropEdge>("center");
-  const selectedTarget = destinations.some((g) => g.id === target)
+  const selected = destinations.some((g) => g.id === target)
     ? target
     : (destinations[0]?.id ?? "");
   return (
     <details className="workspace-move-menu">
       <summary
+        className="tile-grip"
         aria-label={"Переместить " + panelLabels[panel]}
-        title="Переместить панель с клавиатуры"
+        title="Переместить панель"
+        onPointerDown={onPointerDown}
+        onClick={(e) => {
+          if (e.detail !== 0 && suppressClick()) e.preventDefault();
+        }}
       >
-        ⋯
+        <GripVertical size={17} />
       </summary>
       <div className="workspace-move-popup">
         <label>
           Рядом с панелью
           <select
             aria-label="Панель назначения"
-            value={selectedTarget}
+            value={selected}
             onChange={(e) => setTarget(e.target.value)}
           >
             {destinations.map((g) => (
@@ -572,7 +716,7 @@ function MovePanelMenu({
             {(
               ["center", "tabs", "left", "right", "top", "bottom"] as const
             ).map((e) => (
-              <option key={e} value={e}>
+              <option key={e} value={e} disabled={!canMove(selected, e)}>
                 {
                   {
                     center: "Поменять местами",
@@ -588,9 +732,9 @@ function MovePanelMenu({
           </select>
         </label>
         <button
-          disabled={!selectedTarget}
+          disabled={!selected || !canMove(selected, edge)}
           onClick={(e) => {
-            onMove(selectedTarget, edge);
+            onMove(selected, edge);
             e.currentTarget.closest("details")?.removeAttribute("open");
           }}
         >
@@ -599,22 +743,4 @@ function MovePanelMenu({
       </div>
     </details>
   );
-}
-
-function minimumExtent(
-  node: LayoutNode,
-  axis: "horizontal" | "vertical",
-): number {
-  if (node.type === "group") return axis === "horizontal" ? 150 : 100;
-  const first = minimumExtent(node.first, axis),
-    second = minimumExtent(node.second, axis);
-  return node.axis === axis ? first + second + 7 : Math.max(first, second);
-}
-function fitsLayout(node: LayoutNode, width: number, height: number): boolean {
-  if (node.type === "group") return width >= 148 && height >= 98;
-  return node.axis === "horizontal"
-    ? fitsLayout(node.first, (width - 7) * node.ratio, height) &&
-        fitsLayout(node.second, (width - 7) * (1 - node.ratio), height)
-    : fitsLayout(node.first, width, (height - 7) * node.ratio) &&
-        fitsLayout(node.second, width, (height - 7) * (1 - node.ratio));
 }

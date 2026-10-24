@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { assertRoutes, panToNode as panTo } from "./flowAssertions";
 const source = `public class Main {
@@ -59,13 +60,11 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   test.setTimeout(180000);
   await page.goto("/");
   await page.getByLabel("Название проекта").fill("Switch UI " + Date.now());
-  await page
-    .locator("input[type=file]")
-    .setInputFiles({
-      name: "Main.java",
-      mimeType: "text/x-java-source",
-      buffer: Buffer.from(source),
-    });
+  await page.locator("input[type=file]").setInputFiles({
+    name: "Main.java",
+    mimeType: "text/x-java-source",
+    buffer: Buffer.from(source),
+  });
   await expect(page.locator(".blueprint-node.entry")).toBeVisible({
     timeout: 30000,
   });
@@ -136,22 +135,43 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   await page.locator(".method-item").filter({ hasText: "fanout(" }).click();
   await page.reload();
   await page.locator(".method-item").filter({ hasText: "fanout(" }).click();
-  await page.getByRole("tab", { name: "Схема", exact: true }).click();
+  await page.getByRole("button", { name: "Схема", exact: true }).click();
   const fanoutLabels = page.locator(".shortcut-label");
   await expect(fanoutLabels).toHaveCount(10);
-  const overlap = await fanoutLabels.evaluateAll(elements => {
-    const boxes = elements.map(element => element.getBoundingClientRect());
-    return boxes.flatMap((a, i) => boxes.slice(i + 1).flatMap((b, offset) =>
-      a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom ? [[i, i + offset + 1]] : []));
+  const overlap = await fanoutLabels.evaluateAll((elements) => {
+    const boxes = elements.map((element) => element.getBoundingClientRect());
+    return boxes.flatMap((a, i) =>
+      boxes
+        .slice(i + 1)
+        .flatMap((b, offset) =>
+          a.left < b.right &&
+          b.left < a.right &&
+          a.top < b.bottom &&
+          b.top < a.bottom
+            ? [[i, i + offset + 1]]
+            : [],
+        ),
+    );
   });
   expect(overlap).toEqual([]);
-  expect(await fanoutLabels.evaluateAll(elements => elements.map(element => element.getAttribute("title")).sort()))
-    .toEqual([...Array.from({ length: 9 }, (_, index) => String(index)), "default"].sort());
+  expect(
+    await fanoutLabels.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("title")).sort(),
+    ),
+  ).toEqual(
+    [
+      ...Array.from({ length: 9 }, (_, index) => String(index)),
+      "default",
+    ].sort(),
+  );
   await assertRoutes(page);
   await page.locator(".react-flow__controls-fitview").click();
-  await page.screenshot({ path: testInfo.outputPath("switch-fanout.png"), animations: "disabled" });
+  await page.screenshot({
+    path: testInfo.outputPath("switch-fanout.png"),
+    animations: "disabled",
+  });
   await page.locator(".method-item").filter({ hasText: "choose(" }).click();
-  await page.getByRole("tab", { name: "Схема", exact: true }).click();
+  await page.getByRole("button", { name: "Схема", exact: true }).click();
   const selectorElement = page.locator(".blueprint-node.switch_selector");
   await panTo(page, selectorElement);
   await selectorElement.click();
@@ -177,7 +197,7 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   ).toHaveText(grouped.label);
   await assertRoutes(page);
   await page.locator(".method-item").filter({ hasText: "text(" }).click();
-  await page.getByRole("tab", { name: "Схема", exact: true }).click();
+  await page.getByRole("button", { name: "Схема", exact: true }).click();
   await panTo(page, page.locator(".blueprint-node.switch_selector"));
   const raw = out(
     nodes("text").find((node: any) => node.kind === "switch_selector").id,
@@ -187,18 +207,22 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   await expect(label).toContainText("…");
   await assertRoutes(page);
   await expect(page.locator(".blueprint-node.switch_case")).toHaveCount(2);
-  const caseCaptionOverlap = await page.locator(".blueprint-node.switch_case").evaluateAll(elements =>
-    elements.some(element => {
-      const label = element.querySelector(".node-label")!.getBoundingClientRect();
-      const line = element.querySelector(".structural-line")!.getBoundingClientRect();
-      return label.right > line.left;
-    }));
+  const caseCaptionOverlap = await page
+    .locator(".blueprint-node.switch_case")
+    .evaluateAll((elements) =>
+      elements.some((element) => {
+        const label = element
+          .querySelector(".node-label")!
+          .getBoundingClientRect();
+        const line = element
+          .querySelector(".structural-line")!
+          .getBoundingClientRect();
+        return label.right > line.left;
+      }),
+    );
   expect(caseCaptionOverlap).toBe(false);
   for (const theme of ["dark", "light"]) {
-    const toggle = page.getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    });
-    if (await toggle.count()) await toggle.click();
+    await setTheme(page, theme);
     await page.screenshot({
       path: testInfo.outputPath("switch-" + theme + ".png"),
       animations: "disabled",

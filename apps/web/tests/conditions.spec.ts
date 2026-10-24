@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { assertRoutes, panToNode } from "./flowAssertions";
 const source = `public class Main {
@@ -80,7 +81,10 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
             e.kind === (name === "andTest" ? "true" : "false"),
         ),
       ).toBe(true);
-    await panToNode(page, page.locator(".blueprint-node.condition_test").first());
+    await panToNode(
+      page,
+      page.locator(".blueprint-node.condition_test").first(),
+    );
     await page.locator(".blueprint-node.condition_test").first().click();
     await expect(page.locator(".inspector-selection")).toContainText(
       "Проверка",
@@ -125,12 +129,9 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
     await assertRoutes(page);
   }
   await page.locator(".method-item").filter({ hasText: "mixedTest(" }).click();
-  await page.getByRole("tab", { name: "Схема", exact: true }).click();
+  await page.getByRole("button", { name: "Схема", exact: true }).click();
   for (const theme of ["dark", "light"]) {
-    const toggle = page.getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    });
-    if (await toggle.count()) await toggle.click();
+    await setTheme(page, theme);
     await page.screenshot({
       path: testInfo.outputPath("conditions-" + theme + ".png"),
       animations: "disabled",

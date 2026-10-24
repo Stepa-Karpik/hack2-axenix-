@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { panToNode } from "./flowAssertions";
 test("expired browser session reacquires CSRF once and saves with the original idempotency key", async ({
@@ -141,12 +142,18 @@ test("real API sample → graph/code selection → invalid persisted draft → r
   const previousWidth = Number(await width.getAttribute("aria-valuenow"));
   await width.focus();
   await page.keyboard.press("ArrowRight");
-  await expect.poll(async () => Number(await width.getAttribute("aria-valuenow"))).toBeCloseTo(previousWidth + 3, 3);
-  const height = page.getByRole("separator", { name: "Высота панелей" }).first();
+  await expect
+    .poll(async () => Number(await width.getAttribute("aria-valuenow")))
+    .toBeCloseTo(previousWidth + 3, 3);
+  const height = page
+    .getByRole("separator", { name: "Высота панелей" })
+    .first();
   const previousHeight = Number(await height.getAttribute("aria-valuenow"));
   await height.focus();
   await page.keyboard.press("ArrowUp");
-  await expect.poll(async () => Number(await height.getAttribute("aria-valuenow"))).toBeCloseTo(previousHeight - 3, 3);
+  await expect
+    .poll(async () => Number(await height.getAttribute("aria-valuenow")))
+    .toBeCloseTo(previousHeight - 3, 3);
   await page.screenshot({
     path: testInfo.outputPath("workbench-desktop.png"),
   });
@@ -177,6 +184,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
     page.getByRole("button", { name: "Подготовить изменение" }),
   ).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("Открытая панель").selectOption("code");
   await expect(page.locator(".inspector")).not.toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("workbench-narrow.png"),
@@ -192,7 +200,7 @@ test("theme follows explicit choice across reload without losing source", async 
   page,
 }, testInfo) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Включить тёмную тему" }).click();
+  await setTheme(page, "dark");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -205,7 +213,7 @@ test("theme follows explicit choice across reload without losing source", async 
   await page.screenshot({
     path: testInfo.outputPath("workbench-dark.png"),
   });
-  await page.getByRole("button", { name: "Включить светлую тему" }).click();
+  await setTheme(page, "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 test("real API empty project, import, run availability and keyboard dialog", async ({
@@ -223,7 +231,9 @@ test("real API empty project, import, run availability and keyboard dialog", asy
   const caps = await page.request.get("/api/v1/capabilities");
   const { data } = await caps.json();
   await page.getByLabel("Стандартный ввод").fill("7\n");
-  const submitted = page.waitForResponse(r => r.url().endsWith("/runs") && r.request().method() === "POST");
+  const submitted = page.waitForResponse(
+    (r) => r.url().endsWith("/runs") && r.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Запустить", exact: true }).click();
   const runResponse = await submitted;
   if (!data.runner.available) {
@@ -238,15 +248,28 @@ test("real API empty project, import, run availability and keyboard dialog", asy
     const requested = runResponse.request().postDataJSON();
     const runUrl = page.url();
     // Polling and its immutable inputs belong to Workbench, independently of panels.
-    await page.getByRole("button", { name: "Скрыть Вывод", exact: true }).click();
-    const view = page.locator(".workspace-menu").filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
+    await page
+      .getByRole("button", { name: "Скрыть Консоль", exact: true })
+      .click();
+    await page.locator(".sidebar-command-menu > summary").click();
+    const view = page
+      .locator(".workspace-menu")
+      .filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
     await view.locator("summary").click();
-    await view.getByRole("button", { name: "Работа с кодом", exact: true }).click();
-    await page.getByRole("tab", { name: "Вывод", exact: true }).click();
+    await view
+      .getByRole("button", { name: "Работа с кодом", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "Консоль", exact: true }).click();
     expect(page.url()).toBe(runUrl);
     expect(runUrl.endsWith("/runs/" + started.id)).toBe(true);
     await expect(page.locator(".execution")).toHaveCount(2, { timeout: 60000 });
-    const result = (await (await page.request.get(new URL(runUrl).pathname.replace("/projects/", "/api/v1/projects/"))).json()).data;
+    const result = (
+      await (
+        await page.request.get(
+          new URL(runUrl).pathname.replace("/projects/", "/api/v1/projects/"),
+        )
+      ).json()
+    ).data;
     expect(result.id).toBe(started.id);
     expect(result.result.report.revisionId).toBe(requested.revisionId);
     expect(result.result.report.stdinUtf8).toBe("7\n");
@@ -303,13 +326,12 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     .getByRole("dialog")
     .getByRole("button", { name: "Сравнить", exact: true })
     .click();
-  await expect(page.locator('[data-panel-id="tests"] .report-outcome')).toContainText(
-    "Найдено расхождение",
-    { timeout: 120000 },
-  );
-  await expect(page.locator('[data-panel-id="tests"] .test-result summary')).toContainText(
-    "3 + 3 наблюдений",
-  );
+  await expect(
+    page.locator('[data-panel-id="tests"] .report-outcome'),
+  ).toContainText("Найдено расхождение", { timeout: 120000 });
+  await expect(
+    page.locator('[data-panel-id="tests"] .test-result summary'),
+  ).toContainText("3 + 3 наблюдений");
   await page.getByRole("tab", { name: "Изменения", exact: true }).click();
   await page.getByRole("button", { name: "Применить", exact: true }).click();
   await expect
@@ -326,7 +348,14 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     (request) =>
       request.url().endsWith("/exports") && request.method() === "POST",
   );
-  await page.getByRole("button", { name: "Экспорт выбранной версии" }).click();
+  await page.locator(".sidebar-command-menu > summary").click();
+  const fileMenu = page
+    .locator(".workspace-menu")
+    .filter({ has: page.locator("summary").filter({ hasText: /^Файл$/ }) });
+  await fileMenu.locator("summary").click();
+  await fileMenu
+    .getByRole("button", { name: "Экспорт версии", exact: true })
+    .click();
   const comparisonJob = (
     await (
       await page.request.get(
