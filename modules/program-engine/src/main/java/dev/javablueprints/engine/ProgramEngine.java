@@ -24,7 +24,7 @@ import java.util.function.Function;
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.10.0"; }
+    private static String analyzerVersion() { return "engine-0.10.1"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -597,9 +597,10 @@ public final class ProgramEngine {
     private static final class SourceMap {
         private final String path;
         private final String source;
+        private final SourcePositions positions;
         private final Map<JavaToken, int[]> offsets = new IdentityHashMap<>();
         SourceMap(String path, String source, CompilationUnit unit) {
-            this.path = path; this.source = source;
+            this.path = path; this.source = source; this.positions = new SourcePositions(source);
             int offset = 0;
             for (JavaToken token : unit.getTokenRange().orElseThrow()) {
                 String text = token.getText();
@@ -615,7 +616,7 @@ public final class ProgramEngine {
             return new SourceRange(path, start, end, begin[0], begin[1], finish[0], finish[1]);
         }
         int[] position(int offset) {
-            return sourcePosition(source, offset);
+            return positions.at(offset);
         }
     }
 

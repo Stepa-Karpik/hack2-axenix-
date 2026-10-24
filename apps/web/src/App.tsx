@@ -1865,7 +1865,7 @@ function Workbench({
               </div>
             ) : null;
           })()}
-        {file ? (
+        {file && Object.hasOwn(files, file) ? (
           <CodeEditor
             onReady={(commands) => {
               editorCommands.current = commands;
@@ -1901,7 +1901,9 @@ function Workbench({
           />
         ) : (
           <div className="empty-pane">
-            <p>Исходник не загружен</p>
+            <p>
+              {loadingRevision ? "Загрузка исходника…" : "Исходник не загружен"}
+            </p>
           </div>
         )}
       </section>

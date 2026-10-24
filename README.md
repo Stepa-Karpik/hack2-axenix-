@@ -196,6 +196,17 @@ These browser tests create synthetic projects in the local database. They exerci
 
 Workspace checks cover drag-and-drop arrangements, tab groups, resizing, local preference recovery and preservation of editor and graph state. Pure frontend tests validate layout-tree invariants and graph presentation geometry. UI layout actions must not create source revisions, proposals, jobs or graph-layout writes.
 
+### Large project fixture
+
+The versioned example in [fixtures/synthetic/large](fixtures/synthetic/large) contains 1100 source lines, ten classes and fifty methods. Import that directory, choose `demo.Main`, and provide a count followed by that many integers on standard input. The browser check imports the complete ZIP, verifies every source hash, navigates across files, exports the unchanged snapshot, and compares a compiled candidate on twenty deterministic inputs with independent expected output and three observations per side.
+
+```powershell
+pnpm --filter @java-blueprints/web exec playwright test tests/largeProject.spec.ts
+./mvnw.cmd -B -ntp -pl modules/program-engine '-Djb.engine.perf=true' '-Dtest=EnginePerformanceTest' test
+```
+
+The optional engine benchmark parses and analyzes the fixture without compiling or executing its Java code on the host. It writes `modules/program-engine/target/engine-benchmark.json`: the first analysis in a fresh test JVM, five warmups, thirty warm samples, median, p95, maximum and the exact bundle hash. These measurements cover source analysis. Program execution remains isolated in Docker; browser timings include their stated automation and rendering overhead. This fixture does not establish complete Java language coverage or a performance guarantee.
+
 ## Data and API
 
 The API lives under `/api/v1`. `GET /session` establishes a local cookie and returns a session-bound CSRF token. Mutations require the token and an idempotency UUID. Head mutations also require `If-Match` with the current revision UUID, or `empty` for a project without a head. A concurrent change returns a conflict instead of overwriting another save.
