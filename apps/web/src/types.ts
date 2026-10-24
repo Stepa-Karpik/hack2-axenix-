@@ -16,10 +16,12 @@ export interface Revision {
   projectId: string;
   parentRevisionId: string | null;
   createdAt: string;
-  bundleHash: string;
+  bundleHash: string | null;
   origin: string;
   sourceRevisionId?: string;
   files: SourceFile[];
+  directories?: string[];
+  treeHash?: string;
 }
 export interface SourceRange {
   filePath: string;

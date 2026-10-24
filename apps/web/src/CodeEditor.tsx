@@ -57,9 +57,15 @@ monaco.editor.defineTheme("blueprints-dark", {
     "editorCursor.foreground": "#C8ED83",
   },
 });
+export function disposeEditorModels(paths: string[]) {
+  for (const path of paths)
+    monaco.editor.getModel(monaco.Uri.parse(path))?.dispose();
+}
 export default function CodeEditor({
   value,
   path,
+  modelPath,
+  language = "java",
   onChange,
   range,
   diagnostics,
@@ -69,6 +75,8 @@ export default function CodeEditor({
 }: {
   value: string;
   path: string;
+  modelPath?: string;
+  language?: string;
   onChange: (text: string) => void;
   range?: SourceRange | null;
   diagnostics: Diagnostic[];
@@ -96,7 +104,7 @@ export default function CodeEditor({
       !model ||
       !range ||
       range.filePath !== path ||
-      model.uri.toString() !== monaco.Uri.parse(path).toString()
+      model.uri.toString() !== monaco.Uri.parse(modelPath ?? path).toString()
     )
       return;
     const r = new monaco.Range(
@@ -112,7 +120,7 @@ export default function CodeEditor({
   };
   useEffect(() => {
     highlight.current();
-  }, [range, path]);
+  }, [range, path, modelPath]);
   useEffect(() => {
     const model = editor.current?.getModel();
     if (model)
@@ -137,8 +145,10 @@ export default function CodeEditor({
   return (
     <Editor
       height="100%"
-      path={path}
-      language="java"
+      path={modelPath ?? path}
+      keepCurrentModel
+      saveViewState
+      language={language}
       theme={theme === "dark" ? "blueprints-dark" : "blueprints-light"}
       value={value}
       onChange={(v) => onChange(v ?? "")}

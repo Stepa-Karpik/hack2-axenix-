@@ -257,7 +257,7 @@ public class JobWorker {
 
   Map<String, Object> analyze(String p, Map<String, Object> in) {
     String r = str(in, "revisionId");
-    Analysis a = engine.inspect(new SourceBundle(r, w.files(w.revision(p, r))));
+    Analysis a = engine.inspect(new SourceBundle(r, w.javaFiles(w.revision(p, r))));
     w.putResource(p, a.id(), "analysis", a);
     return map(
         "resultKind",
@@ -284,12 +284,14 @@ public class JobWorker {
             str(in, "operation"),
             ApiController.editPayload(in),
             str(in, "intent"));
-    Candidate candidate = engine.propose(new SourceBundle(base, w.files(rev)), analysis, command);
+    Candidate candidate = engine.propose(new SourceBundle(base, w.javaFiles(rev)), analysis, command);
+    var candidateTree = new TreeMap<>(w.files(rev));
+    candidateTree.putAll(candidate.files());
     Map<String, Object> saved =
         w.tx.execute(
             tx ->
                 w.save(
-                    p, base, candidate.files(), Map.of(), "graph_edit", command.intent(), false));
+                    p, base, candidateTree, Map.of(), w.directories(rev), "graph_edit", command.intent(), false));
     String r = saved.get("id").toString();
     var checks =
         map(
@@ -347,7 +349,7 @@ public class JobWorker {
             j,
             attempt,
             1,
-            RunnerClient.compileSpec(w.files(w.revision(p, str(in, "revisionId")))),
+            RunnerClient.compileSpec(w.javaFiles(w.revision(p, str(in, "revisionId")))),
             () -> cancelled(p, j));
     return map(
         "resultKind",
@@ -369,7 +371,7 @@ public class JobWorker {
             j,
             attempt,
             1,
-            RunnerClient.compileSpec(w.files(w.revision(p, str(in, "revisionId")))),
+            RunnerClient.compileSpec(w.javaFiles(w.revision(p, str(in, "revisionId")))),
             () -> cancelled(p, j));
     Observation runtime = null;
     if (compilationPassed(compile) && !cancelled(p, j))
@@ -451,8 +453,8 @@ public class JobWorker {
             j,
             attempt,
             1,
-            w.files(w.revision(p, str(in, "baseRevisionId"))),
-            w.files(w.revision(p, str(in, "candidateRevisionId"))),
+            w.javaFiles(w.revision(p, str(in, "baseRevisionId"))),
+            w.javaFiles(w.revision(p, str(in, "candidateRevisionId"))),
             str(suite, "entryPoint"),
             cases,
             () -> cancelled(p, j));

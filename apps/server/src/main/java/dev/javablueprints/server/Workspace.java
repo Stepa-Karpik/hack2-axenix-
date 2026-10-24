@@ -219,6 +219,17 @@ public class Workspace {
     return m;
   }
 
+  List<String> directories(Map<String, Object> rev) {
+    return (List<String>) rev.getOrDefault("directories", List.of());
+  }
+
+  Map<String, String> javaFiles(Map<String, Object> rev) {
+    var result = new TreeMap<String, String>();
+    files(rev).forEach((path, text) -> { if (path.endsWith(".java")) result.put(path, text); });
+    if (result.isEmpty()) throw new ApiError(422, "NO_JAVA_SOURCES", "Revision contains no Java source files");
+    return result;
+  }
+
   Map<String, Object> save(
       String p,
       String expected,
@@ -227,36 +238,26 @@ public class Workspace {
       String origin,
       String intent,
       boolean head) {
+    return save(p, expected, texts, raw, List.of(), origin, intent, head);
+  }
+
+  Map<String, Object> save(
+      String p, String expected, Map<String, String> texts, Map<String, byte[]> raw,
+      Collection<String> directories, String origin, String intent, boolean head) {
     var project = project(p);
     if (head && !expected.equals(Objects.toString(project.get("headRevisionId"), "empty")))
       throw new ApiError(409, "REVISION_CONFLICT", "Project head changed");
-    if (texts.isEmpty() || texts.size() > 100)
-      throw new ApiError(413, "INPUT_LIMIT_EXCEEDED", "Expected 1..100 Java files");
+    var tree = new TextTree(texts, directories);
     var canonical = new TreeMap<String, String>();
-    long size = 0;
-    for (var e : texts.entrySet()) {
-      String path = e.getKey();
-      dev.javablueprints.verification.RunnerProtocol.path(path);
-      if (!path.matches("[A-Za-z0-9_$.-]+(?:/[A-Za-z0-9_$.-]+)*\\.java")
-          || Arrays.asList(path.split("/")).contains("..")
-          || Arrays.asList(path.split("/")).contains("."))
-        throw new ApiError(400, "INVALID_REQUEST", "Unsafe Java source path");
-      String text = e.getValue();
-      if (text == null) throw new ApiError(400, "INVALID_REQUEST", "Content required");
-      try {
-        size +=
-            StandardCharsets.UTF_8
-                .newEncoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .encode(java.nio.CharBuffer.wrap(text))
-                .remaining();
-      } catch (CharacterCodingException ex) {
-        throw new ApiError(400, "INVALID_REQUEST", "Source must contain valid Unicode");
+    tree.files.forEach((path, text) -> canonical.put(path,
+        text.replaceFirst("^\uFEFF", "").replace("\r\n", "\n").replace('\r', '\n')));
+    var canonicalTree = new TextTree(canonical, tree.directories);
+    var previousFiles = new HashMap<String, Map<String, Object>>();
+    if (!expected.equals("empty"))
+      for (Object value : (List<?>) revision(p, expected).get("files")) {
+        var file = (Map<String, Object>) value;
+        previousFiles.put(file.get("path").toString(), file);
       }
-      canonical.put(
-          path, text.replaceFirst("^\uFEFF", "").replace("\r\n", "\n").replace('\r', '\n'));
-    }
-    if (size > 1048576) throw new ApiError(413, "INPUT_LIMIT_EXCEEDED", "Project limit is 1 MiB");
     String r = id();
     var fs = new ArrayList<Map<String, Object>>();
     var bundle = new ByteArrayOutputStream();
@@ -270,9 +271,12 @@ public class Workspace {
         data.writeInt(contentHash.length);
         data.write(contentHash);
         byte[] original = raw.get(e.getKey());
+        var previous = previousFiles.get(e.getKey());
+        boolean unchanged = original == null && previous != null
+            && e.getValue().equals(previous.get("canonicalText"));
         String rawRef =
             original == null
-                ? null
+                ? unchanged ? (String) previous.get("rawArtifactRef") : null
                 : artifact(p, "original_source", "text/plain; charset=utf-8", original);
         fs.add(
             map(
@@ -287,9 +291,9 @@ public class Workspace {
                 "rawArtifactRef",
                 rawRef,
                 "rawHash",
-                original == null ? null : hash(original),
+                original == null ? unchanged ? previous.get("rawHash") : null : hash(original),
                 "normalization",
-                map(
+                unchanged ? previous.get("normalization") : map(
                     "bomRemoved",
                     texts.get(e.getKey()).startsWith("\uFEFF"),
                     "lineEndingsNormalized",
@@ -313,7 +317,9 @@ public class Workspace {
             "createdAt",
             Instant.now().toString(),
             "bundleHash",
-            dev.javablueprints.engine.ProgramEngine.bundleHash(new SourceBundle(r, canonical)),
+            canonicalTree.javaFiles().isEmpty() ? null : dev.javablueprints.engine.ProgramEngine.bundleHash(new SourceBundle(r, canonicalTree.javaFiles())),
+            "treeHash", canonicalTree.hash(),
+            "directories", List.copyOf(canonicalTree.directories),
             "languageProfileId",
             "java21-v1",
             "files",
@@ -350,7 +356,8 @@ public class Workspace {
         "origin", "restore", "kind", "restore", "intent", "semantic_edit",
         "sourceRevisionId", sourceId, "verificationStatus", "unverified",
         "createdAt", Instant.now().toString(), "bundleHash", source.get("bundleHash"),
-        "languageProfileId", source.get("languageProfileId"), "files", source.get("files"));
+        "languageProfileId", source.get("languageProfileId"), "files", source.get("files"),
+        "directories", directories(source), "treeHash", source.getOrDefault("treeHash", new TextTree(files(source), directories(source)).hash()));
     db.update("INSERT INTO revisions(id,project_id,parent_revision_id,data)VALUES(?,?,?,?::jsonb)",
         uuid(r), uuid(p), expected.equals("empty") ? null : uuid(expected), encode(restored));
     cas(p, expected, r);

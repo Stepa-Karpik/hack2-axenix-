@@ -224,9 +224,11 @@ class WorkspaceIntegrationTest {
   void structuralCommandsCreateDetachedCandidatesAndRetainCompileGate() throws Exception {
     String p = project();
     String originalCode = "public class Main { public static void main(String[] args) { System.out.println(1); } }";
-    String revision = str(obj(post("/projects/" + p + "/revisions", sources(originalCode), id(), "empty")), "id");
+    String revision = str(obj(post("/projects/" + p + "/revisions", map("files", List.of(
+        map("path", "Main.java", "content", originalCode), map("path", "notes.txt", "content", "notes\r\n")),
+        "directories", List.of("empty"), "importedPaths", List.of("notes.txt")), id(), "empty")), "id");
     var engine = new dev.javablueprints.engine.ProgramEngine();
-    var analysis = engine.inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    var analysis = engine.inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.javaFiles(w.revision(p, revision))));
     w.putResource(p, analysis.id(), "analysis", analysis);
     var node = analysis.graph().nodes().stream().filter(n -> n.allowedOperations().contains("delete_statement")).findFirst().orElseThrow();
     for (String operation : List.of("insert_statement", "delete_statement")) {
@@ -241,6 +243,12 @@ class WorkspaceIntegrationTest {
       assertEquals("valid", ((Map<?, ?>) proposal.get("checks")).get("parseStatus"));
       String candidateId = str(proposal, "candidateRevisionId");
       assertNotEquals(revision, candidateId);
+      var candidate = w.revision(p, candidateId);
+      assertEquals("notes\n", w.files(candidate).get("notes.txt"));
+      assertEquals(List.of("empty"), candidate.get("directories"));
+      var retained = ((List<Map<String, Object>>) candidate.get("files")).stream()
+          .filter(file -> file.get("path").equals("notes.txt")).findFirst().orElseThrow();
+      assertNotNull(retained.get("rawArtifactRef"));
       String changed = w.files(w.revision(p, candidateId)).get("Main.java");
       if (operation.equals("insert_statement")) assertTrue(changed.contains("System.out.println(2);"));
       else assertFalse(changed.contains("System.out.println(1);"));
@@ -405,6 +413,11 @@ class WorkspaceIntegrationTest {
             .build();
     var response = http.send(request, HttpResponse.BodyHandlers.ofString());
     assertEquals(201, response.statusCode(), response.body());
+    String legacyDigest = hash(w.encode(map("expected", "empty", "files", new TreeMap<>(Map.of(
+        "Main.java", new String(raw, java.nio.charset.StandardCharsets.UTF_8))), "profile", "java21-v1")));
+    assertEquals(legacyDigest, w.db.queryForObject("SELECT payload_hash FROM idempotency WHERE scope=? AND key=?",
+        String.class, imported + ":import", uuid(request.headers().firstValue("Idempotency-Key").orElseThrow())));
+    assertEquals(201, http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode());
     var rev = (Map<String, Object>) w.decode(response.body()).get("data");
     var f = (Map<String, Object>) ((List<?>) rev.get("files")).getFirst();
     var original =
@@ -1285,6 +1298,150 @@ class WorkspaceIntegrationTest {
     } finally {
       stub.stop(0);
     }
+  }
+
+  @Test
+  void textSnapshotsMoveDraftsRetainDirectoriesAndUseCasWithoutChangingOldSources() throws Exception {
+    String p = project(), path = "/projects/" + p + "/revisions";
+    var initial = post(path, map("files", List.of(map("path", "Main.java", "content", code),
+        map("path", "notes.txt", "content", "draft")), "directories", List.of("empty")), id(), "empty");
+    assertEquals(201, initial.status, initial.body.toString());
+    String base = obj(initial).get("id").toString();
+    String baseHash = obj(initial).get("bundleHash").toString();
+    var changed = post(path, map("files", List.of(map("path", "Main.java", "content", code),
+        map("path", "folder/renamed.txt", "content", "unsaved draft retained")), "directories", List.of("folder/empty")), id(), base);
+    assertEquals(201, changed.status, changed.body.toString());
+    String next = obj(changed).get("id").toString();
+    assertEquals(baseHash, obj(changed).get("bundleHash"));
+    assertNotEquals(obj(initial).get("treeHash"), obj(changed).get("treeHash"));
+    assertEquals(List.of("folder", "folder/empty"), obj(changed).get("directories"));
+    assertEquals("draft", w.files(w.revision(p, base)).get("notes.txt"));
+    assertEquals("unsaved draft retained", w.files(w.revision(p, next)).get("folder/renamed.txt"));
+    assertEquals(409, post(path, sources(code), id(), base).status);
+    assertEquals(409, post(path, map("files", List.of(map("path", "Main.java", "content", "overwrite")),
+        "importedPaths", List.of("Main.java")), id(), next).status);
+    assertEquals(next, w.project(p).get("headRevisionId"));
+    assertEquals(409, post(path, map("files", List.of(map("path", "a", "content", "x"),
+        map("path", "a/b", "content", "y"))), id(), next).status);
+    assertEquals(next, w.project(p).get("headRevisionId"));
+    var onlyText = post(path, map("files", List.of(map("path", "read me.txt", "content", "hello")),
+        "directories", List.of("empty")), id(), next);
+    assertEquals(201, onlyText.status, onlyText.body.toString());
+    String textId = obj(onlyText).get("id").toString();
+    assertNull(obj(onlyText).get("bundleHash"));
+    for (String route : List.of("/revisions/" + textId + "/analysis", "/compilations", "/runs")) {
+      var response = post("/projects/" + p + route,
+          route.contains("analysis") ? Map.of() : route.equals("/compilations")
+              ? map("revisionId", textId, "profileId", "java21-v1")
+              : map("revisionId", textId, "profileId", "java21-v1", "entryPoint", "Main"), id(), null);
+      assertEquals(422, response.status, response.body.toString());
+      assertEquals("NO_JAVA_SOURCES", ((Map<?, ?>) response.body.get("error")).get("code"));
+    }
+    var empty = post(path, map("files", List.of(), "directories", List.of("blank")), id(), textId);
+    assertEquals(201, empty.status, empty.body.toString());
+    assertTrue(w.files(obj(empty)).isEmpty());
+    assertEquals(List.of("blank"), obj(empty).get("directories"));
+  }
+
+  @Test
+  void selectedImportPreservesRawArtifactsThroughLaterTextSnapshotsAndJavaProjection() throws Exception {
+    String p = project(), path = "/projects/" + p + "/revisions";
+    String original = "\uFEFF" + code + "\r\n";
+    var imported = post(path, map("files", List.of(map("path", "Main.java", "content", original),
+        map("path", "notes.txt", "content", "notes\r\n")), "importedPaths", List.of("Main.java", "notes.txt"),
+        "directories", List.of("empty")), id(), "empty");
+    assertEquals(201, imported.status, imported.body.toString());
+    String revision = obj(imported).get("id").toString();
+    var metadata = (List<Map<String, Object>>) obj(imported).get("files");
+    assertEquals("import", obj(imported).get("origin"));
+    for (var file : metadata) assertNotNull(file.get("rawArtifactRef"));
+    var texts = w.files(w.revision(p, revision));
+    var next = w.tx.execute(tx -> w.save(p, revision, texts, Map.of(), w.directories(obj(imported)), "text_edit", "semantic_edit", true));
+    assertEquals(metadata, next.get("files"));
+    var artifact = w.db.queryForMap("SELECT bytes FROM artifacts WHERE project_id=? AND id=?", uuid(p), uuid(metadata.getFirst().get("rawArtifactRef").toString()));
+    String firstPath = metadata.getFirst().get("path").toString();
+    assertArrayEquals((firstPath.equals("Main.java") ? original : "notes\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8), (byte[]) artifact.get("bytes"));
+    var analysis = new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(next.get("id").toString(), w.javaFiles(next)));
+    assertEquals(next.get("bundleHash"), analysis.bundleHash());
+    assertEquals(Set.of("Main.java"), w.javaFiles(next).keySet());
+  }
+
+  Reply preview(String p, String filename, byte[] content) throws Exception {
+    String boundary = "preview-" + id();
+    var body = new java.io.ByteArrayOutputStream();
+    body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"files\"; filename=\"" + filename
+        + "\"\r\nContent-Type: application/octet-stream\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    body.write(content);
+    body.write(("\r\n--" + boundary + "--\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/projects/" + p + "/import-previews"))
+        .header("Origin", origin).header("X-CSRF-Token", csrf)
+        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+        .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build();
+    var response = http.send(request, HttpResponse.BodyHandlers.ofString());
+    return new Reply(response.statusCode(), w.decode(response.body()));
+  }
+
+  @Test
+  void explicitDirectoryImportCannotReplaceBaseFilesButCanMergeDirectories() throws Exception {
+    String p = project(), path = "/projects/" + p + "/revisions";
+    var first = post(path, map("files", List.of(map("path", "occupied", "content", "keep")),
+        "directories", List.of("existing")), id(), "empty");
+    String base = obj(first).get("id").toString();
+    for (String directory : List.of("occupied", "occupied/empty")) {
+      var rejected = post(path, map("files", List.of(), "directories", List.of(directory),
+          "importedDirectories", List.of(directory)), id(), base);
+      assertEquals(409, rejected.status, rejected.body.toString());
+      assertEquals(base, w.project(p).get("headRevisionId"));
+    }
+    var merged = post(path, map("files", List.of(map("path", "occupied", "content", "keep")),
+        "directories", List.of("existing", "existing/empty"),
+        "importedDirectories", List.of("existing", "existing/empty")), id(), base);
+    assertEquals(201, merged.status, merged.body.toString());
+    assertEquals("import", obj(merged).get("origin"));
+    assertEquals(List.of("existing", "existing/empty"), obj(merged).get("directories"));
+    assertEquals("keep", w.files(obj(merged)).get("occupied"));
+  }
+
+  @Test
+  void importPreviewIsReadonlyAndSelectedExportContainsExactHistoricalTree() throws Exception {
+    String p = project();
+    var archive = new java.io.ByteArrayOutputStream();
+    String original = "\uFEFFnotes\r\n";
+    try (var zip = new java.util.zip.ZipOutputStream(archive)) {
+      for (String path : List.of("empty/", "folder/note.txt")) {
+        zip.putNextEntry(new java.util.zip.ZipEntry(path));
+        if (!path.endsWith("/")) zip.write(original.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+    }
+    var preview = preview(p, "project.zip", archive.toByteArray());
+    assertEquals(200, preview.status, preview.body.toString());
+    assertNull(w.project(p).get("headRevisionId"));
+    assertTrue(w.revisions(p, 20).isEmpty());
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM artifacts WHERE project_id=?", Integer.class, uuid(p)));
+    assertEquals(List.of("empty", "folder"), obj(preview).get("directories"));
+    assertEquals(List.of(map("path", "folder/note.txt", "content", original)), obj(preview).get("files"));
+    var saved = post("/projects/" + p + "/revisions", map("files", obj(preview).get("files"),
+        "directories", obj(preview).get("directories"), "importedPaths", List.of("folder/note.txt")), id(), "empty");
+    String revision = obj(saved).get("id").toString();
+    var exported = post("/projects/" + p + "/exports", map("revisionId", revision,
+        "paths", List.of("empty", "folder/note.txt")), id(), null);
+    assertEquals(201, exported.status, exported.body.toString());
+    var response = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + obj(exported).get("downloadUrl"))).build(), HttpResponse.BodyHandlers.ofByteArray());
+    var entries = new TreeMap<String, String>();
+    try (var zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(response.body()))) {
+      for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry())
+        entries.put(entry.getName(), new String(zip.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+    }
+    assertEquals(Map.of("empty/", "", "folder/note.txt", "notes\n"), entries);
+    var bad = new java.io.ByteArrayOutputStream();
+    try (var zip = new java.util.zip.ZipOutputStream(bad)) {
+      zip.putNextEntry(new java.util.zip.ZipEntry("../bad.txt")); zip.write(1); zip.closeEntry();
+    }
+    assertEquals(400, preview(p, "bad.zip", bad.toByteArray()).status);
+    assertEquals(revision, w.project(p).get("headRevisionId"));
+    assertEquals(1, w.revisions(p, 20).size());
+    assertEquals(404, post("/projects/" + p + "/exports", map("revisionId", revision, "paths", List.of("missing")), id(), null).status);
   }
 
   Map<String, Object> waitJob(String p, String j) throws Exception {

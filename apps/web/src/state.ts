@@ -1,6 +1,7 @@
 export interface Draft {
   baseRevisionId: string;
   files: Record<string, string>;
+  directories?: string[];
 }
 export function draftKey(projectId: string) {
   return "java-blueprints:draft:" + projectId;

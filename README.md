@@ -10,14 +10,14 @@ A local Java workbench that connects source code to a structured control-flow gr
 
 ## Workflow
 
-1. Create a project and import one or more `.java` files, then edit the imported source in the editor.
+1. Create a project, then create files and folders or import text files from a ZIP archive or directory. Review the import selection before adding it to the project.
 2. Save and analyze the revision. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
    Compound conditions show the evaluation order of `&&`, `||` and `!`, including branches that skip the right operand. Select an individual test to inspect its source, or its enclosing condition to edit the whole expression.
    Traditional `switch` statements show selector evaluation, case selection, fallthrough and the destination of `break` or an enclosing loop's `continue`.
    Enhanced `for` loops show the source evaluated once, followed by element checks, binding and body repetition. Synthetic iteration steps do not expose source-edit controls.
 3. Change an expression or condition, insert a statement, or delete a supported statement from the graph. Empty methods accept an insertion at their entry node. Condition and loop templates provide editable starting points. The original head stays intact while the candidate compiles.
 4. Review the diff. A semantic change can be applied explicitly after compilation. A change marked as preserving behavior additionally requires a matching comparison for the exact two revisions.
-5. Run a single console input, or compare a versioned test suite. Download the selected canonical Java snapshot as a ZIP archive.
+5. Run a single console input, or compare a versioned test suite. Download the complete canonical snapshot or a selected file or folder as a ZIP archive.
 6. Restore a historical snapshot from the history panel. Restoration creates a new revision with its source revision recorded; previous revisions remain intact. Save or discard an unsaved draft before restoring.
 
 A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
@@ -33,6 +33,16 @@ The workbench has independent project, block palette, graph, code, inspector, ou
 Moving panels retains editor drafts and undo history, graph selection and viewport, and the active proposal or run. Workspace preferences are separate from program revisions and graph-node positions. Browsers supporting View Transitions animate arrangement changes; reduced-motion preferences and browsers without that API use direct updates.
 
 Graph nodes use distinct icons, shapes and restrained semantic colors. Conditions expose labeled true/false ports; loop regions are derived from the engine's ancestry rather than source-text guesses. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Orthogonal routing avoids node obstacles within a bounded search and marks routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
+
+## Files and folders
+
+The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors.
+
+Open files appear as tabs with language-specific icons and editor highlighting. Switching, closing and reopening tabs retains the current file's draft, selection and undo history during the project session. File operations save a complete snapshot together with pending text edits. Concurrent changes produce a conflict instead of replacing another saved version.
+
+Import previews support strict UTF-8 text and ZIP archives, with selection before commit and no silent overwrite of existing paths. Archives preserve empty folders; a browser directory picker supplies files and their parent directories, but cannot enumerate empty folders. Unsupported binary files and unsafe or oversized archives are rejected. Build scripts from imported projects are never executed.
+
+Non-Java text files can be edited and exported. Only `.java` files are analyzed and passed to the isolated Java runner. A project containing only text files or folders can be saved without scheduling a Java analysis or execution.
 
 ## Architecture
 
@@ -145,7 +155,7 @@ Workspace checks cover drag-and-drop arrangements, tab groups, resizing, local p
 
 The API lives under `/api/v1`. `GET /session` establishes a local cookie and returns a session-bound CSRF token. Mutations require the token and an idempotency UUID. Head mutations also require `If-Match` with the current revision UUID, or `empty` for a project without a head. A concurrent change returns a conflict instead of overwriting another save.
 
-Revisions retain canonical UTF-8 source with LF line endings and a SHA-256 bundle hash. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
+Revisions retain canonical UTF-8 text with LF line endings, directory entries and a SHA-256 tree hash. The separate bundle hash covers the Java subset and is absent when there are no Java sources. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
 
 Graph nodes advertise `allowedOperations` and `insertionPositions`. The change endpoint accepts `replace_expression`, `insert_statement` and `delete_statement` with operation-specific payloads. Insertions use a bound statement or method entry, never a client-supplied source offset. Compilation validates the complete candidate before it becomes applicable. `POST /projects/{p}/revisions/{r}/restore` creates a new revision with `sourceRevisionId`, checks the current head, and starts a fresh analysis. Restoration does not inherit a previous revision's verification result.
 
@@ -161,7 +171,8 @@ The initial `java21-v1` execution profile is immutable rather than configurable 
 
 | Limit | Value |
 | --- | --- |
-| Source bundle | 100 files, 1 MiB canonical UTF-8 |
+| Project tree | 100 entries including directories, 1 MiB UTF-8 text |
+| ZIP import | 1 MiB compressed input and 1 MiB total expanded content |
 | Console input | 1 MiB |
 | Arguments | 100, 8 KiB each, 64 KiB combined UTF-8; no NUL |
 | Test suite | 100 cases; three independent runs per version and case |
@@ -171,7 +182,7 @@ The initial `java21-v1` execution profile is immutable rather than configurable 
 | Controller retention | 1024 handles, 64 MiB aggregate, ten minutes |
 | Backend job deadline | Ten minutes; incomplete work cannot verify preservation |
 
-Source file and case identifiers follow the shared runner policy. Source paths use relative ASCII Java identifiers, with `package-info.java` and `module-info.java` also accepted; a test case's separate display name may contain Unicode.
+Java source paths and case identifiers follow the shared runner policy. Java paths use relative ASCII Java identifiers, with `package-info.java` and `module-info.java` also accepted. Other text paths may contain Unicode and spaces; all paths must be relative and cannot contain traversal components. A test case's separate display name may contain Unicode.
 
 ## Current scope
 

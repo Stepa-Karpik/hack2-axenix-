@@ -9,6 +9,8 @@ export default function WorkspaceMenu({
   workspace: WorkspaceController;
   actions: {
     save: () => void;
+    createFile: () => void;
+    createFolder: () => void;
     import: () => void;
     export: () => void;
     projects: () => void;
@@ -98,7 +100,9 @@ export default function WorkspaceMenu({
         "Файл",
         <>
           {item("Все проекты", actions.projects)}
-          {item("Импорт .java…", actions.import, actions.importDisabled)}
+          {item("Создать файл", actions.createFile, actions.importDisabled)}
+          {item("Создать папку", actions.createFolder, actions.importDisabled)}
+          {item("Импорт файлов…", actions.import, actions.importDisabled)}
           {item("Сохранить", actions.save, actions.saveDisabled, "Ctrl+S")}
           {item("Экспорт версии", actions.export, actions.exportDisabled)}
         </>,

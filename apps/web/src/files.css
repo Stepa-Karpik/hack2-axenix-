@@ -1,0 +1,140 @@
+.explorer-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px 9px;
+  border-bottom: 1px solid var(--line);
+}
+.explorer-tools button {
+  display: flex;
+  align-items: center;
+  padding: 6px;
+  min-height: 28px;
+}
+.explorer-tools button:last-child {
+  margin-left: auto;
+  font-size: 11px;
+}
+.explorer-item {
+  width: 100%;
+  gap: 6px;
+  min-width: 0;
+}
+.explorer-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-item svg {
+  flex-shrink: 0;
+}
+.explorer-item[draggable="true"] {
+  cursor: grab;
+}
+.explorer-form {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+.explorer-form input {
+  width: 100%;
+  min-width: 0;
+}
+.explorer-form > div {
+  display: flex;
+  gap: 6px;
+}
+.explorer-form p {
+  margin: 0;
+  line-height: 1.5;
+}
+.file-language.language-java {
+  color: var(--green);
+}
+:root[data-theme="dark"] .file-language.language-java {
+  color: var(--lime);
+}
+.file-language.language-python {
+  color: #b7934a;
+}
+.file-language.language-json,
+.file-language.language-javascript,
+.file-language.language-typescript {
+  color: #8f82bd;
+}
+.file-tabs {
+  display: flex;
+  overflow: auto;
+  flex-shrink: 0;
+  background: var(--surface-hover);
+  border-bottom: 1px solid var(--line);
+  min-height: 35px;
+}
+.file-tab {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+}
+.file-tab button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 5px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.file-tab [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+}
+.file-tab:has([aria-selected="true"]) {
+  background: var(--surface);
+  box-shadow: inset 0 2px var(--lime);
+}
+.file-tab button[aria-selected="true"] {
+  color: var(--ink);
+}
+.file-tab button:last-child {
+  padding-right: 9px;
+}
+.import-modal {
+  display: grid;
+  gap: 12px;
+  max-height: 85vh;
+}
+.import-modal p {
+  margin: 0;
+  line-height: 1.6;
+}
+.import-selection {
+  overflow: auto;
+  max-height: 45vh;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.import-selection label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  word-break: break-all;
+  margin: 0;
+}
+.import-selection label:hover {
+  background: var(--surface-hover);
+}
+.import-selection input {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--green);
+}
+.import-modal .notice {
+  margin: 0;
+}

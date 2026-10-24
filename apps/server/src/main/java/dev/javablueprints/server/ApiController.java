@@ -114,17 +114,59 @@ public class ApiController {
       @RequestHeader(value = "If-Match", required = false) String match,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
-    fields(b, "expectedHeadRevisionId", "files", "intent");
+    fields(b, "expectedHeadRevisionId", "files", "directories", "importedPaths", "importedDirectories", "intent");
     String expected = w.expected(match, b);
     if (!Objects.toString(b.getOrDefault("intent", "semantic_edit")).equals("semantic_edit"))
       throw new ApiError(400, "INVALID_REQUEST", "Text save intent must be semantic_edit");
     Map<String, String> texts = texts(b);
+    List<String> directories = b.containsKey("directories") ? strings(b, "directories") : null;
+    List<String> imported = strings(b, "importedPaths");
+    List<String> importedDirectories = strings(b, "importedDirectories");
+    if (new HashSet<>(imported).size() != imported.size() || !texts.keySet().containsAll(imported))
+      throw TextTree.invalid("importedPaths must reference unique supplied files");
     return mutation(
         p + ":revision",
         key,
         map("expected", expected, "body", b),
         201,
-        () -> w.save(p, expected, texts, Map.of(), "text_edit", "semantic_edit", true));
+        () -> {
+          var base = expected.equals("empty") ? null : w.revision(p, expected);
+          var tree = new TextTree(texts, directories == null
+              ? base == null ? List.of() : w.directories(base) : directories);
+          if (new HashSet<>(importedDirectories).size() != importedDirectories.size()
+              || !tree.directories.containsAll(importedDirectories))
+            throw TextTree.invalid("importedDirectories must reference unique supplied directories");
+          if (base != null && (!imported.isEmpty() || !importedDirectories.isEmpty())) {
+            var baseFiles = w.files(base);
+            var occupied = new HashSet<>(baseFiles.keySet());
+            occupied.addAll(w.directories(base));
+            for (String path : imported) {
+              if (occupied.contains(path)) throw TextTree.conflict("Import path is already occupied");
+              var parents = new HashSet<String>(); TextTree.parents(path, parents);
+              if (parents.stream().anyMatch(baseFiles::containsKey))
+                throw TextTree.conflict("Import parent is already a file");
+            }
+            for (String directory : importedDirectories) {
+              var parents = new HashSet<String>(); TextTree.parents(directory, parents);
+              parents.add(directory);
+              if (parents.stream().anyMatch(baseFiles::containsKey))
+                throw TextTree.conflict("Import directory is already a file");
+            }
+          }
+          var raw = new TreeMap<String, byte[]>();
+          imported.forEach(path -> raw.put(path, TextTree.utf8(texts.get(path))));
+          return w.save(p, expected, tree.files, raw, tree.directories,
+              imported.isEmpty() && importedDirectories.isEmpty() ? "text_edit" : "import", "semantic_edit", true);
+        });
+  }
+
+  @PostMapping(value = "/projects/{p}/import-previews", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  Object importPreview(@PathVariable String p,
+      @RequestParam(value = "files", required = false) List<MultipartFile> uploads,
+      @RequestParam(value = "directories", required = false) List<String> directories) throws IOException {
+    w.project(p);
+    return ok(TextTree.imports(uploads == null ? List.of() : uploads,
+        directories == null ? List.of() : directories).preview());
   }
 
   @PostMapping(value = "/projects/{p}/imports", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -132,44 +174,25 @@ public class ApiController {
       @PathVariable String p,
       @RequestHeader(value = "If-Match", required = false) String match,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
-      @RequestParam("files") List<MultipartFile> fs,
-      @RequestParam(defaultValue = "java21-v1") String languageProfileId)
-      throws IOException {
-    if (!languageProfileId.equals("java21-v1"))
-      throw new ApiError(400, "INVALID_REQUEST", "Unknown language profile");
+      @RequestParam(value = "files", required = false) List<MultipartFile> uploads,
+      @RequestParam(value = "directories", required = false) List<String> directories,
+      @RequestParam(defaultValue = "java21-v1") String languageProfileId) throws IOException {
+    if (!languageProfileId.equals("java21-v1")) throw TextTree.invalid("Unknown language profile");
     String expected = w.expected(match, Map.of());
-    var texts = new TreeMap<String, String>();
+    var tree = TextTree.imports(uploads == null ? List.of() : uploads,
+        directories == null ? List.of() : directories);
     var raw = new TreeMap<String, byte[]>();
-    for (var f : fs) {
-      String path = f.getOriginalFilename();
-      byte[] bytes = f.getBytes();
-      if (bytes.length > 1048576)
-        throw new ApiError(413, "INPUT_LIMIT_EXCEEDED", "File exceeds limit");
-      String text;
-      try {
-        text =
-            StandardCharsets.UTF_8
-                .newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString();
-      } catch (CharacterCodingException e) {
-        throw new ApiError(400, "INVALID_REQUEST", "Source must be strict UTF-8");
-      }
-      if (texts.put(path, text) != null)
-        throw new ApiError(400, "INVALID_REQUEST", "Duplicate source path");
-      raw.put(path, bytes);
-    }
-    return mutation(
-        p + ":import",
-        key,
-        map("expected", expected, "files", texts, "profile", languageProfileId),
-        201,
+    tree.files.forEach((path, text) -> raw.put(path, TextTree.utf8(text)));
+    var payload = map("expected", expected, "files", tree.files, "profile", languageProfileId);
+    // Keep accepted legacy multipart replay hashes stable when no new directory input is supplied.
+    boolean archive = uploads != null && uploads.size() == 1 && Objects.toString(
+        uploads.getFirst().getOriginalFilename(), "").toLowerCase(Locale.ROOT).endsWith(".zip");
+    if (directories != null || archive) payload.put("directories", List.copyOf(tree.directories));
+    return mutation(p + ":import", key,
+        payload, 201,
         () -> {
-          var rev = w.save(p, expected, texts, raw, "import", "semantic_edit", true);
-          var job = w.enqueue(p, "analyze", map("revisionId", rev.get("id")));
-          rev.put("analysisJob", job);
+          var rev = w.save(p, expected, tree.files, raw, tree.directories, "import", "semantic_edit", true);
+          if (!tree.javaFiles().isEmpty()) rev.put("analysisJob", w.enqueue(p, "analyze", map("revisionId", rev.get("id"))));
           return rev;
         });
   }
@@ -188,7 +211,8 @@ public class ApiController {
         p + ":restore", key, map("sourceRevisionId", r, "expected", expected), 201,
         () -> {
           var restored = w.restore(p, r, expected);
-          restored.put("analysisJob", w.enqueue(p, "analyze", map("revisionId", restored.get("id"))));
+          if (restored.get("bundleHash") != null)
+            restored.put("analysisJob", w.enqueue(p, "analyze", map("revisionId", restored.get("id"))));
           return restored;
         });
   }
@@ -199,7 +223,7 @@ public class ApiController {
       @PathVariable String r,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody(required = false) Map<String, Object> b) {
-    w.revision(p, r);
+    w.javaFiles(w.revision(p, r));
     if (b != null) fields(b, "rulesetVersion");
     return mutation(
         p + ":analyze:" + r,
@@ -500,7 +524,7 @@ public class ApiController {
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
     fields(b, "revisionId", "profileId");
-    w.revision(p, str(b, "revisionId"));
+    w.javaFiles(w.revision(p, str(b, "revisionId")));
     profile(b);
     worker.requireAvailable();
     return mutation(p + ":compile", key, b, 202, () -> w.enqueue(p, "compile", b));
@@ -512,7 +536,7 @@ public class ApiController {
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
     fields(b, "revisionId", "profileId", "entryPoint", "argv", "stdinUtf8");
-    w.revision(p, str(b, "revisionId"));
+    w.javaFiles(w.revision(p, str(b, "revisionId")));
     profile(b);
     entry(str(b, "entryPoint"));
     validateInput(b);
@@ -526,8 +550,8 @@ public class ApiController {
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
     fields(b, "baseRevisionId", "candidateRevisionId", "suiteVersionId", "profileId");
-    w.revision(p, str(b, "baseRevisionId"));
-    w.revision(p, str(b, "candidateRevisionId"));
+    w.javaFiles(w.revision(p, str(b, "baseRevisionId")));
+    w.javaFiles(w.revision(p, str(b, "candidateRevisionId")));
     w.resource(p, str(b, "suiteVersionId"), "suite");
     profile(b);
     worker.requireAvailable();
@@ -593,8 +617,19 @@ public class ApiController {
       @PathVariable String p,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
-    fields(b, "revisionId", "includeReportIds");
+    fields(b, "revisionId", "includeReportIds", "paths");
     var rev = w.revision(p, str(b, "revisionId"));
+    var selection = b.containsKey("paths") ? strings(b, "paths") : null;
+    var sourceFiles = w.files(rev);
+    var sourceDirectories = w.directories(rev);
+    if (selection != null) {
+      if (selection.isEmpty() || new HashSet<>(selection).size() != selection.size())
+        throw TextTree.invalid("Export selection must contain unique paths");
+      for (String path : selection) {
+        TextTree.path(path);
+        if (!sourceFiles.containsKey(path) && !sourceDirectories.contains(path)) throw missing();
+      }
+    }
     return mutation(
         p + ":export",
         key,
@@ -604,14 +639,24 @@ public class ApiController {
           try {
             var bytes = new ByteArrayOutputStream();
             try (var zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
-              for (var file : w.files(rev).entrySet()) {
+              for (String directory : sourceDirectories) {
+                if (!selected(selection, directory)) continue;
+                zip.putNextEntry(new ZipEntry(directory + "/")); zip.closeEntry();
+              }
+              var exportedPaths = new HashSet<>(sourceFiles.keySet());
+              for (var file : sourceFiles.entrySet()) {
+                if (!selected(selection, file.getKey())) continue;
                 zip.putNextEntry(new ZipEntry(file.getKey()));
                 zip.write(file.getValue().getBytes(StandardCharsets.UTF_8));
                 zip.closeEntry();
               }
               for (Object report : (List<?>) b.getOrDefault("includeReportIds", List.of())) {
                 var result = w.resource(p, report.toString(), "comparison");
-                zip.putNextEntry(new ZipEntry("reports/" + uuid(report.toString()) + ".json"));
+                String path = "reports/" + uuid(report.toString()) + ".json";
+                if (!exportedPaths.add(path) || w.directories(rev).contains(path)
+                    || w.files(rev).containsKey("reports"))
+                  throw TextTree.conflict("Report export path is occupied by source");
+                zip.putNextEntry(new ZipEntry(path));
                 zip.write(w.encode(result).getBytes(StandardCharsets.UTF_8));
                 zip.closeEntry();
               }
@@ -746,6 +791,17 @@ public class ApiController {
     if (!(argv instanceof List<?> args) || args.stream().anyMatch(a -> !(a instanceof String)))
       throw new ApiError(400, "INVALID_REQUEST", "Invalid argv");
     dev.javablueprints.verification.RunnerProtocol.arguments((List<String>) argv);
+  }
+
+  static boolean selected(List<String> selection, String path) {
+    return selection == null || selection.stream().anyMatch(p -> path.equals(p) || path.startsWith(p + "/"));
+  }
+
+  static List<String> strings(Map<String, Object> body, String field) {
+    Object value = body.getOrDefault(field, List.of());
+    if (!(value instanceof List<?> list) || list.stream().anyMatch(item -> !(item instanceof String)))
+      throw TextTree.invalid(field + " must be an array of paths");
+    return (List<String>) list;
   }
 
   static Map<String, String> texts(Map<String, Object> b) {

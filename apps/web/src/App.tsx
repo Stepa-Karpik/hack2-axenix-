@@ -27,7 +27,18 @@ import {
   statementTemplates,
 } from "./state";
 import type { Draft } from "./state";
-import CodeEditor from "./CodeEditor";
+import CodeEditor, { disposeEditorModels } from "./CodeEditor";
+import ProjectExplorer, { FileGlyph } from "./ProjectExplorer";
+import {
+  addPath,
+  movePath,
+  directoryPaths,
+  languageFor,
+  methodIdentity,
+  matchingMethod,
+  remapModels,
+} from "./projectFiles";
+import type { FileSnapshot } from "./projectFiles";
 import FlowCanvas, {
   kindName,
   nodeCaption,
@@ -67,6 +78,8 @@ function editRange(n: GraphNode) {
 interface WorkbenchView {
   file: string;
   methodId: string;
+  methodIdentity?: ReturnType<typeof methodIdentity>;
+  tabs?: string[];
 }
 function readView(id: string): Partial<WorkbenchView> {
   try {
@@ -76,6 +89,10 @@ function readView(id: string): Partial<WorkbenchView> {
     return {
       file: typeof view?.file === "string" ? view.file : undefined,
       methodId: typeof view?.methodId === "string" ? view.methodId : undefined,
+      methodIdentity: view?.methodIdentity,
+      tabs: Array.isArray(view?.tabs)
+        ? view.tabs.filter((t: unknown) => typeof t === "string")
+        : [],
     };
   } catch {
     return {};
@@ -298,6 +315,33 @@ function Workbench({
   const [revision, setRevision] = useState<Revision | null>(null);
   const [historyRows, setHistoryRows] = useState<Revision[]>([]);
   const [files, setFiles] = useState<Record<string, string>>({});
+  const [directories, setDirectories] = useState<string[]>([]);
+  const directoriesRef = useRef(directories);
+  directoriesRef.current = directories;
+  const [tabs, setTabs] = useState<string[]>(initialView.tabs ?? []);
+  const modelIds = useRef<Record<string, string>>({});
+  useEffect(
+    () => () => {
+      disposeEditorModels(Object.values(modelIds.current));
+    },
+    [],
+  );
+  function modelId(path: string) {
+    return (modelIds.current[path] ??=
+      projectId + "/models/" + crypto.randomUUID());
+  }
+  const selectedMethodIdentity = useRef(initialView.methodIdentity);
+  const [importPreview, setImportPreview] = useState<{
+    files: { path: string; content: string }[];
+    directories: string[];
+  } | null>(null);
+  const [importSelected, setImportSelected] = useState<string[]>([]);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const [importChooser, setImportChooser] = useState(false);
+  const [createCommand, setCreateCommand] = useState<{
+    kind: "file" | "folder";
+    id: number;
+  }>();
   const [baseId, setBaseId] = useState("");
   const [file, setFile] = useState(initialView.file ?? "");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -353,15 +397,34 @@ function Workbench({
     try {
       localStorage.setItem(
         "java-blueprints:view:" + projectId,
-        JSON.stringify({ file, methodId }),
+        JSON.stringify({
+          file,
+          methodId,
+          tabs,
+          methodIdentity:
+            methodIdentity(graph?.methods.find((m) => m.id === methodId)) ??
+            selectedMethodIdentity.current,
+        }),
       );
     } catch {}
-  }, [projectId, file, methodId]);
+  }, [projectId, file, methodId, tabs]);
+  useEffect(() => {
+    if (file && Object.hasOwn(files, file))
+      setTabs((old) => (old.includes(file) ? old : [...old, file]));
+  }, [file, files]);
+  useEffect(() => {
+    const m = graph?.methods.find((m) => m.id === methodId);
+    if (m) selectedMethodIdentity.current = methodIdentity(m);
+  }, [graph, methodId]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const dirty = revision
-    ? hasChanges(files, filesOf(revision))
-    : Object.keys(files).length > 0;
+    ? hasChanges(files, filesOf(revision)) ||
+      JSON.stringify(directoryPaths(files, directories)) !==
+        JSON.stringify(
+          directoryPaths(filesOf(revision), revision.directories ?? []),
+        )
+    : Object.keys(files).length > 0 || directories.length > 0;
   const historical = !!revision && revision.id !== project?.headRevisionId;
   const stale =
     !!graph &&
@@ -387,6 +450,15 @@ function Workbench({
   const analyze = useCallback(
     async (r: Revision) => {
       const current = ++generation.current;
+      if (!r.files.some((f) => f.path.endsWith(".java"))) {
+        setAnalysis(null);
+        setGraph(null);
+        setMethodId("");
+        setSelected(null);
+        setRange(null);
+        setStatus("Сохранено · нет Java-исходников");
+        return;
+      }
       setStatus("Разбор…");
       try {
         let a: Analysis;
@@ -410,10 +482,11 @@ function Workbench({
           setGraph(a.graph);
           setSelected(null);
           setRange(null);
-          setMethodId((old) =>
-            a.graph!.methods.some((m) => m.id === old)
-              ? old
-              : (a.graph!.methods[0]?.id ?? ""),
+          setMethodId(
+            matchingMethod(a.graph.methods, selectedMethodIdentity.current)
+              ?.id ??
+              a.graph.methods[0]?.id ??
+              "",
           );
         } else if (!graphRef.current) {
           const previous = await previousGraph(base, r);
@@ -457,6 +530,7 @@ function Workbench({
       setRevision(r);
       setBaseId(r.id);
       let text = filesOf(r);
+      let dirs = r.directories ?? [];
       if (restore) {
         try {
           const raw = localStorage.getItem(draftKey(projectId));
@@ -464,6 +538,7 @@ function Workbench({
             const draft = JSON.parse(raw) as Draft;
             if (draft.files && typeof draft.baseRevisionId === "string") {
               text = draft.files;
+              dirs = draft.directories ?? [];
               setBaseId(draft.baseRevisionId);
               if (draft.baseRevisionId !== r.id) {
                 setConflict(true);
@@ -478,6 +553,8 @@ function Workbench({
         }
       }
       setFiles(text);
+      setDirectories(dirs);
+      setTabs((old) => old.filter((p) => Object.hasOwn(text, p)));
       setFile((old) => (old in text ? old : (Object.keys(text)[0] ?? "")));
       setSelected(null);
       setRange(null);
@@ -512,24 +589,31 @@ function Workbench({
     };
   }, [projectId]);
   useEffect(() => {
-    if (!revision || !Object.keys(files).length || (historical && !dirty))
-      return;
+    if ((!revision && !dirty) || (historical && !dirty)) return;
     try {
       if (dirty)
         localStorage.setItem(
           draftKey(projectId),
-          JSON.stringify({ baseRevisionId: baseId, files }),
+          JSON.stringify({ baseRevisionId: baseId, files, directories }),
         );
       else if (!conflict) localStorage.removeItem(draftKey(projectId));
     } catch {
       setError("Локальное хранилище недоступно. Сохраните исходник на сервер.");
     }
-  }, [files, baseId, revision, projectId, dirty, historical, conflict]);
+  }, [
+    files,
+    directories,
+    baseId,
+    revision,
+    projectId,
+    dirty,
+    historical,
+    conflict,
+  ]);
   const save = useCallback(async () => {
     if (
       savingRef.current ||
       !project ||
-      !Object.keys(filesRef.current).length ||
       conflict ||
       historical ||
       busy ||
@@ -537,7 +621,15 @@ function Workbench({
     )
       return;
     const snapshot = filesRef.current;
-    if (revision && !hasChanges(snapshot, filesOf(revision))) return;
+    if (
+      revision &&
+      !hasChanges(snapshot, filesOf(revision)) &&
+      JSON.stringify(directoryPaths(snapshot, directoriesRef.current)) ===
+        JSON.stringify(
+          directoryPaths(filesOf(revision), revision.directories ?? []),
+        )
+    )
+      return;
     savingRef.current = true;
     setSaving(true);
     setError("");
@@ -550,6 +642,7 @@ function Workbench({
             path,
             content,
           })),
+          directories: directoriesRef.current,
           intent: "semantic_edit",
           expectedHeadRevisionId: baseId || "empty",
         },
@@ -598,7 +691,16 @@ function Workbench({
       return;
     const timer = setTimeout(() => void save(), 1800);
     return () => clearTimeout(timer);
-  }, [files, dirty, conflict, historical, revision, save, manualSaveRequired]);
+  }, [
+    files,
+    directories,
+    dirty,
+    conflict,
+    historical,
+    revision,
+    save,
+    manualSaveRequired,
+  ]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -744,31 +846,165 @@ function Workbench({
     if (!list?.length || !project) return;
     setBusy(true);
     setError("");
+    setImportChooser(false);
     try {
-      if (dirty)
-        throw new Error(
-          "Сначала сохраните локальную правку или экспортируйте её.",
-        );
       const data = new FormData();
-      Array.from(list).forEach((f) => data.append("files", f, f.name));
-      data.append("languageProfileId", "java21-v1");
-      const r = await api<Revision>(base + "/imports", {
-        method: "POST",
-        head: project.headRevisionId,
-        body: data,
-      });
-      setProject({
-        ...project,
-        headRevisionId: r.id,
-        originalRevisionId: project.originalRevisionId ?? r.id,
-      });
-      await openRevision(r.id);
-      void refreshHistory();
+      Array.from(list).forEach((f) =>
+        data.append("files", f, f.webkitRelativePath || f.name),
+      );
+      const preview = await api<{
+        files: { path: string; content: string }[];
+        directories: string[];
+      }>(base + "/import-previews", { method: "POST", body: data });
+      setImportPreview(preview);
+      setImportSelected([
+        ...preview.files.map((f) => f.path),
+        ...preview.directories,
+      ]);
     } catch (e) {
       setError(message(e));
     } finally {
       setBusy(false);
       if (importInput.current) importInput.current.value = "";
+      if (folderInput.current) folderInput.current.value = "";
+    }
+  }
+  async function persistSnapshot(
+    snapshot: FileSnapshot,
+    importedPaths?: string[],
+    accepted?: () => void,
+    importedDirectories?: string[],
+  ) {
+    if (savingRef.current || busy || historical || conflict || loadingRevision)
+      throw new Error(
+        "Дождитесь завершения действия или разрешите конфликт версий.",
+      );
+    savingRef.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      const r = await api<Revision>(base + "/revisions", {
+        method: "POST",
+        head: baseId || null,
+        body: {
+          files: Object.entries(snapshot.files).map(([path, content]) => ({
+            path,
+            content,
+          })),
+          directories: snapshot.directories,
+          importedPaths,
+          importedDirectories,
+          intent: "semantic_edit",
+          expectedHeadRevisionId: baseId || "empty",
+        },
+      });
+      if (!mounted.current) return;
+      accepted?.();
+      setFiles(filesOf(r));
+      setDirectories(r.directories ?? []);
+      setRevision(r);
+      setBaseId(r.id);
+      setProject((p) =>
+        p
+          ? {
+              ...p,
+              headRevisionId: r.id,
+              originalRevisionId: p.originalRevisionId ?? r.id,
+            }
+          : p,
+      );
+      setProposal(null);
+      setSelected(null);
+      setReferenceId(null);
+      setRange(null);
+      setStatus("Сохранено");
+      void refreshHistory();
+      void analyze(r);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "REVISION_CONFLICT") {
+        setConflict(true);
+        setError(
+          "Версия изменилась. Локальные изменения сохранены; выберите актуальную основу.",
+        );
+      }
+      throw e;
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+  async function changePath(
+    kind: "file" | "folder" | "move",
+    from: string,
+    to: string,
+  ) {
+    const snapshot = {
+      files: filesRef.current,
+      directories: directoriesRef.current,
+    };
+    const next =
+      kind === "move"
+        ? movePath(snapshot, from, to)
+        : addPath(snapshot, to, kind === "folder");
+    const identity = selectedMethodIdentity.current;
+    const mapped = (p: string) =>
+      p === from || p.startsWith(from + "/") ? to + p.slice(from.length) : p;
+    if (kind === "move" && identity)
+      selectedMethodIdentity.current = {
+        ...identity,
+        filePath: mapped(identity.filePath),
+      };
+    try {
+      await persistSnapshot(next, undefined, () => {
+        if (kind === "move") {
+          modelIds.current = remapModels(modelIds.current, from, to);
+          setTabs((old) => old.map(mapped));
+          setFile((old) => mapped(old));
+        } else if (kind === "file") setFile(to);
+      });
+    } catch (e) {
+      selectedMethodIdentity.current = identity;
+      throw e;
+    }
+  }
+  async function applyImport() {
+    if (!importPreview) return;
+    try {
+      let next = {
+        files: filesRef.current,
+        directories: directoriesRef.current,
+      };
+      const incoming = importPreview.files.filter((f) =>
+        importSelected.includes(f.path),
+      );
+      for (const f of incoming) {
+        next = addPath(next, f.path, false);
+        next.files[f.path] = f.content;
+      }
+      const dirs = importPreview.directories.filter((p) =>
+        importSelected.includes(p),
+      );
+      for (const p of dirs) {
+        if (
+          p in next.files ||
+          Object.keys(next.files).some((f) => p.startsWith(f + "/"))
+        )
+          throw new Error("Путь папки занят файлом: " + p);
+      }
+      next.directories = directoryPaths(next.files, [
+        ...next.directories,
+        ...dirs,
+      ]);
+      await persistSnapshot(
+        next,
+        incoming.map((f) => f.path),
+        undefined,
+        dirs,
+      );
+      setImportPreview(null);
+      if (incoming[0]) setFile(incoming[0].path);
+    } catch (e) {
+      setError(message(e));
     }
   }
   const operations = nodeOperations(selected);
@@ -917,7 +1153,7 @@ function Workbench({
       setBusy(false);
     }
   }
-  async function exportRevision() {
+  async function exportRevision(paths?: string[]) {
     if (!revision) return;
     setBusy(true);
     try {
@@ -925,6 +1161,7 @@ function Workbench({
         method: "POST",
         body: {
           revisionId: revision.id,
+          paths,
           includeReportIds: reportId ? [reportId] : [],
         },
       });
@@ -1011,63 +1248,34 @@ function Workbench({
           />
           <kbd>/</kbd>
         </label>
-        <div className="file-tree">
-          {Object.keys(files)
-            .filter(
-              (f) =>
-                f.toLowerCase().includes(search.toLowerCase()) ||
-                graph?.methods.some(
-                  (m) =>
-                    m.sourceRange.filePath === f &&
-                    m.signature.toLowerCase().includes(search.toLowerCase()),
-                ),
-            )
-            .map((f) => (
-              <div key={f}>
-                <button
-                  className={"file-item " + (file === f ? "active" : "")}
-                  onClick={() => {
-                    setFile(f);
-                    workspace.reveal("code");
-                    setReferenceId(null);
-                    setRange(null);
-                  }}
-                >
-                  <Icon name="file" size={15} />
-                  {f}
-                  <span className="file-chevron">
-                    <Icon name="chevron" size={12} />
-                  </span>
-                </button>
-                {graph?.methods
-                  .filter(
-                    (m) =>
-                      m.sourceRange.filePath === f &&
-                      m.signature.toLowerCase().includes(search.toLowerCase()),
-                  )
-                  .map((m) => (
-                    <button
-                      key={m.id}
-                      className={
-                        "method-item " + (methodId === m.id ? "active" : "")
-                      }
-                      disabled={inFlight}
-                      onClick={() => {
-                        setMethodId(m.id);
-                        workspace.reveal("graph");
-                        setFile(f);
-                        setRange(m.sourceRange);
-                        setSelected(null);
-                        setReferenceId(null);
-                      }}
-                    >
-                      <Icon name="method" size={12} />
-                      {m.signature}
-                    </button>
-                  ))}
-              </div>
-            ))}
-        </div>
+        <ProjectExplorer
+          snapshot={{ files, directories }}
+          active={file}
+          search={search}
+          methods={stale ? [] : (graph?.methods ?? [])}
+          methodId={methodId}
+          disabled={inFlight || historical || conflict}
+          onOpen={(p) => {
+            setFile(p);
+            workspace.reveal("code");
+            setRange(null);
+            setReferenceId(null);
+          }}
+          onMethod={(m) => {
+            if (stale) return;
+            setMethodId(m.id);
+            selectedMethodIdentity.current = methodIdentity(m);
+            setFile(m.sourceRange.filePath);
+            setRange(m.sourceRange);
+            setSelected(null);
+            setReferenceId(null);
+            workspace.reveal("graph");
+          }}
+          onChange={changePath}
+          onImport={() => setImportChooser(true)}
+          onDownload={(p) => void exportRevision([p])}
+          createCommand={createCommand}
+        />
         <div className="sidebar-bottom">
           <div className="panel-caption">
             ИСТОРИЯ{" "}
@@ -1214,7 +1422,9 @@ function Workbench({
             <h2>
               {analysis?.parseStatus === "invalid"
                 ? "Исправьте исходник"
-                : "Схема появится здесь"}
+                : Object.keys(files).some((p) => p.endsWith(".java"))
+                  ? "Схема появится здесь"
+                  : "Нет Java-исходников"}
             </h2>
             <p>
               {analysis?.parseStatus === "invalid"
@@ -1222,7 +1432,7 @@ function Workbench({
                 : "Импортируйте .java или выберите метод."}
             </p>
             {!revision && (
-              <button onClick={() => importInput.current?.click()}>
+              <button onClick={() => setImportChooser(true)}>
                 Импорт .java
               </button>
             )}
@@ -1231,11 +1441,57 @@ function Workbench({
       </section>
     ),
     code: (
-      <section className="code-pane" aria-label="Java редактор">
+      <section className="code-pane" aria-label="Редактор файлов">
+        <div className="file-tabs" role="tablist" aria-label="Открытые файлы">
+          {tabs
+            .filter((p) => p in files)
+            .map((p, i) => (
+              <div className="file-tab" key={p}>
+                <button
+                  role="tab"
+                  aria-label={p.split("/").pop()}
+                  aria-selected={file === p}
+                  onClick={() => {
+                    setFile(p);
+                    setRange(null);
+                  }}
+                >
+                  <FileGlyph path={p} />
+                  {p.split("/").pop()}
+                  {revision && files[p] !== filesOf(revision)[p] ? " •" : ""}
+                </button>
+                <button
+                  aria-label={"Сдвинуть влево " + p}
+                  disabled={i === 0}
+                  onClick={() =>
+                    setTabs((old) => {
+                      const n = [...old];
+                      [n[i - 1], n[i]] = [n[i], n[i - 1]];
+                      return n;
+                    })
+                  }
+                >
+                  ‹
+                </button>
+                <button
+                  aria-label={"Закрыть " + p}
+                  onClick={() => {
+                    setTabs((old) => old.filter((t) => t !== p));
+                    if (file === p)
+                      setFile(
+                        tabs.filter((t) => t !== p && t in files)[0] ?? "",
+                      );
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+        </div>
         <div className="editor-caption">
           <span>{file || "ИСХОДНИК"}</span>
           <span>
-            {historical ? "Только чтение" : "JAVA"}
+            {historical ? "Только чтение" : languageFor(file).toUpperCase()}
             <button
               onClick={() => void save()}
               disabled={!dirty || saving || conflict || historical}
@@ -1251,6 +1507,8 @@ function Workbench({
               editorCommands.current = commands;
             }}
             path={projectId + "/" + file}
+            modelPath={modelId(file)}
+            language={languageFor(file)}
             value={files[file] ?? ""}
             onChange={edit}
             range={
@@ -1271,7 +1529,7 @@ function Workbench({
                 : null,
             }))}
             onOffset={offset}
-            readOnly={historical || busy || loadingRevision}
+            readOnly={historical || busy || saving || loadingRevision}
           />
         ) : (
           <div className="empty-pane">
@@ -1664,8 +1922,16 @@ function Workbench({
         <WorkspaceMenu
           workspace={workspace}
           actions={{
+            createFile: () => {
+              workspace.reveal("project");
+              setCreateCommand({ kind: "file", id: Date.now() });
+            },
+            createFolder: () => {
+              workspace.reveal("project");
+              setCreateCommand({ kind: "folder", id: Date.now() });
+            },
             save: () => void save(),
-            import: () => importInput.current?.click(),
+            import: () => setImportChooser(true),
             export: () => void exportRevision(),
             projects: () => navigate("/"),
             run: () => setDialog("run"),
@@ -1678,7 +1944,11 @@ function Workbench({
             },
             editDisabled: !file || historical || busy || loadingRevision,
             saveDisabled: !dirty || saving || conflict || historical,
-            runDisabled: !revision || dirty || busy,
+            runDisabled:
+              !revision ||
+              dirty ||
+              busy ||
+              !Object.keys(files).some((p) => p.endsWith(".java")),
             exportDisabled: !revision || busy,
             importDisabled: busy,
             stopDisabled: !job || !["queued", "running"].includes(job.status),
@@ -1694,7 +1964,7 @@ function Workbench({
         >
           {project?.name ?? "Проект"}
         </a>
-        <span className="version-badge" title={revision?.bundleHash}>
+        <span className="version-badge" title={revision?.bundleHash ?? undefined}>
           {short(revision?.id)}
         </span>
         <span className="toolbar-spacer" />
@@ -1708,12 +1978,17 @@ function Workbench({
           Расположение
         </button>
         <ThemeToggle />
-        <button onClick={() => importInput.current?.click()} disabled={busy}>
+        <button onClick={() => setImportChooser(true)} disabled={busy}>
           <Icon name="upload" /> <span className="hide-narrow">Импорт</span>
         </button>
         <button
           onClick={() => setDialog("run")}
-          disabled={!revision || dirty || busy}
+          disabled={
+            !revision ||
+            dirty ||
+            busy ||
+            !Object.keys(files).some((p) => p.endsWith(".java"))
+          }
         >
           <Icon name="play" /> Запуск
         </button>
@@ -1729,7 +2004,12 @@ function Workbench({
         <button
           className="primary"
           onClick={() => setDialog("compare")}
-          disabled={!revision || dirty || busy}
+          disabled={
+            !revision ||
+            dirty ||
+            busy ||
+            !Object.keys(files).some((p) => p.endsWith(".java"))
+          }
         >
           <Icon name="compare" /> Сравнить
         </button>
@@ -1745,7 +2025,7 @@ function Workbench({
         <input
           type="file"
           multiple
-          accept=".java"
+          accept=".zip,.java,.txt,.md,.json,.xml,.yaml,.yml,.py,.js,.ts,.html,.css,.sql,.sh,.ps1"
           ref={importInput}
           hidden
           onChange={(e) => void importFiles(e.target.files)}
@@ -1814,6 +2094,120 @@ function Workbench({
         <span>LF</span>
         <span>Java 21</span>
       </footer>
+      <input
+        type="file"
+        multiple
+        ref={folderInput}
+        hidden
+        {...({ webkitdirectory: "" } as Record<string, string>)}
+        onChange={(e) => void importFiles(e.target.files)}
+      />
+      {(importChooser || importPreview) && (
+        <div className="modal-backdrop">
+          <section
+            className="modal import-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="import-title"
+          >
+            <div className="modal-heading">
+              <h2 id="import-title">Импорт файлов</h2>
+              <button
+                aria-label="Закрыть импорт"
+                disabled={saving}
+                onClick={() => {
+                  setImportChooser(false);
+                  setImportPreview(null);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            {importPreview ? (
+              <>
+                <p className="small quiet">
+                  Совпадающие пути не перезаписываются.
+                </p>
+                <div className="import-selection">
+                  {[
+                    ...importPreview.directories,
+                    ...importPreview.files.map((f) => f.path),
+                  ]
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((p) => (
+                      <label
+                        key={p}
+                        style={{
+                          paddingLeft: 10 + (p.split("/").length - 1) * 14,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={importSelected.includes(p)}
+                          onChange={(e) => {
+                            const subtree = [
+                              ...importPreview.directories,
+                              ...importPreview.files.map((f) => f.path),
+                            ].filter((x) => x === p || x.startsWith(p + "/"));
+                            setImportSelected((old) =>
+                              e.target.checked
+                                ? [...new Set([...old, ...subtree])]
+                                : old.filter((x) => !subtree.includes(x)),
+                            );
+                          }}
+                        />
+                        {importPreview.directories.includes(p) ? (
+                          <Icon name="chevron" size={12} />
+                        ) : (
+                          <FileGlyph path={p} />
+                        )}
+                        {p}
+                        {importPreview.directories.includes(p) ? "/" : ""}
+                        {p in files ? " · путь занят" : ""}
+                      </label>
+                    ))}
+                </div>
+                {error && (
+                  <div className="notice error" role="alert">
+                    {error}
+                  </div>
+                )}
+                <div className="modal-actions">
+                  <button onClick={() => setImportPreview(null)}>Назад</button>
+                  <button
+                    className="primary"
+                    disabled={
+                      !importSelected.length || saving || historical || conflict
+                    }
+                    onClick={() => void applyImport()}
+                  >
+                    {saving ? "Импорт…" : "Импортировать выбранное"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  disabled={busy}
+                  onClick={() => importInput.current?.click()}
+                >
+                  Выбрать ZIP или файлы
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => folderInput.current?.click()}
+                >
+                  Выбрать папку
+                </button>
+                <p className="small quiet">
+                  Текстовые файлы UTF-8. Анализ и запуск доступны для Java.
+                  Пустые папки можно импортировать из ZIP или создать в проекте.
+                </p>
+              </>
+            )}
+          </section>
+        </div>
+      )}
       {dialog && project && revision && (
         <RunDialog
           kind={dialog}
