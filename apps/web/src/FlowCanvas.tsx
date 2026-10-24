@@ -52,7 +52,9 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
       title={data.fullLabel}
     >
       <Handle type="target" position={Position.Top} />
-      {data.executionRole === "structural" ? (
+      {isIterationProtocol(data) ? (
+        <div className="node-label">{data.label}</div>
+      ) : data.executionRole === "structural" ? (
         <>
           <div className="node-label">{data.label}</div>
           <span className="structural-line">{data.line}</span>
@@ -88,6 +90,11 @@ export function kindName(kind: string) {
         switch_case: "Ветка",
         WhileStmt: "Пока",
         ForStmt: "Цикл",
+        ForEachStmt: "Обход",
+        foreach_source: "Источник",
+        foreach_check: "Есть элемент?",
+        foreach_bind: "Элемент",
+        foreach_advance: "Следующая итерация",
         DoStmt: "Повтор",
         ReturnStmt: "Возврат",
         ExpressionStmt: "Действие",
@@ -107,6 +114,13 @@ export function kindName(kind: string) {
       } as Record<string, string>
     )[kind] ?? kind
   );
+}
+export function isIterationProtocol(node: Pick<GraphNode, "kind" | "executionRole">) {
+  return node.executionRole === "synthetic" &&
+    ["foreach_check", "foreach_bind", "foreach_advance"].includes(node.kind);
+}
+export function nodeCaption(node: Pick<GraphNode, "kind" | "label" | "executionRole">) {
+  return isIterationProtocol(node) ? kindName(node.kind) : node.label;
 }
 function ShortcutEdge({
   id,
@@ -300,7 +314,7 @@ export default function FlowCanvas({
                         ? "Исключение"
                         : n.kind === "loop_back"
                           ? "Повтор цикла"
-                          : n.label.split("\n")[0].slice(0, 110),
+                          : nodeCaption(n).split("\n")[0].slice(0, 110),
             line: n.sourceRange ? `L${n.sourceRange.startLine}` : "",
             selected: false,
           },

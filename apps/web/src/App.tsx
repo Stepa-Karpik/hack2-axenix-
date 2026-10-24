@@ -26,7 +26,7 @@ import {
 } from "./state";
 import type { Draft } from "./state";
 import CodeEditor from "./CodeEditor";
-import FlowCanvas, { kindName } from "./FlowCanvas";
+import FlowCanvas, { kindName, nodeCaption, isIterationProtocol } from "./FlowCanvas";
 import SymbolInspector from "./SymbolInspector";
 import { currentBindings, referenceAt } from "./symbols";
 import { sampleSource } from "./sample";
@@ -1590,13 +1590,13 @@ function Workbench({
           </div>
           {selected ? (
             <>
-              <div className="inspector-selection">
+              <div className={"inspector-selection" + (isIterationProtocol(selected) ? " iteration-protocol" : "")}>
                 <span className="eyebrow">
                   {selected.executionRole === "ast_projection"
                     ? "Исходник"
                     : kindName(selected.kind)}
                 </span>
-                <h2>{selected.label.split("\n")[0].slice(0, 120)}</h2>
+                {!isIterationProtocol(selected) && <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>}
                 <span className="quiet small">
                   {selected.sourceRange
                     ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
@@ -1776,7 +1776,7 @@ function Workbench({
                 .filter((n) => n.methodId === methodId)
                 .map((n) => (
                   <button key={n.id} onClick={() => pickNode(n)}>
-                    {kindName(n.kind)} · {n.label.slice(0, 55)}
+                    {isIterationProtocol(n) ? nodeCaption(n) : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
                   </button>
                 ))}
             </details>

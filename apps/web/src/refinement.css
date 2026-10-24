@@ -1439,3 +1439,8 @@ select:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.inspector-selection.iteration-protocol .eyebrow {
+  display: block;
+  margin-bottom: 8px;
+}

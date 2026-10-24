@@ -864,7 +864,7 @@ class WorkspaceIntegrationTest {
     assertEquals(409, post("/projects/" + p + "/changes", stale, id(), null).status);
     assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
     var current = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
-    assertEquals("engine-0.5.0", current.analyzerVersion());
+    assertEquals(dev.javablueprints.engine.ProgramEngine.VERSION, current.analyzerVersion());
     assertEquals(List.of("x", "return 0;"), switchTrace(current.graph(), "choose", "default"), "No-match bypasses first case when default is absent");
     var selector = current.graph().nodes().stream().filter(n -> n.kind().equals("switch_selector")).findFirst().orElseThrow();
     var projection = current.graph().nodes().stream().filter(n -> n.kind().equals("expression") && n.sourceRange().equals(selector.sourceRange())).findFirst().orElseThrow();
@@ -882,6 +882,138 @@ class WorkspaceIntegrationTest {
     var changedSelector = changed.graph().nodes().stream().filter(n -> n.kind().equals("switch_selector")).findFirst().orElseThrow();
     assertEquals("(2)", changedSelector.label());
     assertNotEquals(selector.id(), changedSelector.id());
+    assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
+    assertEquals(current.graph(), w.convert(w.analysis(p, revision, current.id()).get("graph"), dev.javablueprints.engine.EngineModel.Graph.class));
+    assertEquals(revision, w.project(p).get("headRevisionId"));
+    assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidateId, "proposalId", proposal.get("id")), id(), revision).status);
+  }
+
+  List<String> enhancedForTrace(dev.javablueprints.engine.EngineModel.Graph graph, List<Boolean> iterations,
+      List<Boolean> conditions) {
+    var method = graph.methods().stream().filter(m -> m.fullyQualifiedName().endsWith(".walk")).findFirst().orElseThrow();
+    var nodes = graph.nodes().stream().collect(java.util.stream.Collectors.toMap(dev.javablueprints.engine.EngineModel.GraphNode::id, n -> n));
+    var checks = new ArrayDeque<>(iterations);
+    var tests = new ArrayDeque<>(conditions);
+    var trace = new ArrayList<String>();
+    String current = method.entryNodeId();
+    for (int step = 0; step < 80; step++) {
+      var node = nodes.get(current);
+      assertNotNull(node);
+      assertEquals(method.id(), node.methodId());
+      assertNotEquals("ast_projection", node.executionRole());
+      if (node.kind().equals("normal_exit")) {
+        assertTrue(checks.isEmpty());
+        assertTrue(tests.isEmpty());
+        return trace;
+      }
+      String from = current;
+      var outgoing = graph.edges().stream().filter(e -> e.source().equals(from)).toList();
+      if (node.kind().equals("foreach_check") || node.kind().equals("condition_test")) {
+        boolean outcome = node.kind().equals("foreach_check") ? checks.removeFirst() : tests.removeFirst();
+        trace.add(node.kind() + ":" + outcome);
+        current = outgoing.stream().filter(e -> e.kind().equals(outcome ? "true" : "false")).findFirst().orElseThrow().target();
+      } else {
+        if (node.kind().equals("foreach_source")) trace.add("source:" + node.label());
+        else if (node.kind().equals("foreach_bind") || node.kind().equals("foreach_advance")) trace.add(node.kind());
+        else if (node.executionRole().equals("statement")) trace.add(node.label());
+        assertEquals(1, outgoing.size());
+        current = outgoing.getFirst().target();
+      }
+    }
+    throw new AssertionError("Iteration fixture trace did not terminate");
+  }
+
+  @Test
+  void enhancedForGraphPersistsAbstractProtocolAndReadonlyNodesWithoutInventedSourceRanges() throws Exception {
+    String p = project();
+    String source = "// 😀\nclass Main {void walk(int[] values){for(int value:values){if(value<0)continue;consume(value);}after();}void consume(int x){}void after(){}}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var analysis = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
+    var reply = send("GET", "/projects/" + p + "/revisions/" + revision + "/graph?analysisId=" + analysis.id(), null, null, null, null);
+    assertEquals(200, reply.status, reply.body.toString());
+    var graph = w.convert(obj(reply), dev.javablueprints.engine.EngineModel.Graph.class);
+    assertEquals(analysis.graph(), graph);
+    assertEquals(List.of("source:values", "foreach_check:false", "after();"), enhancedForTrace(graph, List.of(false), List.of()));
+    assertEquals(List.of("source:values", "foreach_check:true", "foreach_bind", "condition_test:false", "consume(value);", "foreach_advance", "foreach_check:false", "after();"),
+        enhancedForTrace(graph, List.of(true, false), List.of(false)));
+    assertEquals(List.of("source:values", "foreach_check:true", "foreach_bind", "condition_test:true", "continue;", "foreach_advance", "foreach_check:true", "foreach_bind", "condition_test:false", "consume(value);", "foreach_advance", "foreach_check:false", "after();"),
+        enhancedForTrace(graph, List.of(true, true, false), List.of(true, false)));
+    var header = graph.nodes().stream().filter(n -> n.kind().equals("ForEachStmt")).findFirst().orElseThrow();
+    assertEquals("structural", header.executionRole());
+    var iterable = graph.nodes().stream().filter(n -> n.kind().equals("foreach_source")).findFirst().orElseThrow();
+    assertEquals("statement", iterable.executionRole());
+    assertFalse(iterable.synthetic());
+    assertEquals("values", source.substring(iterable.sourceRange().startOffset(), iterable.sourceRange().endOffset()));
+    var protocol = graph.nodes().stream().filter(n -> Set.of("foreach_check", "foreach_bind", "foreach_advance").contains(n.kind())).toList();
+    assertEquals(Set.of("foreach_check", "foreach_bind", "foreach_advance"), protocol.stream().map(n -> n.kind()).collect(java.util.stream.Collectors.toSet()));
+    for (var node : protocol) {
+      assertEquals("synthetic", node.executionRole());
+      assertTrue(node.synthetic());
+      assertNull(node.sourceRange());
+      assertTrue(node.allowedOperations().isEmpty());
+      assertTrue(node.editableFields().isEmpty());
+      assertTrue(node.editableFieldRanges().isEmpty());
+      assertTrue(node.insertionPositions().isEmpty());
+    }
+    assertTrue(iterable.allowedOperations().isEmpty());
+    assertTrue(iterable.editableFields().isEmpty());
+    for (var node : List.of(iterable, protocol.stream().filter(n -> n.kind().equals("foreach_check")).findFirst().orElseThrow())) {
+      var command = map("baseRevisionId", revision, "analysisId", analysis.id(), "methodId", node.methodId(), "nodeId", node.id(),
+          "operation", node.kind().equals("foreach_source") ? "replace_expression" : "delete_statement",
+          "payload", node.kind().equals("foreach_source") ? map("field", "expression", "source", "values") : Map.of(), "intent", "semantic_edit");
+      String key = id();
+      var submitted = post("/projects/" + p + "/changes", command, key, null);
+      assertEquals(202, submitted.status, submitted.body.toString());
+      var result = waitJob(p, str(obj(submitted), "jobId"));
+      assertEquals("failed", result.get("status"));
+      assertEquals("UNSUPPORTED_OPERATION", ((Map<?, ?>) result.get("error")).get("code"));
+      var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+      assertEquals("rejected", proposal.get("status"));
+      assertFalse(proposal.containsKey("candidateRevisionId"));
+      assertEquals(obj(submitted), obj(post("/projects/" + p + "/changes", command, key, null)));
+    }
+    assertEquals(2, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=? AND type='change'", Integer.class, uuid(p)));
+    assertEquals(1, w.revisions(p, 100).size());
+    var caps = (Map<?, ?>) obj(send("GET", "/capabilities", null, null, null, null)).get("enhanced_for_flow");
+    assertEquals("partial", caps.get("status"));
+    assertEquals("normal_iteration_abstraction", caps.get("scope"));
+    assertEquals("unknown", caps.get("protocolDetails"));
+    assertEquals("unknown", caps.get("exceptionalFlow"));
+  }
+
+  @Test
+  void enhancedForHistoricalCacheAndIterableProjectionCandidateKeepRevisionAndRuntimeGates() throws Exception {
+    String p = project();
+    String source = "class Main {void walk(int[] values,int[] other){for(int value:values){consume(value);}after();}void consume(int x){}void after(){}}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(source), id(), "empty")), "id");
+    var fixture = new dev.javablueprints.engine.ProgramEngine().inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    var old = w.decode(w.encode(fixture));
+    old.put("analyzerVersion", "engine-0.5.0");
+    w.putResource(p, fixture.id(), "analysis", old);
+    assertEquals(old, obj(send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis?analysisId=" + fixture.id(), null, null, null, null)));
+    assertEquals(404, send("GET", "/projects/" + p + "/revisions/" + revision + "/analysis", null, null, null, null).status);
+    var stale = map("baseRevisionId", revision, "analysisId", fixture.id(), "methodId", "m", "nodeId", "n", "operation", "replace_expression", "payload", map("field", "expression", "source", "other"), "intent", "semantic_edit");
+    assertEquals(409, post("/projects/" + p + "/changes", stale, id(), null).status);
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    var current = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertEquals("engine-0.6.0", current.analyzerVersion());
+    var iterable = current.graph().nodes().stream().filter(n -> n.kind().equals("foreach_source")).findFirst().orElseThrow();
+    var projection = current.graph().nodes().stream().filter(n -> n.kind().equals("expression") && n.sourceRange().equals(iterable.sourceRange())).findFirst().orElseThrow();
+    assertEquals("ast_projection", projection.executionRole());
+    assertTrue(projection.allowedOperations().contains("replace_expression"));
+    var command = map("baseRevisionId", revision, "analysisId", current.id(), "methodId", projection.methodId(), "nodeId", projection.id(), "operation", "replace_expression", "payload", map("field", "expression", "source", "other"), "intent", "semantic_edit");
+    var submitted = post("/projects/" + p + "/changes", command, id(), null);
+    assertEquals(202, submitted.status, submitted.body.toString());
+    assertEquals("succeeded", waitJob(p, str(obj(submitted), "jobId")).get("status"));
+    var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+    assertEquals("rejected", proposal.get("status"));
+    assertEquals("unavailable", ((Map<?, ?>) proposal.get("checks")).get("compileStatus"));
+    String candidateId = str(proposal, "candidateRevisionId");
+    var changed = w.convert(analyzeRevision(p, candidateId), dev.javablueprints.engine.EngineModel.Analysis.class);
+    assertEquals(List.of("source:(other)", "foreach_check:true", "foreach_bind", "consume(value);", "foreach_advance", "foreach_check:false", "after();"), enhancedForTrace(changed.graph(), List.of(true, false), List.of()));
+    var changedSource = changed.graph().nodes().stream().filter(n -> n.kind().equals("foreach_source")).findFirst().orElseThrow();
+    assertEquals("(other)", w.files(w.revision(p, candidateId)).get("Main.java").substring(changedSource.sourceRange().startOffset(), changedSource.sourceRange().endOffset()));
+    assertNotEquals(iterable.id(), changedSource.id());
     assertEquals(source, w.files(w.revision(p, revision)).get("Main.java"));
     assertEquals(current.graph(), w.convert(w.analysis(p, revision, current.id()).get("graph"), dev.javablueprints.engine.EngineModel.Graph.class));
     assertEquals(revision, w.project(p).get("headRevisionId"));

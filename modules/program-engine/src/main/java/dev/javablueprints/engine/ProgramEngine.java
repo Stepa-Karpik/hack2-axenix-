@@ -21,11 +21,12 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.5.0";
+    public static final String VERSION = "engine-0.6.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
     private static final int MAX_SWITCH_LABELS_PER_METHOD = 4096;
+    private static final int MAX_FOREACH_LOOPS_PER_METHOD = 1024;
     public static SymbolEnvironment currentSymbolEnvironment() { return SemanticAnalyzer.environment(); }
     public static String currentSymbolEnvironmentHash() { return currentSymbolEnvironment().environmentHash(); }
 
@@ -170,7 +171,7 @@ public final class ProgramEngine {
 
     private static boolean unsupportedFlow(Node body) {
         return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt sw && !supportedSwitch(sw)
-                || s instanceof LabeledStmt || s instanceof SynchronizedStmt || s instanceof ForEachStmt
+                || s instanceof LabeledStmt || s instanceof SynchronizedStmt
                 || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
                 || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
                 || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
@@ -325,9 +326,10 @@ public final class ProgramEngine {
         builder.declarations.addAll(semantic.declarations());
         List<Capability> coverage = List.of(
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
-                new Capability("control_flow", "partial", "Structured if/while/do/for and traditional colon switch, return/throw, nearest loop/switch break and enclosing-loop continue; exceptional calls and opaque constructs are not complete CFG"),
+                new Capability("control_flow", "partial", "Structured if/while/do/for, enhanced-for normal iteration abstraction and traditional colon switch, return/throw, nearest loop/switch break and enclosing-loop continue; exceptional calls, iteration protocol details and opaque constructs are not complete CFG"),
                 new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion &&/||/!/parentheses in supported if/while/do/for conditions, at most 4096 tests/method; other subexpressions are atomic tests. Calls, unboxing and exceptional completion are not modeled; opaque methods remain unsupported"),
                 new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
+                new Capability("enhanced_for_flow", builder.invalid ? "not_requested" : "partial", "Normal iteration abstraction, source evaluated once, synthetic check/bind/advance; at most 1024 enhanced-for loops per method. Advance means continuation, not Iterator.next; array/Iterable protocol details and exceptional flow are unknown. Type validity requires isolated compilation"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
@@ -454,7 +456,7 @@ public final class ProgramEngine {
         String node(Node ast, String kind, String parent, String caption) {
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
-            boolean readOnly = "condition_test".equals(kind) || "switch_selector".equals(kind) || "switch_case".equals(kind);
+            boolean readOnly = "condition_test".equals(kind) || "switch_selector".equals(kind) || "switch_case".equals(kind) || "foreach_source".equals(kind);
             if (!opaqueMethod && !readOnly && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
                 fieldRanges = Map.of("expression", map.range(expression));
             } else if (!opaqueMethod && condition(ast) != null) {
@@ -494,7 +496,7 @@ public final class ProgramEngine {
             if ("expression".equals(kind)) return "ast_projection";
             if (ast == null) return "synthetic";
             if ("entry".equals(kind) || "block".equals(kind) || "switch_case".equals(kind) || ast instanceof IfStmt || ast instanceof WhileStmt
-                    || ast instanceof DoStmt || ast instanceof ForStmt || ast instanceof SwitchStmt || "opaque".equals(kind)) return "structural";
+                    || ast instanceof DoStmt || ast instanceof ForStmt || ast instanceof ForEachStmt || ast instanceof SwitchStmt || "opaque".equals(kind)) return "structural";
             return "statement";
         }
         void edge(String source, String target, String kind) {
@@ -507,16 +509,18 @@ public final class ProgramEngine {
             methodId = id(); map = sourceMap; astIds.clear();
             boolean conditionLimit = conditionLimitExceeded(body);
             boolean switchLimit = switchLimitExceeded(body);
-            opaqueMethod = unsupportedFlow(body) || conditionLimit || switchLimit;
+            boolean iterationLimit = body.findAll(ForEachStmt.class).size() > MAX_FOREACH_LOOPS_PER_METHOD;
+            opaqueMethod = unsupportedFlow(body) || conditionLimit || switchLimit || iterationLimit;
             root = node(body, "entry", null);
             normalExit = node(null, "normal_exit", null);
             exceptionalExit = node(null, "exceptional_exit", null);
             String first;
             if (opaqueMethod) {
                 first = node(body, "opaque", root);
-                String code = conditionLimit ? "CONDITION_FLOW_LIMIT" : switchLimit ? "SWITCH_FLOW_LIMIT" : "UNSUPPORTED_CONTROL_FLOW";
+                String code = conditionLimit ? "CONDITION_FLOW_LIMIT" : switchLimit ? "SWITCH_FLOW_LIMIT" : iterationLimit ? "ITERATION_FLOW_LIMIT" : "UNSUPPORTED_CONTROL_FLOW";
                 String reason = conditionLimit ? "Method preserved; condition-flow test budget exceeded"
-                        : switchLimit ? "Method preserved; switch entry/label budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure";
+                        : switchLimit ? "Method preserved; switch entry/label budget exceeded"
+                        : iterationLimit ? "Method preserved; enhanced-for iteration budget exceeded" : "Method preserved; precise flow and graph edits unavailable for this control structure";
                 diagnostics.add(new Diagnostic(id(), "warning", code, reason, map.range(body)));
                 edge(first, normalExit, "normal"); edge(first, exceptionalExit, "throw");
             } else first = flow(body, normalExit, null, null, root);
@@ -588,6 +592,18 @@ public final class ProgramEngine {
                 String init = current;
                 for (int i = loop.getInitialization().size() - 1; i >= 0; i--) { String step = node(loop.getInitialization().get(i), "for_init", current); edge(step, init, "normal"); init = step; }
                 return init;
+            } else if (stmt instanceof ForEachStmt loop) {
+                String source = node(loop.getIterable(), "foreach_source", current);
+                String check = node(null, "foreach_check", current);
+                String bind = node(null, "foreach_bind", current);
+                String advance = node(null, "foreach_advance", current);
+                // Common normal iteration only: advance is continuation, not an Iterator method.
+                edge(advance, check, "loop");
+                String body = flow(loop.getBody(), advance, next, advance, current);
+                edge(current, source, "normal");
+                edge(source, check, "normal");
+                edge(check, bind, "true"); edge(check, next, "false");
+                edge(bind, body, "normal");
             } else if (stmt instanceof SwitchStmt statement) {
                 String selector = node(statement.getSelector(), "switch_selector", current);
                 List<String> entryIds = new ArrayList<>();
