@@ -22,6 +22,18 @@ A local Java workbench that connects source code to a structured control-flow gr
 
 A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
 
+## Workspace
+
+The workbench has independent project, block palette, graph, code, inspector, output, tests and changes panels. Use **View → Configure layout** (`Вид → Настроить расположение`) or the **Layout** (`Расположение`) button to move them:
+
+- Drop onto the center of another panel to swap positions, onto an edge to split the area, or onto its header to combine panels into tabs. The panel menu provides the same operations without dragging.
+- Resize separators with the pointer or arrow keys. Hide or maximize a panel from its header; restore hidden panels through **View**.
+- Choose a code or review preset, or reset the layout. Each project's layout is saved in the current browser. Narrow windows use a panel selector while retaining the desktop arrangement.
+
+Moving panels retains editor drafts and undo history, graph selection and viewport, and the active proposal or run. Workspace preferences are separate from program revisions and graph-node positions. Browsers supporting View Transitions animate arrangement changes; reduced-motion preferences and browsers without that API use direct updates.
+
+Graph nodes use distinct icons, shapes and restrained semantic colors. Conditions expose labeled true/false ports; loop regions are derived from the engine's ancestry rather than source-text guesses. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Orthogonal routing avoids node obstacles within a bounded search and marks routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
+
 ## Architecture
 
 ```mermaid
@@ -37,7 +49,7 @@ flowchart LR
 
 | Component | Location | Responsibility |
 | --- | --- | --- |
-| Web | `apps/web` | Monaco editor, React Flow graph, proposals and reports |
+| Web | `apps/web` | Configurable panel workspace, Monaco editor, React Flow graph, proposals and reports |
 | API | `apps/server` | Local sessions, revision history, CAS, artifacts and durable jobs |
 | Program engine | `modules/program-engine` | Parsing, source/JDK symbol resolution, graph construction and typed edits |
 | Verification | `modules/verification` | Runner protocol and repeated comparison |
@@ -126,6 +138,8 @@ pnpm --filter @java-blueprints/web exec playwright test
 ```
 
 These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, declaration navigation across files, stale semantic bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
+
+Workspace checks cover drag-and-drop arrangements, tab groups, resizing, local preference recovery and preservation of editor and graph state. Pure frontend tests validate layout-tree invariants and graph presentation geometry. UI layout actions must not create source revisions, proposals, jobs or graph-layout writes.
 
 ## Data and API
 

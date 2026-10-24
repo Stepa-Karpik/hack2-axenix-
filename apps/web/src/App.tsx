@@ -1,5 +1,7 @@
 import { ThemeToggle } from "./theme";
-import ResizeHandle from "./ResizeHandle";
+import Workspace, { useWorkspace } from "./Workspace";
+import WorkspaceMenu from "./WorkspaceMenu";
+
 import Icon from "./Icon";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, projectPath, pollJob } from "./api";
@@ -26,7 +28,11 @@ import {
 } from "./state";
 import type { Draft } from "./state";
 import CodeEditor from "./CodeEditor";
-import FlowCanvas, { kindName, nodeCaption, isIterationProtocol } from "./FlowCanvas";
+import FlowCanvas, {
+  kindName,
+  nodeCaption,
+  isIterationProtocol,
+} from "./FlowCanvas";
 import SymbolInspector from "./SymbolInspector";
 import { currentBindings, referenceAt } from "./symbols";
 import { sampleSource } from "./sample";
@@ -61,16 +67,16 @@ function editRange(n: GraphNode) {
 interface WorkbenchView {
   file: string;
   methodId: string;
-  mode: "graph" | "code" | "split";
-  inspector: boolean;
-  split: number;
-  dockHeight: number;
 }
 function readView(id: string): Partial<WorkbenchView> {
   try {
-    return JSON.parse(
+    const view = JSON.parse(
       localStorage.getItem("java-blueprints:view:" + id) ?? "{}",
-    ) as Partial<WorkbenchView>;
+    );
+    return {
+      file: typeof view?.file === "string" ? view.file : undefined,
+      methodId: typeof view?.methodId === "string" ? view.methodId : undefined,
+    };
   } catch {
     return {};
   }
@@ -299,27 +305,22 @@ function Workbench({
   const [methodId, setMethodId] = useState(initialView.methodId ?? "");
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [range, setRange] = useState<SourceRange | null>(null);
-  const [mode, setMode] = useState<"graph" | "code" | "split">(
-    initialView.mode ?? "split",
-  );
-  const [dock, setDock] = useState<"output" | "tests" | "changes">("output");
-  const [narrow, setNarrow] = useState(
-    () => matchMedia("(max-width: 980px)").matches,
-  );
-  const [inspector, setInspector] = useState(
-    matchMedia("(max-width: 980px)").matches
-      ? false
-      : (initialView.inspector ?? true),
-  );
-  useEffect(() => {
-    const media = matchMedia("(max-width: 980px)");
-    const change = () => {
-      setNarrow(media.matches);
-      if (media.matches) setInspector(false);
-    };
-    media.addEventListener("change", change);
-    return () => media.removeEventListener("change", change);
-  }, []);
+  const workspace = useWorkspace(projectId);
+  const editorCommands = useRef<{
+    undo: () => void;
+    redo: () => void;
+    selectAll: () => void;
+  } | null>(null);
+  function setMode(mode: "graph" | "code" | "split") {
+    void workspace.revealMany(mode === "split" ? ["graph", "code"] : [mode]);
+  }
+  function setDock(dock: "output" | "tests" | "changes") {
+    workspace.reveal(dock === "output" ? "console" : dock);
+  }
+  function setInspector(show: boolean) {
+    if (show) workspace.reveal("analysis");
+    else workspace.hide("analysis");
+  }
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Загрузка…");
   const [saving, setSaving] = useState(false);
@@ -348,16 +349,14 @@ function Workbench({
   const generation = useRef(0);
   const openGeneration = useRef(0);
   const [manualSaveRequired, setManualSaveRequired] = useState(false);
-  const [split, setSplit] = useState(initialView.split ?? 48);
-  const [dockHeight, setDockHeight] = useState(initialView.dockHeight ?? 205);
   useEffect(() => {
     try {
       localStorage.setItem(
         "java-blueprints:view:" + projectId,
-        JSON.stringify({ file, methodId, mode, inspector, split, dockHeight }),
+        JSON.stringify({ file, methodId }),
       );
     } catch {}
-  }, [projectId, file, methodId, mode, inspector, split, dockHeight]);
+  }, [projectId, file, methodId]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const dirty = revision
@@ -612,7 +611,7 @@ function Workbench({
       }
       if (e.key === "Escape") {
         setDialog(null);
-        setInspector(false);
+        workspace.setMaximized(null);
       }
     };
     window.addEventListener("keydown", key);
@@ -664,7 +663,7 @@ function Workbench({
     setReferenceId(reference.id);
     setFile(reference.sourceRange.filePath);
     setRange(reference.sourceRange);
-    setMode(narrow ? "code" : "split");
+    setMode("split");
   }
   function jumpDeclaration(target: SourceRange) {
     if (
@@ -685,7 +684,7 @@ function Workbench({
         target.endOffset <= m.sourceRange.endOffset,
     );
     setMethodId(enclosing?.id ?? "");
-    setMode(narrow ? "code" : "split");
+    setMode("split");
   }
   function pickNode(n: GraphNode) {
     if (stale || busy || saving || loadingRevision) return;
@@ -996,60 +995,8 @@ function Workbench({
       onJump={jumpDeclaration}
     />
   );
-  return (
-    <div className={"workbench " + (!inspector ? "inspector-hidden" : "")}>
-      <header className="toolbar">
-        <Brand />
-        <span className="toolbar-divider" />
-        <a
-          className="project-title"
-          href={"/projects/" + projectId}
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/projects/" + projectId);
-          }}
-        >
-          {project?.name ?? "Проект"}
-        </a>
-        <span className="version-badge" title={revision?.bundleHash}>
-          {short(revision?.id)}
-        </span>
-        <span className="toolbar-spacer" />
-        <ThemeToggle />
-        <button onClick={() => importInput.current?.click()} disabled={busy}>
-          <Icon name="upload" /> <span className="hide-narrow">Импорт</span>
-        </button>
-        <button
-          onClick={() => setDialog("run")}
-          disabled={!revision || dirty || busy}
-        >
-          <Icon name="play" /> Запуск
-        </button>
-        <button
-          className="primary"
-          onClick={() => setDialog("compare")}
-          disabled={!revision || dirty || busy}
-        >
-          <Icon name="compare" /> Сравнить
-        </button>
-        <button
-          className="icon-button"
-          title="Экспорт выбранной версии"
-          aria-label="Экспорт выбранной версии"
-          onClick={() => void exportRevision()}
-          disabled={!revision || busy}
-        >
-          <Icon name="download" />
-        </button>
-        <input
-          type="file"
-          multiple
-          accept=".java"
-          ref={importInput}
-          hidden
-          onChange={(e) => void importFiles(e.target.files)}
-        />
-      </header>
+  const panels = {
+    project: (
       <aside className="sidebar">
         <div className="panel-caption">
           ПРОЕКТ <span>JAVA 21</span>
@@ -1081,6 +1028,7 @@ function Workbench({
                   className={"file-item " + (file === f ? "active" : "")}
                   onClick={() => {
                     setFile(f);
+                    workspace.reveal("code");
                     setReferenceId(null);
                     setRange(null);
                   }}
@@ -1106,6 +1054,7 @@ function Workbench({
                       disabled={inFlight}
                       onClick={() => {
                         setMethodId(m.id);
+                        workspace.reveal("graph");
                         setFile(f);
                         setRange(m.sourceRange);
                         setSelected(null);
@@ -1191,598 +1140,663 @@ function Workbench({
           </div>
         </div>
       </aside>
-      <main className="workspace">
-        <div className="workspace-top">
-          <div className="breadcrumb">
-            <span>{file || "Нет файлов"}</span>
-            {method && (
-              <>
-                <span>/</span>
-                <strong>{method.signature.split("(")[0]}</strong>
-              </>
-            )}
-          </div>
-          <div
-            className="view-tabs"
-            role="tablist"
-            aria-label="Режим рабочей области"
-          >
-            {(["graph", "code", "split"] as const).map((m) => (
-              <button
-                role="tab"
-                aria-selected={
-                  mode === m || (narrow && mode === "split" && m === "code")
-                }
-                className={
-                  mode === m || (narrow && mode === "split" && m === "code")
-                    ? "selected"
-                    : ""
-                }
-                key={m}
-                onClick={() => setMode(m)}
-              >
-                {{ graph: "Схема", code: "Код", split: "Вместе" }[m]}
-              </button>
-            ))}
-          </div>
+    ),
+    palette: (
+      <div className="block-palette">
+        <p className="small quiet">Вставка в выбранную точку исходника</p>
+        {(["statement", "condition", "loop"] as const).map((kind) => (
           <button
-            className={"icon-button " + (inspector ? "selected" : "")}
-            aria-label="Переключить инспектор"
-            title="Инспектор"
-            onClick={() => setInspector((s) => !s)}
+            key={kind}
+            className={"palette-block palette-" + kind}
+            disabled={
+              !selected ||
+              !operations.includes("insert_statement") ||
+              stale ||
+              historical ||
+              inFlight
+            }
+            onClick={() => {
+              setOperation("insert_statement");
+              setTemplate(kind);
+              setStatement(statementTemplates[kind]);
+              if (!positions.includes(position))
+                setPosition(positions[0] ?? "after");
+              workspace.reveal("analysis");
+            }}
           >
-            <Icon name="panel" />
+            <span aria-hidden="true">
+              {kind === "condition" ? "◇" : kind === "loop" ? "↻" : "▭"}
+            </span>
+            {
+              { statement: "Оператор", condition: "Условие", loop: "Цикл" }[
+                kind
+              ]
+            }
           </button>
+        ))}
+        <p className="small quiet">
+          {!selected
+            ? "Выберите узел схемы для вставки."
+            : !operations.includes("insert_statement")
+              ? "У этого узла нет точки вставки."
+              : "Шаблон откроется в инспекторе. Изменение проходит проверку и diff."}
+        </p>
+      </div>
+    ),
+    graph: (
+      <section className="graph-pane" aria-label="Схема метода">
+        <div className="editor-caption">
+          <span>СХЕМА МЕТОДА</span>
+          <span>{method ? method.signature : "Выберите метод"}</span>
         </div>
-        {error && (
-          <div className="notice error" role="alert">
-            <span>{error}</span>
-            <button aria-label="Закрыть сообщение" onClick={() => setError("")}>
-              <Icon name="close" size={14} />
-            </button>
+        {graph && methodId ? (
+          <FlowCanvas
+            graph={graph}
+            semantics={
+              bindingsActive &&
+              analysis?.revisionId === graph.revisionId &&
+              analysis.id === graph.analysisId &&
+              analysis?.sourceMapVersion === graph.sourceMapVersion
+                ? analysis.semantics
+                : undefined
+            }
+            methodId={methodId}
+            selected={selected?.id}
+            onSelect={pickNode}
+            projectId={projectId}
+            stale={stale}
+          />
+        ) : (
+          <div className="empty-pane">
+            <span className="empty-glyph">
+              <Icon name="workflow" size={32} />
+            </span>
+            <h2>
+              {analysis?.parseStatus === "invalid"
+                ? "Исправьте исходник"
+                : "Схема появится здесь"}
+            </h2>
+            <p>
+              {analysis?.parseStatus === "invalid"
+                ? "Диагностика доступна во вкладке «Вывод»."
+                : "Импортируйте .java или выберите метод."}
+            </p>
+            {!revision && (
+              <button onClick={() => importInput.current?.click()}>
+                Импорт .java
+              </button>
+            )}
           </div>
         )}
-        {conflict && (
-          <div className="notice warning">
-            Конфликт версий{" "}
-            <button onClick={() => void rebase()}>
-              Выбрать актуальную основу
-            </button>
-            <button onClick={downloadDraft}>Скачать черновик</button>
-          </div>
-        )}
-        {historical && (
-          <div className="notice">
-            Просмотр сохранённой версии {short(revision?.id)}{" "}
+      </section>
+    ),
+    code: (
+      <section className="code-pane" aria-label="Java редактор">
+        <div className="editor-caption">
+          <span>{file || "ИСХОДНИК"}</span>
+          <span>
+            {historical ? "Только чтение" : "JAVA"}
             <button
-              disabled={inFlight || dirty}
-              onClick={() => void openRevision(project!.headRevisionId!)}
+              onClick={() => void save()}
+              disabled={!dirty || saving || conflict || historical}
+              title="Ctrl+S"
             >
-              Открыть текущую
+              {saving ? "Сохранение…" : "Сохранить"}
             </button>
-          </div>
-        )}
-        <div className={"editors mode-" + mode}>
-          {mode !== "code" && (
-            <section
-              className="graph-pane"
-              aria-label="Схема метода"
-              style={
-                mode === "split" ? { flex: "0 0 " + split + "%" } : undefined
-              }
-            >
-              <div className="editor-caption">
-                <span>СХЕМА МЕТОДА</span>
-                <span>{method ? method.signature : "Выберите метод"}</span>
-              </div>
-              {graph && methodId ? (
-                <FlowCanvas
-                  graph={graph}
-                  methodId={methodId}
-                  selected={selected?.id}
-                  onSelect={pickNode}
-                  projectId={projectId}
-                  stale={stale}
-                />
-              ) : (
-                <div className="empty-pane">
-                  <span className="empty-glyph">
-                    <Icon name="workflow" size={32} />
-                  </span>
-                  <h2>
-                    {analysis?.parseStatus === "invalid"
-                      ? "Исправьте исходник"
-                      : "Схема появится здесь"}
-                  </h2>
-                  <p>
-                    {analysis?.parseStatus === "invalid"
-                      ? "Диагностика доступна во вкладке «Вывод»."
-                      : "Импортируйте .java или выберите метод."}
-                  </p>
-                  {!revision && (
-                    <button onClick={() => importInput.current?.click()}>
-                      Импорт .java
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-          {mode === "split" && (
-            <ResizeHandle
-              orientation="vertical"
-              value={split}
-              min={25}
-              max={70}
-              onChange={setSplit}
-              label="Ширина схемы"
-            />
-          )}
-          {mode !== "graph" && (
-            <section className="code-pane" aria-label="Java редактор">
-              <div className="editor-caption">
-                <span>{file || "ИСХОДНИК"}</span>
-                <span>
-                  {historical ? "Только чтение" : "JAVA"}
-                  <button
-                    onClick={() => void save()}
-                    disabled={!dirty || saving || conflict || historical}
-                    title="Ctrl+S"
-                  >
-                    {saving ? "Сохранение…" : "Сохранить"}
-                  </button>
-                </span>
-              </div>
-              {file ? (
-                <CodeEditor
-                  path={projectId + "/" + file}
-                  value={files[file] ?? ""}
-                  onChange={edit}
-                  range={
-                    range &&
-                    !dirty &&
-                    analysis?.revisionId === revision?.id &&
-                    analysis?.parseStatus === "valid"
-                      ? { ...range, filePath: projectId + "/" + range.filePath }
-                      : null
+          </span>
+        </div>
+        {file ? (
+          <CodeEditor
+            onReady={(commands) => {
+              editorCommands.current = commands;
+            }}
+            path={projectId + "/" + file}
+            value={files[file] ?? ""}
+            onChange={edit}
+            range={
+              range &&
+              !dirty &&
+              analysis?.revisionId === revision?.id &&
+              analysis?.parseStatus === "valid"
+                ? { ...range, filePath: projectId + "/" + range.filePath }
+                : null
+            }
+            diagnostics={(analysis?.diagnostics ?? []).map((d) => ({
+              ...d,
+              sourceRange: d.sourceRange
+                ? {
+                    ...d.sourceRange,
+                    filePath: projectId + "/" + d.sourceRange.filePath,
                   }
-                  diagnostics={(analysis?.diagnostics ?? []).map((d) => ({
-                    ...d,
-                    sourceRange: d.sourceRange
-                      ? {
-                          ...d.sourceRange,
-                          filePath: projectId + "/" + d.sourceRange.filePath,
-                        }
-                      : null,
-                  }))}
-                  onOffset={offset}
-                  readOnly={historical || busy || loadingRevision}
-                />
-              ) : (
-                <div className="empty-pane">
-                  <p>Исходник не загружен</p>
-                </div>
-              )}
-            </section>
-          )}
-        </div>
-        <ResizeHandle
-          orientation="horizontal"
-          value={dockHeight}
-          min={120}
-          max={440}
-          onChange={setDockHeight}
-          label="Высота панели вывода"
-        />
-        <section className="dock" style={{ height: dockHeight }}>
-          <div className="dock-tabs">
-            {(["output", "tests", "changes"] as const).map((t) => (
-              <button
-                key={t}
-                className={dock === t ? "selected" : ""}
-                onClick={() => setDock(t)}
-              >
-                {{ output: "Вывод", tests: "Тесты", changes: "Изменения" }[t]}
-                {t === "output" && (analysis?.diagnostics.length ?? 0) > 0 && (
-                  <span className="count">{analysis?.diagnostics.length}</span>
-                )}
-                {t === "changes" && proposal && (
-                  <span className="count">1</span>
-                )}
-              </button>
-            ))}
-            <span className="toolbar-spacer" />
-            {job && (
-              <span className="small quiet">
-                {labelStatus(job.status)} · {short(job.id)}
-              </span>
-            )}
-            {job && ["queued", "running"].includes(job.status) && (
-              <button
-                onClick={() =>
-                  void api<Job>(base + "/jobs/" + job.id + "/cancel", {
-                    method: "POST",
-                    body: {},
-                  })
-                    .then(setJob)
-                    .catch((e) => setError(message(e)))
-                }
-              >
-                Отменить
-              </button>
-            )}
+                : null,
+            }))}
+            onOffset={offset}
+            readOnly={historical || busy || loadingRevision}
+          />
+        ) : (
+          <div className="empty-pane">
+            <p>Исходник не загружен</p>
           </div>
-          <div className="dock-content">
-            {dock === "output" && (
-              <>
-                {analysis?.diagnostics.map((d) => (
-                  <button
-                    className="diagnostic"
-                    key={d.id}
-                    onClick={() => {
-                      if (d.sourceRange) {
-                        setRange(d.sourceRange);
-                        setFile(d.sourceRange.filePath);
-                        setMode("split");
-                      }
-                    }}
-                  >
-                    <span className="diagnostic-symbol">
-                      {d.severity === "error" ? "!" : "△"}
-                    </span>
-                    <span>{d.message}</span>
-                    <code>
-                      {d.sourceRange
-                        ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
-                        : d.code}
-                    </code>
-                  </button>
-                ))}
-                {report ? (
-                  <ReportView report={report} projectId={projectId} />
-                ) : job?.error ? (
-                  <div className="notice error">
-                    {job.error.code} · {job.error.message}
-                  </div>
-                ) : (
-                  !analysis?.diagnostics.length && (
-                    <div className="output-empty">
-                      <span className="terminal-prompt">
-                        <Icon name="terminal" size={17} />
-                      </span>
-                      <span>
-                        {runnerAvailable === false
-                          ? "Запуск недоступен: runner не подключён. Редактор и схема доступны."
-                          : "Нет вывода"}
-                      </span>
-                      <kbd>Ctrl ↵</kbd>
-                    </div>
-                  )
-                )}
-              </>
-            )}
-            {dock === "tests" &&
-              (report?.testResults ? (
-                <ReportView report={report} projectId={projectId} />
-              ) : (
-                <div className="output-empty">
-                  <span className="terminal-prompt">
-                    <Icon name="compare" size={17} />
-                  </span>
-                  <span>Нет сравнений</span>
-                  <button
-                    onClick={() => setDialog("compare")}
-                    disabled={!revision || dirty}
-                  >
-                    Сравнить версии
-                  </button>
-                </div>
-              ))}
-            {dock === "changes" &&
-              (proposal ? (
-                <div className="proposal">
-                  <div className="proposal-heading">
-                    <span>
-                      Кандидат {short(proposal.candidateRevisionId)}{" "}
-                      <span className="status-tag">
-                        {proposal.status === "ready"
-                          ? "Скомпилирован"
-                          : proposal.status}
-                      </span>
-                    </span>
-                    <span className="small quiet">
-                      {proposal.intent === "semantic_edit"
-                        ? "Изменение логики"
-                        : "Сохранение поведения"}
-                    </span>
-                    <button
-                      className="primary"
-                      disabled={
-                        inFlight ||
-                        historical ||
-                        conflict ||
-                        !canApply(
-                          proposal.status,
-                          proposal.baseRevisionId,
-                          project?.headRevisionId ?? null,
-                          proposal.intent,
-                          exactMatched,
-                        ) ||
-                        dirty
-                      }
-                      onClick={() => void apply()}
-                    >
-                      Применить
-                    </button>
-                    <button disabled={busy} onClick={() => setProposal(null)}>
-                      Отклонить
-                    </button>
-                  </div>
-                  {proposal.diff?.map((d, i) => (
-                    <div key={i} className="diff">
-                      <span className="small quiet">{d.filePath}</span>
-                      <pre className="removed">− {d.before}</pre>
-                      <pre className="added">+ {d.after}</pre>
-                    </div>
-                  ))}
-                  {proposal.checks && (
-                    <p className="small quiet">
-                      Разбор: {proposal.checks.parseStatus} · Компиляция:{" "}
-                      {proposal.checks.compileStatus} · Проверка поведения:{" "}
-                      {proposal.checks.verificationStatus}
-                    </p>
-                  )}
-                  {proposal.intent === "preserve_behavior" &&
-                    proposal.candidateRevisionId && (
-                      <button onClick={() => setDialog("compare")}>
-                        Проверить base / candidate
-                      </button>
-                    )}
-                  {proposal.diagnostics?.map((d) => (
-                    <p key={d.id}>{d.message}</p>
-                  ))}
-                </div>
-              ) : (manualSaveRequired || conflict) && revision ? (
-                <div className="local-diff">
-                  <div className="proposal-heading">
-                    <span>Локальная правка · основа {short(baseId)}</span>
-                    <button
-                      onClick={() => void save()}
-                      disabled={conflict || saving}
-                    >
-                      Сохранить новую версию
-                    </button>
-                    <button onClick={downloadDraft}>Скачать черновик</button>
-                  </div>
-                  {Object.entries(files)
-                    .filter(([path, text]) => filesOf(revision)[path] !== text)
-                    .map(([path, text]) => (
-                      <div className="diff" key={path}>
-                        <span className="small quiet">{path}</span>
-                        <pre className="removed">
-                          {filesOf(revision)[path] ?? ""}
-                        </pre>
-                        <pre className="added">{text}</pre>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <div className="output-empty">
-                  <span className="terminal-prompt">
-                    <Icon name="changes" size={17} />
-                  </span>
-                  <span>Нет предложений</span>
-                </div>
-              ))}
-          </div>
-        </section>
-      </main>
-      {inspector && (
-        <aside className="inspector">
-          <div className="panel-caption">
-            ИНСПЕКТОР{" "}
-            <button
-              aria-label="Скрыть инспектор"
-              onClick={() => setInspector(false)}
-            >
-              <Icon name="close" size={14} />
-            </button>
-          </div>
-          {selected ? (
-            <>
-              <div className={"inspector-selection" + (isIterationProtocol(selected) ? " iteration-protocol" : "")}>
-                <span className="eyebrow">
-                  {selected.executionRole === "ast_projection"
-                    ? "Исходник"
-                    : kindName(selected.kind)}
-                </span>
-                {!isIterationProtocol(selected) && <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>}
-                <span className="quiet small">
-                  {selected.sourceRange
-                    ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
-                    : "Служебный узел"}
-                </span>
-              </div>
-              {selected.sourceRange && (
-                <button
-                  className="wide subtle"
-                  onClick={() => {
-                    setRange(selected.sourceRange);
-                    setMode("split");
-                  }}
-                >
-                  Перейти к коду <Icon name="external" size={14} />
-                </button>
-              )}
-              {symbolPanel}
-              {operations.length > 0 ? (
-                <div className="expression-form">
-                  <label htmlFor="node-operation">Действие</label>
-                  <select
-                    id="node-operation"
-                    value={operation}
-                    disabled={inFlight || stale || historical}
-                    onChange={(e) => setOperation(e.target.value)}
-                  >
-                    {operations.map((op) => (
-                      <option key={op} value={op}>
-                        {operationLabels[op]}
-                      </option>
-                    ))}
-                  </select>
-                  {operation === "replace_expression" &&
-                    editRange(selected) && (
-                      <>
-                        <label htmlFor="expression">
-                          {selected.editableFields[0] === "condition"
-                            ? "Условие"
-                            : "Выражение"}
-                        </label>
-                        <textarea
-                          id="expression"
-                          value={expression}
-                          onChange={(e) => setExpression(e.target.value)}
-                          rows={5}
-                          spellCheck={false}
-                          disabled={inFlight || stale || historical}
-                        />
-                      </>
-                    )}
-                  {operation === "insert_statement" && (
-                    <>
-                      <label htmlFor="insert-position">Позиция</label>
-                      <select
-                        id="insert-position"
-                        value={position}
-                        disabled={inFlight || stale || historical}
-                        onChange={(e) => setPosition(e.target.value)}
-                      >
-                        {positions.map((p) => (
-                          <option key={p} value={p}>
-                            {(
-                              {
-                                before: "Перед узлом",
-                                after: "После узла",
-                                body_start: "В начале метода",
-                                body_end: "В конце метода",
-                              } as Record<string, string>
-                            )[p] ?? p}
-                          </option>
-                        ))}
-                      </select>
-                      <label htmlFor="statement-template">Шаблон</label>
-                      <select
-                        id="statement-template"
-                        value={template}
-                        disabled={inFlight || stale || historical}
-                        onChange={(e) => {
-                          setTemplate(e.target.value);
-                          setStatement(statementTemplates[e.target.value]);
-                        }}
-                      >
-                        <option value="statement">Оператор</option>
-                        <option value="condition">Условие</option>
-                        <option value="loop">Цикл</option>
-                      </select>
-                      <label htmlFor="statement-source">Java оператор</label>
-                      <textarea
-                        id="statement-source"
-                        value={statement}
-                        rows={6}
-                        spellCheck={false}
-                        disabled={inFlight || stale || historical}
-                        onChange={(e) => setStatement(e.target.value)}
-                      />
-                    </>
-                  )}
-                  {operation === "delete_statement" && (
-                    <p className="small quiet">Удаление выбранного оператора</p>
-                  )}
-                  <label htmlFor="change-intent">Цель изменения</label>
-                  <select
-                    id="change-intent"
-                    value={intent}
-                    disabled={inFlight || stale || historical}
-                    onChange={(e) => setIntent(e.target.value)}
-                  >
-                    <option value="semantic_edit">Изменить логику</option>
-                    <option value="preserve_behavior">
-                      Сохранить поведение
-                    </option>
-                  </select>
-                  <button
-                    className="primary wide"
-                    disabled={
-                      inFlight ||
-                      stale ||
-                      historical ||
-                      !operations.includes(operation) ||
-                      (operation === "replace_expression" &&
-                        (!editRange(selected) || !expression.trim())) ||
-                      (operation === "insert_statement" &&
-                        (!positions.includes(position) || !statement.trim()))
-                    }
-                    onClick={() => void prepare()}
-                  >
-                    {busy ? "Проверка…" : "Подготовить изменение"}
-                  </button>
-                  {stale && (
-                    <p className="small quiet">
-                      Сначала сохраните и исправьте исходник.
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="inspector-note">Нет доступных действий</p>
-              )}
-            </>
-          ) : (
+        )}
+      </section>
+    ),
+    analysis: (
+      <aside className="inspector">
+        {selected ? (
+          <>
             <div
               className={
-                "inspector-placeholder " +
-                (activeReference ? "symbol-selected" : "")
+                "inspector-selection" +
+                (isIterationProtocol(selected) ? " iteration-protocol" : "")
               }
             >
-              <span>
-                <Icon name="workflow" size={27} />
+              <span className="eyebrow">
+                {selected.executionRole === "ast_projection"
+                  ? "Исходник"
+                  : kindName(selected.kind)}
               </span>
-              <p>Выберите узел</p>
+              {!isIterationProtocol(selected) && (
+                <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>
+              )}
+              <span className="quiet small">
+                {selected.sourceRange
+                  ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
+                  : "Служебный узел"}
+              </span>
             </div>
-          )}
-
-          {!selected && symbolPanel}
-          <div className="inspector-section">
-            <div className="panel-caption">
-              ВЫРАЖЕНИЯ <span>{expressions.length}</span>
-            </div>
-            <div className="expression-list">
-              {expressions.map((n) => (
-                <button
-                  key={n.id}
-                  className={selected?.id === n.id ? "active" : ""}
-                  onClick={() => pickNode(n)}
-                  disabled={stale}
+            {selected.sourceRange && (
+              <button
+                className="wide subtle"
+                onClick={() => {
+                  setRange(selected.sourceRange);
+                  setMode("split");
+                }}
+              >
+                Перейти к коду <Icon name="external" size={14} />
+              </button>
+            )}
+            {symbolPanel}
+            {operations.length > 0 ? (
+              <div className="expression-form">
+                <label htmlFor="node-operation">Действие</label>
+                <select
+                  id="node-operation"
+                  value={operation}
+                  disabled={inFlight || stale || historical}
+                  onChange={(e) => setOperation(e.target.value)}
                 >
-                  <span>{n.sourceRange?.startLine}</span>
-                  <code>{n.label.split("\n")[0].slice(0, 85)}</code>
+                  {operations.map((op) => (
+                    <option key={op} value={op}>
+                      {operationLabels[op]}
+                    </option>
+                  ))}
+                </select>
+                {operation === "replace_expression" && editRange(selected) && (
+                  <>
+                    <label htmlFor="expression">
+                      {selected.editableFields[0] === "condition"
+                        ? "Условие"
+                        : "Выражение"}
+                    </label>
+                    <textarea
+                      id="expression"
+                      value={expression}
+                      onChange={(e) => setExpression(e.target.value)}
+                      rows={5}
+                      spellCheck={false}
+                      disabled={inFlight || stale || historical}
+                    />
+                  </>
+                )}
+                {operation === "insert_statement" && (
+                  <>
+                    <label htmlFor="insert-position">Позиция</label>
+                    <select
+                      id="insert-position"
+                      value={position}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => setPosition(e.target.value)}
+                    >
+                      {positions.map((p) => (
+                        <option key={p} value={p}>
+                          {(
+                            {
+                              before: "Перед узлом",
+                              after: "После узла",
+                              body_start: "В начале метода",
+                              body_end: "В конце метода",
+                            } as Record<string, string>
+                          )[p] ?? p}
+                        </option>
+                      ))}
+                    </select>
+                    <label htmlFor="statement-template">Шаблон</label>
+                    <select
+                      id="statement-template"
+                      value={template}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => {
+                        setTemplate(e.target.value);
+                        setStatement(statementTemplates[e.target.value]);
+                      }}
+                    >
+                      <option value="statement">Оператор</option>
+                      <option value="condition">Условие</option>
+                      <option value="loop">Цикл</option>
+                    </select>
+                    <label htmlFor="statement-source">Java оператор</label>
+                    <textarea
+                      id="statement-source"
+                      value={statement}
+                      rows={6}
+                      spellCheck={false}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => setStatement(e.target.value)}
+                    />
+                  </>
+                )}
+                {operation === "delete_statement" && (
+                  <p className="small quiet">Удаление выбранного оператора</p>
+                )}
+                <label htmlFor="change-intent">Цель изменения</label>
+                <select
+                  id="change-intent"
+                  value={intent}
+                  disabled={inFlight || stale || historical}
+                  onChange={(e) => setIntent(e.target.value)}
+                >
+                  <option value="semantic_edit">Изменить логику</option>
+                  <option value="preserve_behavior">Сохранить поведение</option>
+                </select>
+                <button
+                  className="primary wide"
+                  disabled={
+                    inFlight ||
+                    stale ||
+                    historical ||
+                    !operations.includes(operation) ||
+                    (operation === "replace_expression" &&
+                      (!editRange(selected) || !expression.trim())) ||
+                    (operation === "insert_statement" &&
+                      (!positions.includes(position) || !statement.trim()))
+                  }
+                  onClick={() => void prepare()}
+                >
+                  {busy ? "Проверка…" : "Подготовить изменение"}
+                </button>
+                {stale && (
+                  <p className="small quiet">
+                    Сначала сохраните и исправьте исходник.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="inspector-note">Нет доступных действий</p>
+            )}
+          </>
+        ) : (
+          <div
+            className={
+              "inspector-placeholder " +
+              (activeReference ? "symbol-selected" : "")
+            }
+          >
+            <span>
+              <Icon name="workflow" size={27} />
+            </span>
+            <p>Выберите узел</p>
+          </div>
+        )}
+
+        {!selected && symbolPanel}
+        <div className="inspector-section">
+          <div className="panel-caption">
+            ВЫРАЖЕНИЯ <span>{expressions.length}</span>
+          </div>
+          <div className="expression-list">
+            {expressions.map((n) => (
+              <button
+                key={n.id}
+                className={selected?.id === n.id ? "active" : ""}
+                onClick={() => pickNode(n)}
+                disabled={stale}
+              >
+                <span>{n.sourceRange?.startLine}</span>
+                <code>{n.label.split("\n")[0].slice(0, 85)}</code>
+              </button>
+            ))}
+          </div>
+        </div>
+        {graph && (
+          <details className="node-access">
+            <summary>Все узлы метода</summary>
+            {graph.nodes
+              .filter((n) => n.methodId === methodId)
+              .map((n) => (
+                <button key={n.id} onClick={() => pickNode(n)}>
+                  {isIterationProtocol(n)
+                    ? nodeCaption(n)
+                    : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
                 </button>
               ))}
+          </details>
+        )}
+      </aside>
+    ),
+    console: (
+      <div className="dock-content">
+        <>
+          {analysis?.diagnostics.map((d) => (
+            <button
+              className="diagnostic"
+              key={d.id}
+              onClick={() => {
+                if (d.sourceRange) {
+                  setRange(d.sourceRange);
+                  setFile(d.sourceRange.filePath);
+                  setMode("split");
+                }
+              }}
+            >
+              <span className="diagnostic-symbol">
+                {d.severity === "error" ? "!" : "△"}
+              </span>
+              <span>{d.message}</span>
+              <code>
+                {d.sourceRange
+                  ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
+                  : d.code}
+              </code>
+            </button>
+          ))}
+          {report ? (
+            <ReportView report={report} projectId={projectId} />
+          ) : job?.error ? (
+            <div className="notice error">
+              {job.error.code} · {job.error.message}
             </div>
-          </div>
-          {graph && (
-            <details className="node-access">
-              <summary>Все узлы метода</summary>
-              {graph.nodes
-                .filter((n) => n.methodId === methodId)
-                .map((n) => (
-                  <button key={n.id} onClick={() => pickNode(n)}>
-                    {isIterationProtocol(n) ? nodeCaption(n) : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
-                  </button>
-                ))}
-            </details>
+          ) : (
+            !analysis?.diagnostics.length && (
+              <div className="output-empty">
+                <span className="terminal-prompt">
+                  <Icon name="terminal" size={17} />
+                </span>
+                <span>
+                  {runnerAvailable === false
+                    ? "Запуск недоступен: runner не подключён. Редактор и схема доступны."
+                    : "Нет вывода"}
+                </span>
+                <kbd>Ctrl ↵</kbd>
+              </div>
+            )
           )}
-        </aside>
-      )}
+        </>
+      </div>
+    ),
+    tests: (
+      <div className="dock-content">
+        {report?.testResults ? (
+          <ReportView report={report} projectId={projectId} />
+        ) : (
+          <div className="output-empty">
+            <span className="terminal-prompt">
+              <Icon name="compare" size={17} />
+            </span>
+            <span>Нет сравнений</span>
+            <button
+              onClick={() => setDialog("compare")}
+              disabled={!revision || dirty}
+            >
+              Сравнить версии
+            </button>
+          </div>
+        )}
+      </div>
+    ),
+    changes: (
+      <div className="dock-content">
+        {proposal ? (
+          <div className="proposal">
+            <div className="proposal-heading">
+              <span>
+                Кандидат {short(proposal.candidateRevisionId)}{" "}
+                <span className="status-tag">
+                  {proposal.status === "ready"
+                    ? "Скомпилирован"
+                    : proposal.status}
+                </span>
+              </span>
+              <span className="small quiet">
+                {proposal.intent === "semantic_edit"
+                  ? "Изменение логики"
+                  : "Сохранение поведения"}
+              </span>
+              <button
+                className="primary"
+                disabled={
+                  inFlight ||
+                  historical ||
+                  conflict ||
+                  !canApply(
+                    proposal.status,
+                    proposal.baseRevisionId,
+                    project?.headRevisionId ?? null,
+                    proposal.intent,
+                    exactMatched,
+                  ) ||
+                  dirty
+                }
+                onClick={() => void apply()}
+              >
+                Применить
+              </button>
+              <button disabled={busy} onClick={() => setProposal(null)}>
+                Отклонить
+              </button>
+            </div>
+            {proposal.diff?.map((d, i) => (
+              <div key={i} className="diff">
+                <span className="small quiet">{d.filePath}</span>
+                <pre className="removed">− {d.before}</pre>
+                <pre className="added">+ {d.after}</pre>
+              </div>
+            ))}
+            {proposal.checks && (
+              <p className="small quiet">
+                Разбор: {proposal.checks.parseStatus} · Компиляция:{" "}
+                {proposal.checks.compileStatus} · Проверка поведения:{" "}
+                {proposal.checks.verificationStatus}
+              </p>
+            )}
+            {proposal.intent === "preserve_behavior" &&
+              proposal.candidateRevisionId && (
+                <button onClick={() => setDialog("compare")}>
+                  Проверить base / candidate
+                </button>
+              )}
+            {proposal.diagnostics?.map((d) => (
+              <p key={d.id}>{d.message}</p>
+            ))}
+          </div>
+        ) : (manualSaveRequired || conflict) && revision ? (
+          <div className="local-diff">
+            <div className="proposal-heading">
+              <span>Локальная правка · основа {short(baseId)}</span>
+              <button onClick={() => void save()} disabled={conflict || saving}>
+                Сохранить новую версию
+              </button>
+              <button onClick={downloadDraft}>Скачать черновик</button>
+            </div>
+            {Object.entries(files)
+              .filter(([path, text]) => filesOf(revision)[path] !== text)
+              .map(([path, text]) => (
+                <div className="diff" key={path}>
+                  <span className="small quiet">{path}</span>
+                  <pre className="removed">{filesOf(revision)[path] ?? ""}</pre>
+                  <pre className="added">{text}</pre>
+                </div>
+              ))}
+          </div>
+        ) : (
+          <div className="output-empty">
+            <span className="terminal-prompt">
+              <Icon name="changes" size={17} />
+            </span>
+            <span>Нет предложений</span>
+          </div>
+        )}
+      </div>
+    ),
+  };
+  function stopJob() {
+    if (job && ["queued", "running"].includes(job.status))
+      void api<Job>(base + "/jobs/" + job.id + "/cancel", {
+        method: "POST",
+        body: {},
+      })
+        .then(setJob)
+        .catch((e) => setError(message(e)));
+  }
+  return (
+    <div className="workbench configurable-workbench">
+      <header className="toolbar">
+        <Brand />
+        <WorkspaceMenu
+          workspace={workspace}
+          actions={{
+            save: () => void save(),
+            import: () => importInput.current?.click(),
+            export: () => void exportRevision(),
+            projects: () => navigate("/"),
+            run: () => setDialog("run"),
+            compare: () => setDialog("compare"),
+            stop: stopJob,
+            edit: (command) => {
+              void workspace.reveal("code").then(() => {
+                if (mounted.current) editorCommands.current?.[command]();
+              });
+            },
+            editDisabled: !file || historical || busy || loadingRevision,
+            saveDisabled: !dirty || saving || conflict || historical,
+            runDisabled: !revision || dirty || busy,
+            exportDisabled: !revision || busy,
+            importDisabled: busy,
+            stopDisabled: !job || !["queued", "running"].includes(job.status),
+          }}
+        />
+        <a
+          className="project-title"
+          href={"/projects/" + projectId}
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/projects/" + projectId);
+          }}
+        >
+          {project?.name ?? "Проект"}
+        </a>
+        <span className="version-badge" title={revision?.bundleHash}>
+          {short(revision?.id)}
+        </span>
+        <span className="toolbar-spacer" />
+        <button
+          className={
+            "layout-configure " + (workspace.editing ? "selected" : "")
+          }
+          onClick={() => workspace.setEditing(!workspace.editing)}
+          aria-pressed={workspace.editing}
+        >
+          Расположение
+        </button>
+        <ThemeToggle />
+        <button onClick={() => importInput.current?.click()} disabled={busy}>
+          <Icon name="upload" /> <span className="hide-narrow">Импорт</span>
+        </button>
+        <button
+          onClick={() => setDialog("run")}
+          disabled={!revision || dirty || busy}
+        >
+          <Icon name="play" /> Запуск
+        </button>
+        <button
+          className="icon-button"
+          title="Остановить выполнение"
+          aria-label="Остановить выполнение"
+          disabled={!job || !["queued", "running"].includes(job.status)}
+          onClick={stopJob}
+        >
+          ■
+        </button>
+        <button
+          className="primary"
+          onClick={() => setDialog("compare")}
+          disabled={!revision || dirty || busy}
+        >
+          <Icon name="compare" /> Сравнить
+        </button>
+        <button
+          className="icon-button"
+          title="Экспорт выбранной версии"
+          aria-label="Экспорт выбранной версии"
+          onClick={() => void exportRevision()}
+          disabled={!revision || busy}
+        >
+          <Icon name="download" />
+        </button>
+        <input
+          type="file"
+          multiple
+          accept=".java"
+          ref={importInput}
+          hidden
+          onChange={(e) => void importFiles(e.target.files)}
+        />
+      </header>
+      <main className="workbench-body">
+        <div className="workbench-context">
+          <span>
+            {file || "Нет файлов"}
+            {method ? " / " + method.signature.split("(")[0] : ""}
+          </span>
+          <span className="small quiet">
+            {job ? labelStatus(job.status) + " · " + short(job.id) : "Java 21"}
+          </span>
+        </div>
+        <div className="workspace-notices">
+          {" "}
+          {error && (
+            <div className="notice error" role="alert">
+              <span>{error}</span>
+              <button
+                aria-label="Закрыть сообщение"
+                onClick={() => setError("")}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          )}
+          {conflict && (
+            <div className="notice warning">
+              Конфликт версий{" "}
+              <button onClick={() => void rebase()}>
+                Выбрать актуальную основу
+              </button>
+              <button onClick={downloadDraft}>Скачать черновик</button>
+            </div>
+          )}
+          {historical && (
+            <div className="notice">
+              Просмотр сохранённой версии {short(revision?.id)}{" "}
+              <button
+                disabled={inFlight || dirty}
+                onClick={() => void openRevision(project!.headRevisionId!)}
+              >
+                Открыть текущую
+              </button>
+            </div>
+          )}
+        </div>
+        <Workspace controller={workspace} panels={panels} />
+      </main>
       <footer className="statusbar">
         <span className={"connection-dot " + (dirty ? "unsaved" : "")} />
         <span role="status" aria-live="polite">

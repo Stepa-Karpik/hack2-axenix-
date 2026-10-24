@@ -228,11 +228,18 @@ test("condition flow layout keeps branches disjoint without executing AST projec
   );
   const positions = arrangeFlow(visible, edges);
   assert.equal(positions.size, visible.length);
+  // Node rectangles are 264x84; reserve another 56px horizontally and 44px
+  // vertically for handles/labels instead of asserting the former rank145.
+  const nodeWidth = 264,
+    nodeHeight = 84;
+  const horizontalClearance = 56,
+    verticalClearance = 44;
   for (const [a, p] of positions)
     for (const [b, q] of positions)
       if (a !== b)
         assert.ok(
-          Math.abs(p.y - q.y) >= 145 || Math.abs(p.x - q.x) >= 320,
+          Math.abs(p.y - q.y) >= nodeHeight + verticalClearance ||
+            Math.abs(p.x - q.x) >= nodeWidth + horizontalClearance,
           a + " overlaps " + b,
         );
   assert.deepEqual(arrangeFlow(visible, edges), positions);
@@ -253,7 +260,8 @@ test("shortcut and loop lanes bypass every node column", async () => {
     { id: "back", source: "c", target: "a", kind: "loop" },
   ];
   const routes = routeFlowEdges(nodes, edges);
-  assert.equal(routes.has("next"), false);
+  assert.ok(routes.get("next") > Math.max(...nodes.map(node => node.position.x + 280)));
+  assert.notEqual(routes.get("next"), routes.get("skip"));
   assert.ok(
     routes.get("skip") >
       Math.max(...nodes.map((node) => node.position.x + 280)),

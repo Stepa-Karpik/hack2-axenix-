@@ -1,5 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
-import { assertRoutes } from "./flowAssertions";
+import { test, expect } from "@playwright/test";
+import { assertRoutes, panToNode as panTo } from "./flowAssertions";
 const source = `public class Main {
   static int choose(int value) {
     int result = 0;
@@ -53,27 +53,6 @@ const source = `public class Main {
   }
 }
 `;
-async function panTo(page: Page, node: ReturnType<Page["locator"]>) {
-  for (let pass = 0; pass < 6; pass++) {
-    const area = (await page.locator(".flow-area").boundingBox())!;
-    const box = (await node.boundingBox())!;
-    const dx = area.x + area.width / 2 - box.x - box.width / 2;
-    const dy = area.y + area.height / 2 - box.y - box.height / 2;
-    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-    const start = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
-    await page.keyboard.down("Space");
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(
-      start.x + Math.max(-area.width / 3, Math.min(area.width / 3, dx)),
-      start.y + Math.max(-area.height / 3, Math.min(area.height / 3, dy)),
-      { steps: 5 },
-    );
-    await page.mouse.up();
-    await page.keyboard.up("Space");
-  }
-}
-
 test("traditional switch dispatch, fallthrough, source bindings and immutable candidate apply", async ({
   page,
 }, testInfo) => {

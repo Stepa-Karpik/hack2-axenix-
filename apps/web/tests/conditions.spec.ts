@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { assertRoutes } from "./flowAssertions";
+import { assertRoutes, panToNode } from "./flowAssertions";
 const source = `public class Main {
   static boolean a() { return true; }
   static boolean b() { return false; }
@@ -80,6 +80,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
             e.kind === (name === "andTest" ? "true" : "false"),
         ),
       ).toBe(true);
+    await panToNode(page, page.locator(".blueprint-node.condition_test").first());
     await page.locator(".blueprint-node.condition_test").first().click();
     await expect(page.locator(".inspector-selection")).toContainText(
       "Проверка",
@@ -90,18 +91,18 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
     ).toBeVisible();
     await expect(
       page
-        .locator(".react-flow__edge-text, .shortcut-label")
+        .locator(".react-flow__edge-text, .shortcut-label, .graph-port-true")
         .filter({ hasText: "да" })
         .first(),
     ).toBeVisible();
     await expect(
       page
-        .locator(".react-flow__edge-text, .shortcut-label")
+        .locator(".react-flow__edge-text, .shortcut-label, .graph-port-false")
         .filter({ hasText: "нет" })
         .first(),
     ).toBeVisible();
     const overlaps = await page
-      .locator(".react-flow__node")
+      .locator(".react-flow__node:not(.react-flow__node-loopArea)")
       .evaluateAll((nodes) => {
         const boxes = nodes.map((n) => ({
           id: n.getAttribute("data-id"),
@@ -171,6 +172,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
   await page.screenshot({ path: testInfo.outputPath("conditions-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
   await page.locator(".method-item").filter({ hasText: "andTest(" }).click();
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
   await expect(page.locator(".blueprint-node.IfStmt .node-label")).toHaveText(
     "Если",
@@ -199,6 +201,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
   await page.reload();
   await page.locator(".method-item").filter({ hasText: "andTest(" }).click();
   await expect(page.locator(".blueprint-node.condition_test")).toHaveCount(2);
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
   const current = (await (await page.request.get(base)).json()).data
     .headRevisionId;

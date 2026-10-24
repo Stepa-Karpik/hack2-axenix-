@@ -19,8 +19,20 @@ import type {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import {
+  Braces,
+  CircleStop,
+  CornerDownLeft,
+  Diamond,
+  Repeat2,
+  Variable,
+  CornerDownRight,
+  SquareFunction,
+  ArrowUpRight,
+  GitMerge,
+} from "lucide-react";
 import type { RouteBox } from "./flowLayout";
-import type { Graph, GraphNode, Layout } from "./types";
+import type { Graph, GraphNode, Layout, SemanticModel } from "./types";
 import {
   arrangeFlow,
   executionNodes,
@@ -29,6 +41,8 @@ import {
   compactFlowLabel,
   dispatchLabelPosition,
   flowLabelTitle,
+  loopAreas,
+  visualKind,
 } from "./flowLayout";
 import { api, projectPath } from "./api";
 type FlowData = {
@@ -38,20 +52,46 @@ type FlowData = {
   selected: boolean;
   executionRole?: GraphNode["executionRole"];
   fullLabel?: string;
+  visualKind?: ReturnType<typeof visualKind>;
+  branch?: boolean;
+};
+const nodeIcons = {
+  method: Braces,
+  terminal: CircleStop,
+  return: CornerDownLeft,
+  condition: Diamond,
+  loop: Repeat2,
+  variable: Variable,
+  call: ArrowUpRight,
+  operation: SquareFunction,
+  jump: CornerDownRight,
+  join: GitMerge,
+  structure: Braces,
 };
 function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
+  const Glyph = nodeIcons[data.visualKind ?? "operation"];
   return (
     <div
+      data-node-kind={data.kind}
+      data-visual-kind={data.visualKind}
       className={
         "blueprint-node " +
         (data.selected ? "selected " : "") +
         data.kind +
         " role-" +
-        (data.executionRole ?? "unknown")
+        (data.executionRole ?? "unknown") +
+        " visual-" +
+        (data.visualKind ?? "operation")
       }
       title={data.fullLabel}
     >
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <Glyph
+        className="graph-node-icon"
+        size={15}
+        strokeWidth={1.8}
+        aria-hidden="true"
+      />
       {isIterationProtocol(data) ? (
         <div className="node-label">{data.label}</div>
       ) : data.executionRole === "structural" ? (
@@ -62,13 +102,61 @@ function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
       ) : (
         <>
           <div className="node-meta">
-            <span>{kindName(data.kind)}</span>
+            <span>
+              {data.kind === "ExpressionStmt" && data.visualKind === "variable"
+                ? "Переменная"
+                : data.kind === "ExpressionStmt" && data.visualKind === "call"
+                  ? "Вызов"
+                  : kindName(data.kind)}
+            </span>
             <span>{data.line}</span>
           </div>
           <div className="node-label">{data.label}</div>
         </>
       )}
-      <Handle type="source" position={Position.Bottom} />
+      <Handle
+        id="next"
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+      />
+      {data.branch && (
+        <>
+          <Handle
+            id="true"
+            type="source"
+            position={Position.Bottom}
+            isConnectable={false}
+          />
+          <Handle
+            id="false"
+            type="source"
+            position={Position.Right}
+            isConnectable={false}
+          />
+          <span className="graph-port graph-port-true" aria-hidden="true">
+            да
+          </span>
+          <span className="graph-port graph-port-false" aria-hidden="true">
+            нет
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+function LoopAreaNode({ data }: NodeProps<Node<FlowData>>) {
+  return (
+    <div
+      className="graph-loop-area"
+      data-loop-area={data.fullLabel}
+      data-loop-members={data.label}
+      aria-hidden="true"
+    >
+      <span>
+        <Repeat2 size={12} />
+        Повторяемая область
+      </span>
     </div>
   );
 }
@@ -115,11 +203,17 @@ export function kindName(kind: string) {
     )[kind] ?? kind
   );
 }
-export function isIterationProtocol(node: Pick<GraphNode, "kind" | "executionRole">) {
-  return node.executionRole === "synthetic" &&
-    ["foreach_check", "foreach_bind", "foreach_advance"].includes(node.kind);
+export function isIterationProtocol(
+  node: Pick<GraphNode, "kind" | "executionRole">,
+) {
+  return (
+    node.executionRole === "synthetic" &&
+    ["foreach_check", "foreach_bind", "foreach_advance"].includes(node.kind)
+  );
 }
-export function nodeCaption(node: Pick<GraphNode, "kind" | "label" | "executionRole">) {
+export function nodeCaption(
+  node: Pick<GraphNode, "kind" | "label" | "executionRole">,
+) {
   return isIterationProtocol(node) ? kindName(node.kind) : node.label;
 }
 function ShortcutEdge({
@@ -140,6 +234,11 @@ function ShortcutEdge({
     boxes: RouteBox[];
     fullLabel?: string;
     labelAtTarget?: boolean;
+    sourceSide?: "bottom" | "right";
+    branch?: boolean;
+    returning?: boolean;
+    departure?: number;
+    arrival?: number;
   }>
 >) {
   const routeX = data!.routeX;
@@ -150,6 +249,9 @@ function ShortcutEdge({
         { x: targetX, y: targetY },
         routeX,
         data!.boxes,
+        data?.departure ?? 22,
+        data?.sourceSide,
+        data?.arrival ?? 22,
       ),
     [sourceX, sourceY, targetX, targetY, routeX, data],
   );
@@ -166,10 +268,11 @@ function ShortcutEdge({
   const labelStart = route.points[Math.max(0, horizontal)],
     labelEnd = route.points[Math.max(1, horizontal + 1)];
   const targetLabel = dispatchLabelPosition({ x: targetX, y: targetY });
-  const labelX = data?.labelAtTarget ? targetLabel.x :
-    labelStart.x +
-    Math.sign(labelEnd.x - labelStart.x) *
-      Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
+  const labelX = data?.labelAtTarget
+    ? targetLabel.x
+    : labelStart.x +
+      Math.sign(labelEnd.x - labelStart.x) *
+        Math.min(48, Math.abs(labelEnd.x - labelStart.x) / 2);
   const labelY = data?.labelAtTarget ? targetLabel.y : labelStart.y;
   return (
     <>
@@ -177,6 +280,9 @@ function ShortcutEdge({
         data-shortcut-source={source}
         data-shortcut-target={target}
         data-route-status={route.complete ? "clear" : "limited"}
+        data-route-source={source}
+        data-route-target={target}
+        data-route-returning={data?.returning || undefined}
       >
         {!route.complete && (
           <title>Маршрут ограничен: обход узлов не гарантирован</title>
@@ -188,7 +294,7 @@ function ShortcutEdge({
           style={route.complete ? style : { ...style, strokeDasharray: "4 4" }}
         />
       </g>
-      {label && (
+      {label && !data?.branch && (
         <EdgeLabelRenderer>
           <span
             className="shortcut-label"
@@ -205,7 +311,7 @@ function ShortcutEdge({
   );
 }
 const edgeTypes = { shortcut: ShortcutEdge };
-const nodeTypes = { blueprint: BlueprintNode };
+const nodeTypes = { blueprint: BlueprintNode, loopArea: LoopAreaNode };
 export default function FlowCanvas({
   graph,
   methodId,
@@ -213,6 +319,7 @@ export default function FlowCanvas({
   onSelect,
   projectId,
   stale,
+  semantics,
 }: {
   graph: Graph;
   methodId: string;
@@ -220,10 +327,15 @@ export default function FlowCanvas({
   onSelect: (node: GraphNode) => void;
   projectId: string;
   stale: boolean;
+  semantics?: SemanticModel | null;
 }) {
   const [nodes, setNodes] = useState<Node<FlowData>[]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutError, setLayoutError] = useState("");
+  const semanticsRef = useRef(semantics);
+  semanticsRef.current = semantics;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const flow = useRef<Pick<
     ReactFlowInstance<Node<FlowData>>,
     "setViewport" | "getViewport"
@@ -262,8 +374,18 @@ export default function FlowCanvas({
                   ? compactFlowLabel(e.label)
                   : undefined,
           data: { fullLabel: e.label ?? undefined },
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#9aa18f" },
-          style: { stroke: "#aeb6a1", strokeWidth: 1.3 },
+          sourceHandle:
+            e.kind === "true" || e.kind === "false" ? e.kind : "next",
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: e.kind === "loop" ? "#8b79af" : "#8c9691",
+            width: 16,
+            height: 16,
+          },
+          style: {
+            stroke: e.kind === "loop" ? "#8b79af" : "#8c9691",
+            strokeWidth: e.kind === "loop" ? 1.8 : 1.4,
+          },
           labelStyle: { fontSize: 10, fill: "#7a8370" },
           type: "smoothstep",
         })),
@@ -288,7 +410,19 @@ export default function FlowCanvas({
   }, [projectId, graph, methodId]);
   useEffect(() => {
     const visible = executionNodes(methodNodes, edges);
-    const positions = arrangeFlow(visible, edges);
+    const positions = arrangeFlow(visible, edges, methodNodes);
+    let selectedVisible = selectedRef.current;
+    const visited = new Set<string>();
+    while (
+      selectedVisible &&
+      !visible.some((node) => node.id === selectedVisible) &&
+      !visited.has(selectedVisible)
+    ) {
+      visited.add(selectedVisible);
+      selectedVisible =
+        methodNodes.find((node) => node.id === selectedVisible)?.parentId ??
+        undefined;
+    }
     setNodes(
       visible.map((n, i) => {
         const pos = layout?.positions.find((p) => p.nodeId === n.id) ??
@@ -316,7 +450,12 @@ export default function FlowCanvas({
                           ? "Повтор цикла"
                           : nodeCaption(n).split("\n")[0].slice(0, 110),
             line: n.sourceRange ? `L${n.sourceRange.startLine}` : "",
-            selected: false,
+            selected: n.id === selectedVisible,
+            visualKind: visualKind(n, semanticsRef.current),
+            branch: edges.some(
+              (edge) =>
+                edge.source === n.id && ["true", "false"].includes(edge.kind),
+            ),
           },
         };
       }),
@@ -324,7 +463,8 @@ export default function FlowCanvas({
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         if (scopeRef.current !== scope) return;
-        viewportWidth.current = container.current?.clientWidth ?? 500;
+        viewportWidth.current =
+          container.current?.clientWidth || viewportWidth.current || 500;
         if (layout?.positions.length)
           void flow.current?.setViewport(layout.viewport);
         else {
@@ -332,8 +472,9 @@ export default function FlowCanvas({
           const entryPosition = entry ? positions.get(entry.id) : undefined;
           void flow.current?.setViewport({
             x:
-              (container.current?.clientWidth ?? 500) / 2 -
-              ((entryPosition?.x ?? 0) + 87) * 0.85,
+              (container.current?.clientWidth || viewportWidth.current || 500) /
+                2 -
+              ((entryPosition?.x ?? 0) + 132) * 0.85,
             y: 35 - (entryPosition?.y ?? 0) * 0.85,
             zoom: 0.85,
           });
@@ -341,6 +482,22 @@ export default function FlowCanvas({
       }),
     );
   }, [methodNodes, edges, layout]);
+  // Binding availability can change while the editor has a dirty draft. Only
+  // update visual categories; never reinitialize positions, selection or camera.
+  useEffect(() => {
+    const byId = new Map(methodNodes.map((node) => [node.id, node]));
+    setNodes((current) =>
+      current.map((node) => {
+        const source = byId.get(node.id);
+        return source
+          ? {
+              ...node,
+              data: { ...node.data, visualKind: visualKind(source, semantics) },
+            }
+          : node;
+      }),
+    );
+  }, [semantics, methodNodes]);
   useEffect(
     () =>
       setNodes((ns) => {
@@ -367,30 +524,82 @@ export default function FlowCanvas({
     const boxes = nodes.map((node) => ({
       id: node.id,
       ...node.position,
-      width: node.measured?.width ?? 280,
-      height: node.measured?.height ?? 85,
+      width: node.measured?.width ?? 264,
+      height: node.measured?.height ?? 84,
     }));
+    const departures = new Map<number, number>();
+    const arrivals = new Map<number, number>();
     return edges.map((edge) => {
-      return routes.has(edge.id)
-        ? {
-            ...edge,
-            type: "shortcut",
-            data: {
-              ...edge.data,
-              routeX: routes.get(edge.id)!,
-              boxes,
-              labelAtTarget: edge.kind === "case" || edge.kind === "default",
-            },
-          }
-        : edge;
+      const source = nodes.find((node) => node.id === edge.source);
+      const target = nodes.find((node) => node.id === edge.target);
+      const sourceRow = source?.position.y ?? 0,
+        targetRow = target?.position.y ?? 0;
+      const leaving = departures.get(sourceRow) ?? 0,
+        entering = arrivals.get(targetRow) ?? 0;
+      departures.set(sourceRow, leaving + 1);
+      arrivals.set(targetRow, entering + 1);
+      return {
+        ...edge,
+        type: "shortcut",
+        data: {
+          ...edge.data,
+          routeX:
+            routes.get(edge.id) ??
+            ((source?.position.x ?? 0) + (target?.position.x ?? 0)) / 2 + 132,
+          boxes,
+          labelAtTarget: edge.kind === "case" || edge.kind === "default",
+          sourceSide: edge.kind === "false" ? "right" : "bottom",
+          branch: edge.kind === "true" || edge.kind === "false",
+          returning:
+            edge.kind === "loop" ||
+            (source && target && target.position.y <= source.position.y),
+          departure: 18 + (leaving % 3) * 4,
+          arrival: 18 + (entering % 3) * 4,
+        },
+      };
     });
   }, [nodes, edges]);
+  const renderedNodes = useMemo(() => {
+    const boxes = nodes.map((node) => ({
+      id: node.id,
+      ...node.position,
+      width: node.measured?.width ?? 264,
+      height: node.measured?.height ?? 84,
+    }));
+    const areas: Node<FlowData>[] = loopAreas(methodNodes, boxes).map(
+      (area) => ({
+        id: area.id,
+        type: "loopArea",
+        position: { x: area.x, y: area.y },
+        style: {
+          width: area.width,
+          height: area.height,
+          pointerEvents: "none",
+        },
+        width: area.width,
+        height: area.height,
+        zIndex: -1,
+        selectable: false,
+        draggable: false,
+        focusable: false,
+        data: {
+          kind: area.kind,
+          label: area.members.join(" "),
+          line: "",
+          selected: false,
+          fullLabel: area.id.slice(10),
+        },
+      }),
+    );
+    return [...areas, ...nodes];
+  }, [nodes, methodNodes]);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
-    viewportWidth.current = element.clientWidth;
+    viewportWidth.current = element.clientWidth || viewportWidth.current || 500;
     const observer = new ResizeObserver(() => {
       const next = element.clientWidth;
+      if (!next) return;
       const width = viewportWidth.current;
       viewportWidth.current = next;
       if (width && next && width !== next && flow.current) {
@@ -406,7 +615,15 @@ export default function FlowCanvas({
   }, []);
   const changes = useCallback(
     (c: NodeChange<Node<FlowData>>[]) =>
-      setNodes((ns) => applyNodeChanges(c, ns)),
+      setNodes((ns) =>
+        applyNodeChanges(
+          c.filter(
+            (change) =>
+              !("id" in change) || !change.id.startsWith("loop-area:"),
+          ),
+          ns,
+        ),
+      ),
     [],
   );
   async function saveLayout() {
@@ -446,14 +663,14 @@ export default function FlowCanvas({
       <ReactFlow
         onInit={(instance) => {
           flow.current = instance;
-          viewportWidth.current = container.current?.clientWidth ?? 500;
+          viewportWidth.current = container.current?.clientWidth || 500;
           void instance.setViewport({
-            x: (container.current?.clientWidth ?? 500) / 2 - 90,
+            x: (container.current?.clientWidth || 500) / 2 - 112,
             y: 35,
             zoom: 0.85,
           });
         }}
-        nodes={nodes}
+        nodes={renderedNodes}
         edges={renderedEdges}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
@@ -464,12 +681,13 @@ export default function FlowCanvas({
           if (source) onSelect(source);
         }}
         nodesDraggable={!stale}
+        nodesConnectable={false}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         minZoom={0.15}
         maxZoom={1.5}
         attributionPosition="bottom-left"
       >
-        <Background gap={22} size={1} color="#d8ddcf" />
+        <Background gap={22} size={1} color="var(--graph-grid, #d8ddcf)" />
         <Controls showInteractive={false} />
       </ReactFlow>
       {layoutError && (

@@ -1,6 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { assertRoutes } from "./flowAssertions";
-import type { Page } from "@playwright/test";
+import { assertRoutes, panToNode as panTo, revealPanel } from "./flowAssertions";
 const source = `import java.util.List;
 public class Main {
   static int array(int[] values, int[] alternative) {
@@ -26,35 +25,6 @@ public class Main {
   }
 }
 `;
-async function panTo(page: Page, node: ReturnType<Page["locator"]>) {
-  for (let pass = 0; pass < 24; pass++) {
-    const area = (await page.locator(".react-flow__pane").boundingBox())!;
-    const box = (await node.boundingBox())!;
-    const dx = area.x + area.width / 2 - box.x - box.width / 2;
-    const dy = area.y + area.height / 2 - box.y - box.height / 2;
-    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-    const start = await page.locator(".react-flow__pane").evaluate(pane => {
-      const box = pane.getBoundingClientRect();
-      for (let row = 1; row < 10; row++)
-        for (let column = 1; column < 10; column++) {
-          const x = box.x + box.width * column / 10, y = box.y + box.height * row / 10;
-          if (document.elementFromPoint(x, y) === pane) return { x, y };
-        }
-      throw new Error("No blank flow pane point for read-only pan");
-    });
-    await page.keyboard.down("Space");
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(
-      start.x + Math.max(-area.width / 3, Math.min(area.width / 3, dx)),
-      start.y + Math.max(-area.height / 3, Math.min(area.height / 3, dy)),
-      { steps: 5 },
-    );
-    await page.mouse.up();
-    await page.keyboard.up("Space");
-  }
-}
-
 test("enhanced-for abstraction, readonly synthetic nodes and source candidate apply", async ({ page }, testInfo) => {
   test.setTimeout(180000);
   await page.goto("/");
@@ -111,7 +81,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await panTo(page, element);
       await element.click();
       await expect(element.locator(".node-label")).toHaveText(caption);
-      await expect(element).toHaveText(caption);
+      await expect(element).toHaveText(kind === "foreach_check" ? caption + "данет" : caption);
       await expect(element.locator(".node-meta")).toHaveCount(0);
       await expect(page.locator(".inspector-selection")).toContainText("Служебный узел");
       const selection = page.locator(".inspector-selection");
@@ -149,7 +119,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
   await page.setViewportSize({ width: 1512, height: 982 });
   expect((await (await page.request.get(base)).json()).data.headRevisionId).toBe(head);
   await page.locator(".method-item").filter({ hasText: "array(" }).click();
-  if (!(await page.locator(".inspector").count())) await page.getByRole("button", { name: "Переключить инспектор" }).click();
+  await revealPanel(page, "analysis", "Инспектор");
   await page.locator(".node-access summary").click();
   await page.locator(".node-access").getByRole("button", { name: "Выражение · values", exact: true }).click();
   await expect(page.getByLabel("Выражение", { exact: true })).toHaveValue("values");

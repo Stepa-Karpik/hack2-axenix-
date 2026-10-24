@@ -1,4 +1,89 @@
-import type { GraphNode } from "./types";
+import type { GraphNode, SemanticModel } from "./types";
+export type VisualKind =
+  | "method"
+  | "terminal"
+  | "return"
+  | "condition"
+  | "loop"
+  | "variable"
+  | "call"
+  | "operation"
+  | "jump"
+  | "structure"
+  | "join";
+export function visualKind(
+  node: GraphNode,
+  semantics?: SemanticModel | null,
+): VisualKind {
+  if (node.kind === "entry") return "method";
+  if (["normal_exit", "exceptional_exit", "exit"].includes(node.kind))
+    return "terminal";
+  if (["ReturnStmt", "return", "ThrowStmt"].includes(node.kind))
+    return "return";
+  if (
+    ["BreakStmt", "ContinueStmt", "loop_back", "foreach_advance"].includes(
+      node.kind,
+    )
+  )
+    return "jump";
+  if (
+    [
+      "condition_test",
+      "foreach_check",
+      "switch_selector",
+      "condition",
+      "if",
+    ].includes(node.kind)
+  )
+    return "condition";
+  if (
+    ["ForStmt", "WhileStmt", "DoStmt", "ForEachStmt", "loop"].includes(
+      node.kind,
+    )
+  )
+    return "loop";
+  if (["VariableDeclarationExpr", "foreach_bind"].includes(node.kind))
+    return "variable";
+  if (["MethodCallExpr", "ObjectCreationExpr"].includes(node.kind))
+    return "call";
+  if (node.kind === "merge") return "join";
+  if (node.executionRole === "structural") return "structure";
+  const range = node.sourceRange;
+  if (
+    ["ExpressionStmt", "for_init"].includes(node.kind) &&
+    range &&
+    semantics
+  ) {
+    const contained = (r: GraphNode["sourceRange"]) =>
+      r &&
+      r.filePath === range.filePath &&
+      r.startOffset >= range.startOffset &&
+      r.endOffset <= range.endOffset;
+    const declarations = semantics.symbols.filter(
+      (symbol) =>
+        !symbol.external &&
+        symbol.kind === "local" &&
+        contained(symbol.sourceRange),
+    );
+    const calls = semantics.references.filter(
+      (reference) =>
+        ["call", "constructor"].includes(reference.kind) &&
+        contained(reference.sourceRange),
+    );
+    if (declarations.length === 1 && calls.length === 0) return "variable";
+    // A call occupies the whole ExpressionStmt except its trailing semicolon.
+    // Contained calls in assignments/declarations remain ordinary operations.
+    if (
+      !declarations.length &&
+      node.kind === "ExpressionStmt" &&
+      calls.length === 1 &&
+      calls[0].sourceRange.startOffset === range.startOffset &&
+      calls[0].sourceRange.endOffset === range.endOffset - 1
+    )
+      return "call";
+  }
+  return "operation";
+}
 type Edge = { source: string; target: string; kind: string };
 function append<K, T>(map: Map<K, T[]>, key: K, value: T) {
   const values = map.get(key);
@@ -22,7 +107,11 @@ export function executionNodes(nodes: GraphNode[], edges: Edge[]) {
 }
 // Rank the API graph after excluding DFS back edges; each rank has disjoint fixed-width lanes.
 // No source expression interpretation or control-flow edges are created here.
-export function arrangeFlow(nodes: GraphNode[], edges: Edge[]) {
+export function arrangeFlow(
+  nodes: GraphNode[],
+  edges: Edge[],
+  ancestry = nodes,
+) {
   const ids = new Set(nodes.map((node) => node.id));
   const outgoing = new Map<string, Edge[]>();
   for (const edge of edges)
@@ -78,6 +167,44 @@ export function arrangeFlow(nodes: GraphNode[], edges: Edge[]) {
       if (indegree.get(edge.target) === 0) queue.push(edge.target);
     }
   }
+  // Keep real loop exits below their repeated body. This is a layout constraint,
+  // not an execution edge: an early false/break/return keeps its exact endpoint.
+  const allById = new Map(ancestry.map((node) => [node.id, node]));
+  const loops = nodes.filter((node) =>
+    ["WhileStmt", "ForStmt", "ForEachStmt", "DoStmt", "loop"].includes(
+      node.kind,
+    ),
+  );
+  const membersOf = (loop: GraphNode) =>
+    new Set(
+      nodes
+        .filter((candidate) => {
+          let node: GraphNode | undefined = candidate;
+          const visited = new Set<string>();
+          while (node && !visited.has(node.id)) {
+            if (node.id === loop.id) return true;
+            visited.add(node.id);
+            node = node.parentId ? allById.get(node.parentId) : undefined;
+          }
+          return false;
+        })
+        .map((node) => node.id),
+    );
+  const groups = loops
+    .map((loop) => membersOf(loop))
+    .sort((a, b) => a.size - b.size);
+  for (const members of groups) {
+    const last = Math.max(...[...members].map((id) => rank.get(id) ?? 0));
+    for (const edge of forward)
+      if (members.has(edge.source) && !members.has(edge.target))
+        rank.set(edge.target, Math.max(rank.get(edge.target) ?? 0, last + 1));
+    for (const id of queue)
+      for (const edge of children.get(id) ?? [])
+        rank.set(
+          edge.target,
+          Math.max(rank.get(edge.target) ?? 0, (rank.get(id) ?? 0) + 1),
+        );
+  }
   const rows = new Map<number, string[]>();
   for (const node of nodes) {
     const row = rank.get(node.id) ?? 0;
@@ -101,7 +228,7 @@ export function arrangeFlow(nodes: GraphNode[], edges: Edge[]) {
     members.forEach((id, index) =>
       positions.set(id, {
         x: mean + (index - (members.length - 1) / 2) * 320,
-        y: row * 145,
+        y: row * 128,
       }),
     );
   }
@@ -122,17 +249,43 @@ export function routeFlowEdges(
   left -= 40;
   right += 40;
   const routes = new Map<string, number>();
-  for (const edge of edges) {
+  let leftLane = 0,
+    rightLane = 0;
+  for (const edge of [...edges].sort((a, b) => {
+    const span = (e: typeof a) =>
+      Math.abs(
+        (byId.get(e.source)?.position.y ?? 0) -
+          (byId.get(e.target)?.position.y ?? 0),
+      );
+    return span(a) - span(b) || a.id.localeCompare(b.id);
+  })) {
     const source = byId.get(edge.source),
       target = byId.get(edge.target);
     if (!source || !target) continue;
     const distance = target.position.y - source.position.y;
     if (edge.kind === "case" || edge.kind === "default") {
-      routes.set(edge.id, target.position.x < source.position.x ? left : right);
+      routes.set(
+        edge.id,
+        target.position.x < source.position.x
+          ? left - leftLane++ * 24
+          : right + rightLane++ * 24,
+      );
       continue;
     }
-    if (distance <= 0 || distance > 146)
-      routes.set(edge.id, edge.kind === "true" ? right : left);
+    // False branches leave the real right-side port. Sending them left forces
+    // obstacle fallback across their own source, which can collapse unrelated
+    // false paths onto the same source boundary despite distinct planned lanes.
+    if (edge.kind === "false" && distance > 0) {
+      routes.set(edge.id, right + rightLane++ * 24);
+      continue;
+    }
+    if (distance <= 0 || distance > 161)
+      routes.set(
+        edge.id,
+        edge.kind === "true"
+          ? right + rightLane++ * 24
+          : left - leftLane++ * 24,
+      );
   }
   return routes;
 }
@@ -162,13 +315,20 @@ export function routeOrthogonal(
   lane: number,
   boxes: RouteBox[],
   departure = 22,
+  sourceSide: "bottom" | "right" = "bottom",
+  arrival = 22,
 ) {
+  const leave =
+    sourceSide === "right"
+      ? { x: start.x + departure, y: start.y }
+      : { x: start.x, y: start.y + departure };
+  const approach = { x: end.x, y: end.y - arrival };
   const initial = [
     start,
-    { x: start.x, y: start.y + departure },
-    { x: lane, y: start.y + departure },
-    { x: lane, y: end.y - 22 },
-    { x: end.x, y: end.y - 22 },
+    leave,
+    { x: lane, y: leave.y },
+    { x: lane, y: approach.y },
+    approach,
     end,
   ];
   const blockers = (points: RoutePoint[]) =>
@@ -179,6 +339,10 @@ export function routeOrthogonal(
     );
   const initialBlockers = blockers(initial);
   if (!initialBlockers.length) return { points: initial, complete: true };
+  // Endpoint stems are fixed by the actual handle direction. Do not enter the
+  // source/target through a different side just to report a successful route.
+  if (blockers([start, leave]).length || blockers([approach, end]).length)
+    return { points: initial, complete: false };
   const relevant = new Map(initialBlockers.map((box) => [box.id, box]));
   // Only obstructed saved/dragged layouts need this bounded visibility-grid search.
   // A budget failure retains the original endpoints/label and exposes an explicit limited route.
@@ -188,6 +352,8 @@ export function routeOrthogonal(
       ...new Set([
         start.x,
         end.x,
+        leave.x,
+        approach.x,
         lane,
         ...obstacles.flatMap((box) => [box.x - 12, box.x + box.width + 12]),
       ]),
@@ -196,13 +362,15 @@ export function routeOrthogonal(
       ...new Set([
         start.y,
         end.y,
+        leave.y,
+        approach.y,
         ...obstacles.flatMap((box) => [box.y - 12, box.y + box.height + 12]),
       ]),
     ].sort((a, b) => a - b);
     const width = xs.length,
       index = (x: number, y: number) => y * width + x;
-    const first = index(xs.indexOf(start.x), ys.indexOf(start.y)),
-      last = index(xs.indexOf(end.x), ys.indexOf(end.y));
+    const first = index(xs.indexOf(leave.x), ys.indexOf(leave.y)),
+      last = index(xs.indexOf(approach.x), ys.indexOf(approach.y));
     const parents = new Map<number, number>();
     parents.set(first, -1);
     const queue = [first];
@@ -243,11 +411,76 @@ export function routeOrthogonal(
       at = parents.get(at)!;
     }
     path.reverse();
+    path.unshift(start);
+    path.push(end);
     const collisions = blockers(path);
     if (!collisions.length) return { points: path, complete: true };
     for (const box of collisions) relevant.set(box.id, box);
   }
   return { points: initial, complete: false };
+}
+
+export type LoopArea = RouteBox & { kind: string; members: string[] };
+const loopKinds = new Set([
+  "WhileStmt",
+  "ForStmt",
+  "ForEachStmt",
+  "DoStmt",
+  "loop",
+]);
+// Parent identity, not source text or bounding source lines, defines membership.
+// A rectangle is omitted when a foreign node overlaps it: visual containment
+// must not imply membership that the engine did not provide.
+export function loopAreas(all: GraphNode[], boxes: RouteBox[]): LoopArea[] {
+  const byId = new Map(all.map((node) => [node.id, node]));
+  const belongs = (id: string, loopId: string) => {
+    const visited = new Set<string>();
+    let node = byId.get(id);
+    while (node && !visited.has(node.id)) {
+      if (node.id === loopId) return true;
+      visited.add(node.id);
+      node = node.parentId ? byId.get(node.parentId) : undefined;
+    }
+    return false;
+  };
+  const areas: LoopArea[] = [];
+  for (const loop of all.filter((node) => loopKinds.has(node.kind))) {
+    const members = boxes.filter(
+      (box) =>
+        belongs(box.id, loop.id) &&
+        !(
+          byId.get(box.id)?.parentId === loop.id &&
+          ["foreach_source", "for_init"].includes(byId.get(box.id)?.kind ?? "")
+        ) &&
+        !(loop.kind === "ForEachStmt" && box.id === loop.id),
+    );
+    if (members.length < 2) continue;
+    const x = Math.min(...members.map((box) => box.x)) - 24;
+    const y = Math.min(...members.map((box) => box.y)) - 36;
+    const right = Math.max(...members.map((box) => box.x + box.width)) + 24;
+    const bottom = Math.max(...members.map((box) => box.y + box.height)) + 24;
+    if (
+      boxes.some(
+        (box) =>
+          !members.includes(box) &&
+          box.x < right &&
+          box.x + box.width > x &&
+          box.y < bottom &&
+          box.y + box.height > y,
+      )
+    )
+      continue;
+    areas.push({
+      id: `loop-area:${loop.id}`,
+      kind: loop.kind,
+      x,
+      y,
+      width: right - x,
+      height: bottom - y,
+      members: members.map((box) => box.id),
+    });
+  }
+  return areas.sort((a, b) => b.width * b.height - a.width * a.height);
 }
 
 export function compactFlowLabel(label: string, limit = 32) {
@@ -261,8 +494,12 @@ export function dispatchLabelPosition(target: { x: number; y: number }) {
   return { x: target.x, y: target.y - 16 };
 }
 
-export function flowLabelTitle(fullLabel: string | undefined, complete: boolean) {
+export function flowLabelTitle(
+  fullLabel: string | undefined,
+  complete: boolean,
+) {
   if (complete) return fullLabel;
   return [fullLabel, "Маршрут ограничен: обход узлов не гарантирован"]
-    .filter(Boolean).join("\n");
+    .filter(Boolean)
+    .join("\n");
 }

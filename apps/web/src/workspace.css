@@ -1,0 +1,604 @@
+/* Workspace chrome uses the shared light/dark surface tokens. */
+.workbench.configurable-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-width: 0;
+  overflow: hidden;
+}
+.configurable-workbench > .toolbar {
+  flex: 0 0 48px;
+  min-height: 48px;
+  height: 48px;
+  padding: 0 12px;
+  gap: 8px;
+  flex-wrap: nowrap;
+  z-index: 20;
+}
+.configurable-workbench .brand {
+  font-size: 14px;
+  gap: 7px;
+}
+.configurable-workbench .brand-mark {
+  width: 27px;
+  height: 27px;
+  font-size: 11px;
+}
+.configurable-workbench .toolbar > button {
+  min-height: 29px;
+  padding: 4px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.configurable-workbench .toolbar .project-title {
+  max-width: 170px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.configurable-workbench .toolbar .version-badge {
+  font-size: 10px;
+}
+.workspace-menubar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.workspace-menu {
+  position: relative;
+}
+.workspace-menu > summary {
+  padding: 6px 7px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  list-style: none;
+  white-space: nowrap;
+}
+.workspace-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.workspace-menu[open] > summary,
+.workspace-menu > summary:hover {
+  background: var(--surface-hover);
+}
+.workspace-menu-popup {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 245px;
+  max-width: 310px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 28px #0002;
+  border-radius: 7px;
+  z-index: 100;
+  max-height: calc(100dvh - 70px);
+  overflow: auto;
+}
+.workspace-menu-popup > button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  font-size: 12px;
+  min-height: 29px;
+}
+.workspace-menu-popup kbd {
+  font-size: 10px;
+  color: var(--quiet);
+  background: transparent;
+  white-space: nowrap;
+}
+.workspace-menu-popup hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 5px 0;
+}
+.workspace-menu-note,
+.workspace-menu-hint {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.workspace-menu-note {
+  color: var(--quiet);
+}
+.workbench-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.workbench-context {
+  flex: 0 0 31px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 13px;
+  color: var(--quiet);
+  font-size: 11px;
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.workbench-context > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-notices:empty {
+  display: none;
+}
+.workspace-notices .notice {
+  margin: 0;
+  border-radius: 0;
+}
+.configurable-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 7px;
+}
+.workspace-layout {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+.workspace-layout > * {
+  flex: 1;
+}
+.workspace-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+.workspace-split.axis-vertical {
+  flex-direction: column;
+}
+.workspace-branch {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.workspace-branch > * {
+  flex: 1;
+}
+.workspace-separator {
+  flex: 0 0 7px;
+  position: relative;
+  touch-action: none;
+  cursor: col-resize;
+}
+.axis-vertical > .workspace-separator {
+  cursor: row-resize;
+}
+.workspace-separator::after {
+  content: "";
+  position: absolute;
+  inset: 1px 2px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.axis-vertical > .workspace-separator::after {
+  inset: 2px 1px;
+}
+.workspace-separator:hover::after,
+.workspace-separator:focus-visible::after {
+  background: var(--lime);
+}
+.workspace-group {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.workspace-panel-header {
+  display: flex;
+  flex: 0 0 31px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 0 3px;
+  align-items: center;
+  background: var(--subtle);
+}
+.workspace-panel-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  height: 100%;
+}
+.workspace-panel-tabs > button {
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  border-radius: 0;
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.workspace-panel-tabs > button.active {
+  color: var(--ink);
+  border-bottom-color: var(--lime);
+  background: var(--surface);
+}
+.is-editing .workspace-panel-tabs > button {
+  cursor: grab;
+}
+.workspace-panel-header > .workspace-panel-action {
+  border: 0;
+  background: transparent;
+  padding: 2px;
+  min-width: 24px;
+  min-height: 24px;
+  font-size: 16px;
+  color: var(--quiet);
+}
+.workspace-panel-slot {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.workspace-panel-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.configurable-workbench .workspace-panel-host > .sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: var(--surface);
+  overflow: auto;
+}
+.configurable-workbench .sidebar .file-tree {
+  flex: 1;
+  min-height: 80px;
+  overflow: auto;
+}
+.configurable-workbench .sidebar-bottom {
+  max-height: 46%;
+  flex-shrink: 0;
+  overflow: auto;
+}
+.configurable-workbench .sidebar .search {
+  margin: 7px 9px;
+}
+.configurable-workbench .sidebar .panel-caption {
+  font-size: 9px;
+  min-height: 30px;
+}
+.configurable-workbench .workspace-panel-host > .inspector {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  position: static;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
+  box-shadow: none;
+  padding: 0;
+  background: var(--surface);
+}
+.configurable-workbench .workspace-panel-host > .graph-pane,
+.configurable-workbench .workspace-panel-host > .code-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  flex: auto;
+}
+.configurable-workbench .workspace-panel-host .editor-caption {
+  min-height: 29px;
+  height: 29px;
+  padding: 0 10px;
+  flex: 0 0 29px;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  overflow: hidden;
+  gap: 8px;
+}
+.configurable-workbench .editor-caption > span:last-child {
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.configurable-workbench .editor-caption button {
+  padding: 2px 7px;
+  min-height: 23px;
+  font-size: 10px;
+}
+.configurable-workbench .workspace-panel-host > .dock-content {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 10px;
+}
+.configurable-workbench .output-empty {
+  min-height: 70px;
+  height: 100%;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.configurable-workbench .statusbar {
+  flex: 0 0 25px;
+  height: 25px;
+  font-size: 10px;
+  padding: 0 12px;
+  min-width: 0;
+}
+.block-palette {
+  padding: 10px;
+  overflow: auto;
+  height: 100%;
+}
+.block-palette p {
+  line-height: 1.5;
+  margin: 0 0 9px;
+  font-size: 10px;
+}
+.palette-block {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  border-radius: 5px;
+  margin: 6px 0;
+  font-size: 11px;
+  padding: 7px;
+  min-height: 31px;
+}
+.palette-block > span {
+  width: 20px;
+  font-size: 17px;
+  color: #77934d;
+}
+.palette-condition > span {
+  color: #a88a36;
+}
+.palette-loop > span {
+  color: #8172b0;
+}
+.workspace-edit-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  font-size: 11px;
+  color: var(--quiet);
+  padding: 0 4px 6px;
+  gap: 10px;
+}
+.workspace-edit-hint button {
+  padding: 2px 10px;
+  min-height: 24px;
+  font-size: 11px;
+}
+.workspace-drop-targets {
+  position: absolute;
+  inset: 31px 0 0;
+  z-index: 30;
+  background: #0001;
+  display: grid;
+  grid-template-columns: 22% 1fr 22%;
+  grid-template-rows: 22% 1fr 22%;
+  gap: 3px;
+  padding: 5px;
+}
+.workspace-drop-zone {
+  border: 1px dashed var(--quiet);
+  background: var(--surface);
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 10px;
+  border-radius: 5px;
+  color: var(--quiet);
+}
+.drop-center {
+  grid-column: 2;
+  grid-row: 2;
+}
+.drop-left {
+  grid-column: 1;
+  grid-row: 1 / 4;
+}
+.drop-right {
+  grid-column: 3;
+  grid-row: 1 / 4;
+}
+.drop-top {
+  grid-column: 2;
+  grid-row: 1;
+}
+.drop-bottom {
+  grid-column: 2;
+  grid-row: 3;
+}
+.workspace-drop-zone.over {
+  background: var(--selected);
+  border: 2px solid var(--lime);
+  color: var(--ink);
+}
+.workspace-mobile-panels {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 6px;
+}
+.workspace-mobile-panels select {
+  flex: 1;
+  padding: 6px;
+  font-size: 12px;
+}
+.workspace-mobile-panels button {
+  min-height: 29px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.workspace-move-menu {
+  position: static;
+}
+.workspace-move-menu summary {
+  padding: 1px 5px;
+  cursor: pointer;
+  list-style: none;
+}
+.workspace-move-popup {
+  position: absolute;
+  top: 30px;
+  right: 3px;
+  z-index: 45;
+  padding: 9px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px #0002;
+  border-radius: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: calc(100% - 6px);
+  width: 230px;
+}
+.workspace-move-popup label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.workspace-move-popup select,
+.workspace-move-popup button {
+  padding: 5px;
+  min-height: 27px;
+  font-size: 11px;
+}
+@media (max-width: 1200px) {
+  .configurable-workbench .brand > span:last-child {
+    display: none;
+  }
+  .configurable-workbench .toolbar .project-title {
+    max-width: 110px;
+  }
+  .configurable-workbench .toolbar {
+    gap: 4px;
+  }
+  .workspace-menu > summary {
+    padding: 6px 5px;
+  }
+}
+@media (max-width: 980px) {
+  .configurable-workbench > .toolbar {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 46px;
+    padding: 5px 8px;
+    flex-wrap: wrap;
+  }
+  .configurable-workbench .toolbar .version-badge {
+    display: none;
+  }
+  .configurable-workbench .toolbar .project-title {
+    max-width: 160px;
+  }
+  .configurable-workbench .toolbar .layout-configure {
+    display: none;
+  }
+  .configurable-workbench .toolbar > .toolbar-spacer {
+    display: none;
+  }
+  .workspace-menu-popup {
+    position: fixed;
+    left: 8px;
+    top: 47px;
+    max-width: calc(100vw - 16px);
+  }
+  .workbench-context {
+    flex-basis: 27px;
+  }
+  .configurable-workspace {
+    padding: 5px;
+  }
+  .configurable-workbench .statusbar > span:nth-last-child(-n + 3) {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .configurable-workbench .toolbar .project-title {
+    display: none;
+  }
+  .configurable-workbench .toolbar > .icon-button:last-of-type {
+    display: none;
+  }
+  .configurable-workbench .toolbar > button {
+    font-size: 10px;
+    padding: 4px 6px;
+  }
+  .workspace-menubar {
+    flex: 1;
+  }
+  .workspace-menu > summary {
+    font-size: 11px;
+  }
+}
+::view-transition-group(*) {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0s;
+  }
+}
+/* Symbol navigation is nested inside the inspector, outside its direct subtle-action rule. */
+.configurable-workbench .symbol-detail > button.subtle {
+  background: var(--subtle);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.configurable-workbench .symbol-detail > button.subtle:hover:not(:disabled) {
+  background: var(--surface-hover);
+}

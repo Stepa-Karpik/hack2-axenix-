@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { panToNode } from "./flowAssertions";
 test("expired browser session reacquires CSRF once and saves with the original idempotency key", async ({
   page,
   context,
@@ -21,7 +22,7 @@ test("expired browser session reacquires CSRF once and saves with the original i
         key: response.request().headers()["idempotency-key"],
       });
   });
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText(
@@ -75,7 +76,7 @@ test("concurrent head conflict preserves draft and requires explicit save after 
   });
   expect(external.status()).toBe(201);
   const other = (await external.json()).data;
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText(
@@ -124,26 +125,28 @@ test("real API sample → graph/code selection → invalid persisted draft → r
   await expect(page.locator(".monaco-editor")).toBeVisible();
   await page.locator(".method-item").filter({ hasText: "find(" }).click();
   await expect(page.locator(".blueprint-node").first()).toBeVisible();
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
   await expect(page.getByLabel("Условие", { exact: true })).toHaveValue(
     "values[i] == target",
   );
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   for (let i = 0; i < 14; i++) await page.keyboard.press("ArrowDown");
   for (let i = 0; i < 23; i++) await page.keyboard.press("ArrowRight");
   await expect(page.getByLabel("Выражение", { exact: true })).toHaveValue("i");
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
-  await page.getByRole("separator", { name: "Ширина схемы" }).focus();
+  const width = page.getByRole("separator", { name: "Ширина панелей" }).first();
+  const previousWidth = Number(await width.getAttribute("aria-valuenow"));
+  await width.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(
-    page.getByRole("separator", { name: "Ширина схемы" }),
-  ).toHaveAttribute("aria-valuenow", "51");
-  await page.getByRole("separator", { name: "Высота панели вывода" }).focus();
+  await expect.poll(async () => Number(await width.getAttribute("aria-valuenow"))).toBeCloseTo(previousWidth + 3, 3);
+  const height = page.getByRole("separator", { name: "Высота панелей" }).first();
+  const previousHeight = Number(await height.getAttribute("aria-valuenow"));
+  await height.focus();
   await page.keyboard.press("ArrowUp");
-  await expect(
-    page.getByRole("separator", { name: "Высота панели вывода" }),
-  ).toHaveAttribute("aria-valuenow", "225");
+  await expect.poll(async () => Number(await height.getAttribute("aria-valuenow"))).toBeCloseTo(previousHeight - 3, 3);
   await page.screenshot({
     path: testInfo.outputPath("workbench-desktop.png"),
   });
@@ -153,7 +156,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
       r.request().method() === "POST" &&
       r.status() === 201,
   );
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText("public class Main {\n  invalid !\n}\n");
@@ -174,7 +177,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
     page.getByRole("button", { name: "Подготовить изменение" }),
   ).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator(".inspector")).toHaveCount(0);
+  await expect(page.locator(".inspector")).not.toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("workbench-narrow.png"),
   });
@@ -220,7 +223,9 @@ test("real API empty project, import, run availability and keyboard dialog", asy
   const caps = await page.request.get("/api/v1/capabilities");
   const { data } = await caps.json();
   await page.getByLabel("Стандартный ввод").fill("7\n");
+  const submitted = page.waitForResponse(r => r.url().endsWith("/runs") && r.request().method() === "POST");
   await page.getByRole("button", { name: "Запустить", exact: true }).click();
+  const runResponse = await submitted;
   if (!data.runner.available) {
     await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
       /runner|unavailable|недоступен/i,
@@ -229,7 +234,22 @@ test("real API empty project, import, run availability and keyboard dialog", asy
     await expect(page.getByRole("dialog")).toHaveCount(0);
   } else {
     await expect(page).toHaveURL(/\/runs\/[\w-]+$/);
+    const started = (await runResponse.json()).data;
+    const requested = runResponse.request().postDataJSON();
+    const runUrl = page.url();
+    // Polling and its immutable inputs belong to Workbench, independently of panels.
+    await page.getByRole("button", { name: "Скрыть Вывод", exact: true }).click();
+    const view = page.locator(".workspace-menu").filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
+    await view.locator("summary").click();
+    await view.getByRole("button", { name: "Работа с кодом", exact: true }).click();
+    await page.getByRole("tab", { name: "Вывод", exact: true }).click();
+    expect(page.url()).toBe(runUrl);
+    expect(runUrl.endsWith("/runs/" + started.id)).toBe(true);
     await expect(page.locator(".execution")).toHaveCount(2, { timeout: 60000 });
+    const result = (await (await page.request.get(new URL(runUrl).pathname.replace("/projects/", "/api/v1/projects/"))).json()).data;
+    expect(result.id).toBe(started.id);
+    expect(result.result.report.revisionId).toBe(requested.revisionId);
+    expect(result.result.report.stdinUtf8).toBe("7\n");
     await page.reload();
     await expect(page.locator(".execution")).toHaveCount(2);
   }
@@ -257,6 +277,7 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     await (await page.request.get("/api/v1/projects/" + projectId)).json()
   ).data;
   await page.locator(".method-item").filter({ hasText: "find(" }).click();
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
   await page.getByLabel("Условие", { exact: true }).fill("values[i] != target");
   await page.getByRole("button", { name: "Подготовить изменение" }).click();
@@ -282,14 +303,14 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     .getByRole("dialog")
     .getByRole("button", { name: "Сравнить", exact: true })
     .click();
-  await expect(page.locator(".report-outcome")).toContainText(
+  await expect(page.locator('[data-panel-id="tests"] .report-outcome')).toContainText(
     "Найдено расхождение",
     { timeout: 120000 },
   );
-  await expect(page.locator(".test-result summary")).toContainText(
+  await expect(page.locator('[data-panel-id="tests"] .test-result summary')).toContainText(
     "3 + 3 наблюдений",
   );
-  await page.getByRole("button", { name: "Изменения", exact: false }).click();
+  await page.getByRole("tab", { name: "Изменения", exact: true }).click();
   await page.getByRole("button", { name: "Применить", exact: true }).click();
   await expect
     .poll(
@@ -299,6 +320,7 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     )
     .not.toBe(before.headRevisionId);
   await expect(page.locator(".monaco-editor")).toContainText("!=");
+  await panToNode(page, page.locator(".blueprint-node.IfStmt"));
   await page.locator(".blueprint-node.IfStmt").click();
   const exportRequest = page.waitForRequest(
     (request) =>

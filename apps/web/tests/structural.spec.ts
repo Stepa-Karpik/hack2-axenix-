@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { panToNode, revealPanel } from "./flowAssertions";
 
 test("structural edits and historical restore use explicit compiled proposals", async ({
   page,
@@ -26,6 +27,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
     (await (await page.request.get(base)).json()).data.headRevisionId;
   const revision = async (id: string) =>
     (await (await page.request.get(base + "/revisions/" + id)).json()).data;
+  await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
   await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
     "insert_statement",
@@ -56,6 +58,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await expect(page.locator(".blueprint-node.ExpressionStmt")).toBeVisible();
   await page.reload();
   await expect(page.locator(".monaco-editor")).toContainText("inserted");
+  await panToNode(page, page.locator(".blueprint-node.ExpressionStmt"));
   await page.locator(".blueprint-node.ExpressionStmt").click();
   await page
     .getByLabel("Действие", { exact: true })
@@ -76,6 +79,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await page.reload();
   await expect(page.locator(".blueprint-node.entry")).toBeVisible();
   await expect(page.locator(".monaco-editor")).not.toContainText("inserted");
+  await panToNode(page, page.locator(".blueprint-node.normal_exit"));
   await page.locator(".blueprint-node.normal_exit").click();
   await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
   await expect(
@@ -116,7 +120,8 @@ test("structural edits and historical restore use explicit compiled proposals", 
       name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
     });
     if (await toggle.count()) await toggle.click();
-    await page.locator(".blueprint-node.entry").click();
+    await panToNode(page, page.locator(".blueprint-node.entry"));
+  await page.locator(".blueprint-node.entry").click();
     await expect(page.getByLabel("Java оператор")).toBeVisible();
     expect(
       await page.evaluate(
@@ -135,7 +140,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
     });
   }
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Переключить инспектор" }).click();
+  await revealPanel(page, "analysis", "Инспектор");
   await expect(page.getByLabel("Java оператор")).toBeVisible();
   await page
     .getByRole("button", { name: "Подготовить изменение" })
@@ -148,7 +153,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await page.screenshot({ path: testInfo.outputPath("structural-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
   // Local edits block restore before the autosave debounce can replace the draft.
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+End");
   await page.keyboard.insertText("\n// local draft\n");
   await expect(restore).toBeDisabled();
@@ -187,6 +192,7 @@ test("persisted analysis without capabilities exposes no structural actions", as
   await expect(page.locator(".blueprint-node.entry")).toBeVisible({
     timeout: 30000,
   });
+  await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
   await expect(
     page.getByText("Нет доступных действий", { exact: true }),
@@ -198,6 +204,7 @@ test("persisted analysis without capabilities exposes no structural actions", as
   await page.unroute("**/revisions/*/analysis");
   await page.reload();
   await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
   await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
     "insert_statement",

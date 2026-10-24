@@ -65,6 +65,7 @@ export default function CodeEditor({
   diagnostics,
   onOffset,
   readOnly = false,
+  onReady,
 }: {
   value: string;
   path: string;
@@ -73,6 +74,11 @@ export default function CodeEditor({
   diagnostics: Diagnostic[];
   onOffset: (offset: number) => void;
   readOnly?: boolean;
+  onReady?: (commands: {
+    undo: () => void;
+    redo: () => void;
+    selectAll: () => void;
+  }) => void;
 }) {
   const { theme } = useTheme();
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -152,6 +158,20 @@ export default function CodeEditor({
       }}
       onMount={(instance) => {
         editor.current = instance;
+        onReady?.({
+          undo: () => {
+            instance.focus();
+            instance.trigger("menu", "undo", null);
+          },
+          redo: () => {
+            instance.focus();
+            instance.trigger("menu", "redo", null);
+          },
+          selectAll: () => {
+            instance.focus();
+            instance.trigger("menu", "editor.action.selectAll", null);
+          },
+        });
         decorations.current = instance.createDecorationsCollection();
         instance.onDidChangeModel(() => highlight.current());
         highlight.current();

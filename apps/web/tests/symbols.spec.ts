@@ -1,3 +1,4 @@
+import { revealPanel } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
 
 const mainSource = `public class Main {
@@ -24,7 +25,7 @@ const helperSource = `public class Helper {
 async function cursor(page: Page, source: string, offset: number) {
   const prefix = source.slice(0, offset);
   const lines = prefix.split("\n");
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   for (let i = 1; i < lines.length; i++) await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Home");
@@ -125,7 +126,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
     crossFile.id,
   );
   await page.getByRole("button", { name: "К объявлению", exact: true }).click();
-  await expect(page.locator(".breadcrumb")).toContainText("Helper.java");
+  await expect(page.locator(".workbench-context")).toContainText("Helper.java");
   await expect(page.locator(".monaco-editor")).toContainText("value * 2");
   await expect(
     page.locator(".monaco-editor .code-binding").first(),
@@ -187,7 +188,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
     });
   }
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Переключить инспектор" }).click();
+  await revealPanel(page, "analysis", "Инспектор");
   await page.locator(".symbol-inspector").scrollIntoViewIfNeeded();
   expect(
     await page.evaluate(
@@ -196,7 +197,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("symbols-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
-  await page.locator(".monaco-editor .view-lines").click();
+  await page.locator(".monaco-editor .native-edit-context").focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText("public class Main { invalid ! }");
