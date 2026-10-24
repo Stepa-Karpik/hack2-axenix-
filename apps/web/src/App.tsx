@@ -27,6 +27,7 @@ import {
   statementTemplates,
 } from "./state";
 import type { Draft } from "./state";
+import { blockEditPayload, moveTargets, movePositions } from "./blockEdits";
 import CodeEditor, { disposeEditorModels } from "./CodeEditor";
 import ProjectExplorer, { FileGlyph } from "./ProjectExplorer";
 import {
@@ -380,6 +381,10 @@ function Workbench({
   const [position, setPosition] = useState("");
   const [template, setTemplate] = useState("statement");
   const [statement, setStatement] = useState(statementTemplates.statement);
+  const [targetNodeId, setTargetNodeId] = useState("");
+  const [movePosition, setMovePosition] = useState("before");
+  const [wrapCondition, setWrapCondition] = useState("");
+  const [elseSource, setElseSource] = useState("{\n\n}");
   const [intent, setIntent] = useState("semantic_edit");
   const [busy, setBusy] = useState(false);
   const [runnerAvailable, setRunnerAvailable] = useState<boolean | null>(null);
@@ -1009,17 +1014,44 @@ function Workbench({
   }
   const operations = nodeOperations(selected);
   const positions = selected?.insertionPositions ?? [];
+  const targets = moveTargets(selected, graph);
+  const target = targets.find((n) => n.id === targetNodeId);
+  const moveOptions =
+    selected && target && graph ? movePositions(selected, target, graph) : [];
+  const changePayload = blockEditPayload(selected, graph, operation, {
+    position,
+    statement,
+    expression,
+    condition: wrapCondition,
+    elseSource,
+    targetNodeId,
+    movePosition,
+  });
   useEffect(() => {
     setOperation(nodeOperations(selected)[0] ?? "");
     setPosition(selected?.insertionPositions?.[0] ?? "");
     setTemplate("statement");
     setStatement(statementTemplates.statement);
     setIntent("semantic_edit");
+    setTargetNodeId("");
+    setMovePosition("before");
+    setWrapCondition("");
+    setElseSource("{\n\n}");
     setProposal(null);
   }, [selected?.id, revision?.id]);
   useEffect(() => {
     setProposal(null);
-  }, [operation, position, statement, expression, intent]);
+  }, [
+    operation,
+    position,
+    statement,
+    expression,
+    intent,
+    targetNodeId,
+    movePosition,
+    wrapCondition,
+    elseSource,
+  ]);
   const inFlight =
     busy ||
     saving ||
@@ -1066,10 +1098,7 @@ function Workbench({
       historical ||
       inFlight ||
       !operations.includes(operation) ||
-      (operation === "insert_statement" &&
-        (!positions.includes(position) || !statement.trim())) ||
-      (operation === "replace_expression" &&
-        (!editRange(selected) || !expression.trim()))
+      !changePayload
     )
       return;
     setBusy(true);
@@ -1083,12 +1112,7 @@ function Workbench({
           methodId: selected.methodId,
           nodeId: selected.id,
           operation,
-          payload:
-            operation === "delete_statement"
-              ? {}
-              : operation === "insert_statement"
-                ? { position, source: statement }
-                : { field: selected.editableFields[0], source: expression },
+          payload: changePayload,
           intent,
         },
       });
@@ -1656,6 +1680,88 @@ function Workbench({
                 {operation === "delete_statement" && (
                   <p className="small quiet">Удаление выбранного оператора</p>
                 )}
+                {operation === "move_statement" && (
+                  <>
+                    <label htmlFor="move-target">Относительно оператора</label>
+                    <select
+                      id="move-target"
+                      value={targetNodeId}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => {
+                        setTargetNodeId(e.target.value);
+                        const next = targets.find(
+                          (n) => n.id === e.target.value,
+                        );
+                        setMovePosition(
+                          selected && next && graph
+                            ? (movePositions(selected, next, graph)[0] ?? "")
+                            : "",
+                        );
+                      }}
+                    >
+                      <option value="">Выберите оператор</option>
+                      {targets.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
+                        </option>
+                      ))}
+                    </select>
+                    <label htmlFor="move-position">Позиция перемещения</label>
+                    <select
+                      id="move-position"
+                      value={movePosition}
+                      disabled={inFlight || stale || historical || !target}
+                      onChange={(e) => setMovePosition(e.target.value)}
+                    >
+                      {!moveOptions.length && (
+                        <option value="">Нет доступной позиции</option>
+                      )}
+                      {moveOptions.map((p) => (
+                        <option key={p} value={p}>
+                          {p === "before"
+                            ? "Перед оператором"
+                            : "После оператора"}
+                        </option>
+                      ))}
+                    </select>
+                    {!targets.length && (
+                      <p className="small quiet">
+                        В этом блоке нет доступных операторов для перемещения.
+                      </p>
+                    )}
+                  </>
+                )}
+                {(operation === "wrap_if" || operation === "wrap_while") && (
+                  <>
+                    <label htmlFor="wrap-condition">Условие</label>
+                    <textarea
+                      id="wrap-condition"
+                      value={wrapCondition}
+                      rows={3}
+                      spellCheck={false}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => setWrapCondition(e.target.value)}
+                    />
+                  </>
+                )}
+                {operation === "add_else" && (
+                  <>
+                    <label htmlFor="else-source">Тело ветки else</label>
+                    <textarea
+                      id="else-source"
+                      value={elseSource}
+                      rows={6}
+                      spellCheck={false}
+                      disabled={inFlight || stale || historical}
+                      onChange={(e) => setElseSource(e.target.value)}
+                    />
+                  </>
+                )}
+                {operation === "remove_else" && (
+                  <p className="small quiet">
+                    Удалить все операторы ветки else
+                  </p>
+                )}
                 <label htmlFor="change-intent">Цель изменения</label>
                 <select
                   id="change-intent"
@@ -1673,10 +1779,7 @@ function Workbench({
                     stale ||
                     historical ||
                     !operations.includes(operation) ||
-                    (operation === "replace_expression" &&
-                      (!editRange(selected) || !expression.trim())) ||
-                    (operation === "insert_statement" &&
-                      (!positions.includes(position) || !statement.trim()))
+                    !changePayload
                   }
                   onClick={() => void prepare()}
                 >
@@ -1964,7 +2067,10 @@ function Workbench({
         >
           {project?.name ?? "Проект"}
         </a>
-        <span className="version-badge" title={revision?.bundleHash ?? undefined}>
+        <span
+          className="version-badge"
+          title={revision?.bundleHash ?? undefined}
+        >
           {short(revision?.id)}
         </span>
         <span className="toolbar-spacer" />

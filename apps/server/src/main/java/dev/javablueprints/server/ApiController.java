@@ -53,7 +53,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression", "insert_statement", "delete_statement"),
+            List.of("replace_expression", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else"),
             "symbols",
             map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
                 dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
@@ -747,6 +747,25 @@ public class ApiController {
       case "delete_statement" -> {
         fields(payload);
         yield new DeleteStatement();
+      }
+      case "move_statement" -> {
+        fields(payload, "targetNodeId", "position");
+        String position = str(payload, "position");
+        if (!Set.of("before", "after").contains(position))
+          throw new ApiError(400, "INVALID_REQUEST", "Unknown move position");
+        yield new MoveStatement(str(payload, "targetNodeId"), position);
+      }
+      case "wrap_if", "wrap_while" -> {
+        fields(payload, "condition");
+        yield new WrapStatement(editSource(Map.of("source", str(payload, "condition"))));
+      }
+      case "add_else" -> {
+        fields(payload, "source");
+        yield new AddElse(editSource(payload));
+      }
+      case "remove_else" -> {
+        fields(payload);
+        yield new RemoveElse();
       }
       default -> throw new ApiError(400, "INVALID_REQUEST", "Unsupported graph operation");
     };

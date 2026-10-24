@@ -21,7 +21,7 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.6.0";
+    public static final String VERSION = "engine-0.7.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -53,7 +53,7 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!Set.of("replace_expression", "insert_statement", "delete_statement").contains(command.operation())) {
+        if (!Set.of("replace_expression", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else").contains(command.operation())) {
             throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
@@ -73,6 +73,22 @@ public final class ProgramEngine {
             case "delete_statement" -> {
                 if (!(command.payload() instanceof DeleteStatement)) throw failure("INVALID_EDIT", "Expected deletion payload");
                 yield deleteStatement(bundle, parsed, selected, target);
+            }
+            case "move_statement" -> {
+                if (!(command.payload() instanceof MoveStatement payload)) throw failure("INVALID_EDIT", "Expected move payload");
+                yield moveStatement(bundle, parsed, selected, target, payload);
+            }
+            case "wrap_if", "wrap_while" -> {
+                if (!(command.payload() instanceof WrapStatement payload)) throw failure("INVALID_EDIT", "Expected wrap payload");
+                yield wrapStatement(bundle, parsed, selected, target, payload, command.operation());
+            }
+            case "add_else" -> {
+                if (!(command.payload() instanceof AddElse payload)) throw failure("INVALID_EDIT", "Expected else payload");
+                yield addElse(bundle, parsed, selected, target, payload);
+            }
+            case "remove_else" -> {
+                if (!(command.payload() instanceof RemoveElse)) throw failure("INVALID_EDIT", "Expected empty else-removal payload");
+                yield removeElse(bundle, parsed, selected, target);
             }
             default -> throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         };
@@ -155,6 +171,135 @@ public final class ProgramEngine {
         SourceRange range = parsed.maps().get(path).range(target);
         return new TextChange(path, range.startOffset(), range.endOffset(),
                 bundle.files().get(path).substring(range.startOffset(), range.endOffset()), "");
+    }
+
+    private TextChange moveStatement(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, MoveStatement payload) {
+        requireOperation(selected, "move_statement");
+        if (!Set.of("before", "after").contains(Objects.toString(payload.position(), ""))) throw failure("INVALID_EDIT", "Move position must be before or after");
+        GraphNode destination = parsed.analysis().graph().nodes().stream().filter(n -> n.id().equals(payload.targetNodeId())).findFirst()
+                .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Move target does not belong to this analysis"));
+        if (!destination.methodId().equals(selected.methodId())) throw failure("ANALYSIS_CONFLICT", "Move target belongs to another method");
+        Node anchor = parsed.bindings().get(destination.id());
+        BlockStmt block = statementContainer(target);
+        if (block == null || statementContainer(anchor) != block || !destination.allowedOperations().contains("move_statement")) {
+            throw failure("UNSUPPORTED_OPERATION", "Move requires direct siblings in the same block");
+        }
+        int from = statementIndex(block, target), to = statementIndex(block, anchor);
+        if (from == to || (payload.position().equals("before") && from + 1 == to)
+                || (payload.position().equals("after") && to + 1 == from)) throw failure("INVALID_EDIT", "Move would not change statement order");
+        String path = selected.sourceRange().filePath(), source = bundle.files().get(path);
+        SourceMap map = parsed.maps().get(path);
+        SourceRange moving = map.range(target), at = map.range(anchor);
+        int offset = payload.position().equals("before") ? at.startOffset() : at.endOffset();
+        String moved = source.substring(moving.startOffset(), moving.endOffset());
+        int start = Math.min(moving.startOffset(), offset), end = Math.max(moving.endOffset(), offset);
+        String after = offset < moving.startOffset()
+                ? "\n" + moved + "\n" + source.substring(offset, moving.startOffset())
+                : source.substring(moving.endOffset(), offset) + "\n" + moved + "\n";
+        return new TextChange(path, start, end, source.substring(start, end), after);
+    }
+
+    private TextChange wrapStatement(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, WrapStatement payload, String operation) {
+        requireOperation(selected, operation);
+        if (statementContainer(target) == null) throw failure("UNSUPPORTED_OPERATION", "Wrap requires a direct block statement");
+        canonicalEditText(payload.condition());
+        // A complete wrapper enforces EOF and prevents condition text from escaping its syntactic slot.
+        var conditionCheck = parser().parseBlock("{ if (" + payload.condition() + ") {} }");
+        if (!conditionCheck.isSuccessful() || conditionCheck.getResult().isEmpty()
+                || conditionCheck.getResult().orElseThrow().getStatements().size() != 1
+                || !(conditionCheck.getResult().orElseThrow().getStatement(0) instanceof IfStmt check)
+                || check.getElseStmt().isPresent() || !(check.getThenStmt() instanceof BlockStmt then) || !then.isEmpty()) {
+            throw failure("INVALID_EDIT", "Condition must be exactly one Java expression");
+        }
+        if (operation.equals("wrap_while") && capturesJump(target)) throw failure("UNSUPPORTED_OPERATION", "Loop wrapper would retarget an existing break or continue");
+        String path = selected.sourceRange().filePath();
+        SourceRange range = parsed.maps().get(path).range(target);
+        String before = bundle.files().get(path).substring(range.startOffset(), range.endOffset());
+        String keyword = operation.equals("wrap_if") ? "if" : "while";
+        return new TextChange(path, range.startOffset(), range.endOffset(), before, keyword + " (" + payload.condition() + ") {\n" + before + "\n}");
+    }
+
+    private TextChange addElse(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, AddElse payload) {
+        requireOperation(selected, "add_else");
+        if (!canAddElse(target)) throw failure("UNSUPPORTED_OPERATION", "Else requires a direct if statement with a braced then and no else");
+        canonicalEditText(payload.source());
+        var result = parser().parseBlock("{\n" + payload.source() + "\n}");
+        if (!result.isSuccessful() || result.getResult().isEmpty() || result.getResult().orElseThrow().getStatements().size() != 1
+                || !(result.getResult().orElseThrow().getStatement(0) instanceof BlockStmt body)) throw failure("INVALID_EDIT", "Else source must be exactly one braced block");
+        if (unsupportedFlow(body)) throw failure("UNSUPPORTED_OPERATION", "Else body uses unsupported control flow");
+        validateJumps(body, statementContainer(target));
+        SourceRange range = parsed.maps().get(selected.sourceRange().filePath()).range(target);
+        return new TextChange(range.filePath(), range.endOffset(), range.endOffset(), "", "\nelse " + payload.source() + "\n");
+    }
+
+    private TextChange removeElse(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target) {
+        requireOperation(selected, "remove_else");
+        if (!canRemoveElse(target)) throw failure("UNSUPPORTED_OPERATION", "Else removal requires a comment-free braced branch");
+        String path = selected.sourceRange().filePath();
+        SourceMap map = parsed.maps().get(path);
+        int start = map.offsets.get(elseToken((IfStmt) target))[0], end = map.range(target).endOffset();
+        return new TextChange(path, start, end, bundle.files().get(path).substring(start, end), "");
+    }
+
+    private static void requireOperation(GraphNode node, String operation) {
+        if (!node.allowedOperations().contains(operation)) throw failure("UNSUPPORTED_OPERATION", "Operation is not available on this node");
+    }
+
+    private static int statementIndex(BlockStmt block, Node node) {
+        for (int i = 0; i < block.getStatements().size(); i++) if (block.getStatement(i) == node) return i;
+        throw failure("ANALYSIS_CONFLICT", "Statement is not bound to its block");
+    }
+
+    private static void canonicalEditText(String text) {
+        if (text == null || text.isBlank() || text.indexOf('\r') >= 0 || text.indexOf('\uFEFF') >= 0) throw failure("INVALID_EDIT", "Canonical LF edit text is required");
+        try {
+            int size = StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .encode(java.nio.CharBuffer.wrap(text)).remaining();
+            if (size > 1024 * 1024) throw failure("INVALID_EDIT", "Edit text exceeds 1 MiB");
+        } catch (java.nio.charset.CharacterCodingException e) { throw failure("INVALID_EDIT", "Edit text must contain valid Unicode"); }
+    }
+
+    /** A new while would capture jumps whose nearest original target lies outside the selected subtree. */
+    private static boolean capturesJump(Node selected) {
+        for (Statement jump : selected.findAll(Statement.class)) {
+            if (!(jump instanceof BreakStmt || jump instanceof ContinueStmt)) continue;
+            Node cursor = jump;
+            boolean internal = false;
+            while (cursor != selected) {
+                cursor = cursor.getParentNode().orElse(null);
+                if (cursor == null || jumpBoundary(cursor)) { internal = true; break; }
+                if (jumpTarget(jump, cursor)) { internal = true; break; }
+            }
+            if (!internal) return true;
+        }
+        return false;
+    }
+
+    private static boolean canAddElse(Node node) {
+        return statementContainer(node) != null && node instanceof IfStmt branch
+                && branch.getThenStmt() instanceof BlockStmt && branch.getElseStmt().isEmpty();
+    }
+
+    private static JavaToken elseToken(IfStmt branch) {
+        JavaToken thenEnd = branch.getThenStmt().getTokenRange().orElseThrow().getEnd();
+        boolean afterThen = false;
+        for (JavaToken token : branch.getTokenRange().orElseThrow()) {
+            if (afterThen && token.getText().equals("else")) return token;
+            if (token == thenEnd) afterThen = true;
+        }
+        throw failure("ANALYSIS_CONFLICT", "Missing else token");
+    }
+
+    private static boolean canRemoveElse(Node node) {
+        if (statementContainer(node) == null || !(node instanceof IfStmt branch) || !(branch.getThenStmt() instanceof BlockStmt)
+                || branch.getElseStmt().isEmpty() || !(branch.getElseStmt().orElseThrow() instanceof BlockStmt)) return false;
+        JavaToken start = elseToken(branch);
+        boolean removing = false;
+        for (JavaToken token : branch.getTokenRange().orElseThrow()) {
+            if (token == start) removing = true;
+            if (removing && token.getCategory().isComment()) return false;
+        }
+        return true;
     }
 
     private static BlockStmt statementContainer(Node target) {
@@ -472,6 +617,11 @@ public final class ProgramEngine {
             } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null) {
                 operations.add("insert_statement");
                 if (!containsComment(ast)) operations.add("delete_statement");
+                operations.add("move_statement");
+                operations.add("wrap_if");
+                if (!capturesJump(ast)) operations.add("wrap_while");
+                if (canAddElse(ast)) operations.add("add_else");
+                if (canRemoveElse(ast)) operations.add("remove_else");
                 positions = List.of("before", "after");
             }
             String text = caption != null ? caption : ast == null || "entry".equals(kind) ? kind : raw(ast);

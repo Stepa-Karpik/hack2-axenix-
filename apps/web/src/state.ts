@@ -56,6 +56,11 @@ export const operationLabels: Record<string, string> = {
   replace_expression: "Изменить выражение",
   insert_statement: "Вставить оператор",
   delete_statement: "Удалить оператор",
+  move_statement: "Переместить оператор",
+  wrap_if: "Обернуть в if",
+  wrap_while: "Обернуть в while",
+  add_else: "Добавить ветку else",
+  remove_else: "Удалить ветку else",
 };
 
 export function nodeOperations(node: { allowedOperations?: string[] } | null) {

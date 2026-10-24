@@ -34,7 +34,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
   const head = (await (await page.request.get(base)).json()).data.headRevisionId;
   const analysis = (await (await page.request.get(base + "/revisions/" + head + "/analysis")).json()).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.6.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.7.0");
   let layoutWrites = 0;
   page.on("request", request => {
     if (request.method() === "PUT" && request.url().endsWith("/layout")) layoutWrites++;

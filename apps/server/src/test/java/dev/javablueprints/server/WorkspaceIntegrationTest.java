@@ -209,7 +209,15 @@ class WorkspaceIntegrationTest {
         map("operation", "delete_statement", "payload", map("source", "x++;")),
         map("operation", "delete_statement", "payload", List.of()),
         map("operation", "replace_expression", "payload", map("field", "body", "source", "x")),
-        map("operation", "wrap", "payload", Map.of()));
+        map("operation", "wrap", "payload", Map.of()),
+        map("operation", "move_statement", "payload", map("targetNodeId", "n", "position", "body_end")),
+        map("operation", "move_statement", "payload", map("targetNodeId", 42, "position", "before")),
+        map("operation", "move_statement", "payload", map("targetNodeId", "n", "position", "before", "extra", true)),
+        map("operation", "wrap_if", "payload", map("source", "true")),
+        map("operation", "wrap_while", "payload", map("condition", false)),
+        map("operation", "wrap_if", "payload", map("condition", "true", "extra", true)),
+        map("operation", "add_else", "payload", map("source", "")),
+        map("operation", "remove_else", "payload", map("source", "{}")));
     for (var edit : invalid) {
       var command = new LinkedHashMap<>(base);
       command.putAll(edit);
@@ -245,7 +253,7 @@ class WorkspaceIntegrationTest {
       assertNotEquals(revision, candidateId);
       var candidate = w.revision(p, candidateId);
       assertEquals("notes\n", w.files(candidate).get("notes.txt"));
-      assertEquals(List.of("empty"), candidate.get("directories"));
+      assertEquals(w.revision(p, revision).get("directories"), candidate.get("directories"));
       var retained = ((List<Map<String, Object>>) candidate.get("files")).stream()
           .filter(file -> file.get("path").equals("notes.txt")).findFirst().orElseThrow();
       assertNotNull(retained.get("rawArtifactRef"));
@@ -256,6 +264,51 @@ class WorkspaceIntegrationTest {
       assertEquals(revision, w.project(p).get("headRevisionId"));
       assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidateId, "proposalId", proposal.get("id")), id(), revision).status);
     }
+  }
+
+  @Test
+  void expandedBlockCommandsRetainFullTextTreeAndCannotApplyWithoutCompiler() throws Exception {
+    String p = project();
+    String original = "public class Main {public static void main(String[] args){int x=1; System.out.println(x); if(x>0){} if(x<0){} else{} }}";
+    String revision = str(obj(post("/projects/" + p + "/revisions", map("files", List.of(
+        map("path", "Main.java", "content", original), map("path", "assets/readme.txt", "content", "keep\r\n")),
+        "directories", List.of("empty"), "importedPaths", List.of("assets/readme.txt")), id(), "empty")), "id");
+    var engine = new dev.javablueprints.engine.ProgramEngine();
+    var analysis = engine.inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.javaFiles(w.revision(p, revision))));
+    w.putResource(p, analysis.id(), "analysis", analysis);
+    var print = analysis.graph().nodes().stream().filter(n -> n.label().equals("System.out.println(x);")).findFirst().orElseThrow();
+    var declaration = analysis.graph().nodes().stream().filter(n -> n.label().equals("int x=1;")).findFirst().orElseThrow();
+    var withoutElse = analysis.graph().nodes().stream().filter(n -> n.allowedOperations().contains("add_else")).findFirst().orElseThrow();
+    var withElse = analysis.graph().nodes().stream().filter(n -> n.allowedOperations().contains("remove_else")).findFirst().orElseThrow();
+    var commands = List.of(
+        map("operation", "move_statement", "nodeId", print.id(), "payload", map("targetNodeId", declaration.id(), "position", "before")),
+        map("operation", "wrap_if", "nodeId", print.id(), "payload", map("condition", "x>0")),
+        map("operation", "wrap_while", "nodeId", print.id(), "payload", map("condition", "false")),
+        map("operation", "add_else", "nodeId", withoutElse.id(), "payload", map("source", "{System.out.println(2);}")),
+        map("operation", "remove_else", "nodeId", withElse.id(), "payload", Map.of()));
+    for (var command : commands) {
+      var body = map("baseRevisionId", revision, "analysisId", analysis.id(), "methodId", print.methodId(), "intent", "semantic_edit");
+      body.putAll(command);
+      var submitted = post("/projects/" + p + "/changes", body, id(), null);
+      assertEquals(202, submitted.status, submitted.body.toString());
+      assertEquals("succeeded", waitJob(p, str(obj(submitted), "jobId")).get("status"));
+      var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+      assertEquals("rejected", proposal.get("status"));
+      assertEquals("unavailable", ((Map<?, ?>) proposal.get("checks")).get("compileStatus"));
+      assertEquals("valid", ((Map<?, ?>) proposal.get("checks")).get("parseStatus"));
+      String candidateId = str(proposal, "candidateRevisionId");
+      var candidate = w.revision(p, candidateId);
+      assertEquals("keep\n", w.files(candidate).get("assets/readme.txt"));
+      assertEquals(w.revision(p, revision).get("directories"), candidate.get("directories"));
+      var retained = ((List<Map<String, Object>>) candidate.get("files")).stream().filter(f -> f.get("path").equals("assets/readme.txt")).findFirst().orElseThrow();
+      assertNotNull(retained.get("rawArtifactRef"));
+      assertNotEquals(original, w.files(candidate).get("Main.java"));
+      assertEquals(original, w.files(w.revision(p, revision)).get("Main.java"));
+      assertEquals(revision, w.project(p).get("headRevisionId"));
+      assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidateId, "proposalId", proposal.get("id")), id(), revision).status);
+    }
+    var capabilities = obj(send("GET", "/capabilities", null, null, null, null));
+    assertTrue(((List<?>) capabilities.get("implementedCommands")).containsAll(List.of("move_statement", "wrap_if", "wrap_while", "add_else", "remove_else")));
   }
 
   @Test
@@ -1009,7 +1062,7 @@ class WorkspaceIntegrationTest {
     assertEquals(409, post("/projects/" + p + "/changes", stale, id(), null).status);
     assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
     var current = w.convert(analyzeRevision(p, revision), dev.javablueprints.engine.EngineModel.Analysis.class);
-    assertEquals("engine-0.6.0", current.analyzerVersion());
+    assertEquals(dev.javablueprints.engine.ProgramEngine.VERSION, current.analyzerVersion());
     var iterable = current.graph().nodes().stream().filter(n -> n.kind().equals("foreach_source")).findFirst().orElseThrow();
     var projection = current.graph().nodes().stream().filter(n -> n.kind().equals("expression") && n.sourceRange().equals(iterable.sourceRange())).findFirst().orElseThrow();
     assertEquals("ast_projection", projection.executionRole());
