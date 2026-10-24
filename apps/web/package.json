@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5174",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/state.test.ts src/workspace.test.ts src/graph.test.ts src/projectFiles.test.ts src/blockEdits.test.ts"
+    "test": "node --experimental-strip-types --test src/state.test.ts src/workspace.test.ts src/graph.test.ts src/projectFiles.test.ts src/blockEdits.test.ts src/testCases.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "4.7.0",

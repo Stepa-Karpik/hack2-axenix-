@@ -319,6 +319,10 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
   ).data;
   expect(afterCompile.headRevisionId).toBe(before.headRevisionId);
   await page.getByRole("button", { name: "Сравнить", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "JSON", exact: true })
+    .click();
   await page.getByLabel("Входные данные · JSON cases").fill(
     JSON.stringify([
       {

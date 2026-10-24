@@ -56,6 +56,12 @@ Interactive runs have a 120-second runtime limit, a 1 MiB combined output limit 
 
 The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
 
+## Test inputs
+
+The comparison dialog opens with a form editor. Add, name or remove cases, enter standard input, and add arguments as separate strings. An empty argument remains a real argument. Enable expected stdout, stderr or an exit code when a case has a known result; an enabled empty output expectation checks for exactly empty output.
+
+The optional JSON mode retains case IDs, Unicode, whitespace, argument values and supported metadata when switching views. Invalid drafts and input limits are reported before submission. Fields freeze while the request is sent, so the created immutable suite uses the reviewed values. The dialog keeps its action buttons visible on narrow screens while the case fields scroll.
+
 ## Test progress
 
 The Tests panel shows compilation stages, the active case, completed and matched counts, and measured time for each case. Each case compares three independent executions of each revision. Cases run sequentially; the completion bar advances when their planned observations finish. Completion and a matching verdict are separate results.

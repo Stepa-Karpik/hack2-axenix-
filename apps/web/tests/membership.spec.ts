@@ -247,6 +247,10 @@ test("membership recommendation compiles a detached index and applies only after
     .click();
   await page.getByLabel("Класс с main").fill("Main");
   await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "JSON", exact: true })
+    .click();
+  await page
     .getByLabel("Входные данные · JSON cases")
     .fill(JSON.stringify(cases));
   const comparisonResponse = page.waitForResponse(

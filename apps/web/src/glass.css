@@ -1492,3 +1492,258 @@
   font-size: 11px;
   color: var(--green);
 }
+.modal:has(.cases-editor) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: min(720px, 100%);
+  background: var(--glass-fill, var(--surface));
+  backdrop-filter: blur(18px);
+  box-shadow: none;
+}
+.modal:has(.cases-editor) > :not(.run-fields) {
+  flex-shrink: 0;
+}
+.run-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.run-fields > input,
+.run-fields > textarea {
+  width: 100%;
+  margin-bottom: 18px;
+}
+.run-fields > p {
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+.modal:has(.cases-editor) .run-fields {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.modal:has(.cases-editor) .run-fields > :not(.cases-editor) {
+  flex-shrink: 0;
+}
+.modal:has(.cases-editor) .modal-heading {
+  margin-bottom: 18px;
+}
+.cases-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  margin: 8px 0 12px;
+}
+.cases-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.cases-toolbar strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.cases-toolbar [role="group"] {
+  display: flex;
+  gap: 3px;
+}
+.cases-toolbar button {
+  border: 0;
+  background: transparent;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.cases-toolbar button[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--green);
+}
+.cases-error {
+  flex: none;
+  overflow-wrap: anywhere;
+  max-height: 64px;
+  overflow-y: auto;
+  color: var(--console-error);
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+.cases-form {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(0, 2fr);
+  gap: 14px;
+  height: min(42dvh, 380px);
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.cases-list,
+.case-fields {
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.case-fields {
+  padding: 0 4px 4px 14px;
+  border-left: 1px solid var(--line);
+}
+.case-list-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+.case-list-row > button:first-child {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  justify-content: flex-start;
+  gap: 8px;
+  background: transparent;
+  font-size: 11px;
+  padding: 8px;
+  text-align: left;
+}
+.case-list-row > button:first-child > span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.case-list-row > button:first-child > span:first-child {
+  color: var(--muted);
+  font-size: 10px;
+}
+.case-list-row > button.active {
+  background: var(--selected);
+  color: var(--green);
+}
+.case-delete,
+.case-arg > button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px;
+  flex: none;
+}
+.case-add,
+.case-args > button {
+  margin-top: 4px;
+  font-size: 11px;
+  padding: 7px;
+  white-space: nowrap;
+}
+.modal .case-fields > label {
+  display: block;
+  margin: 9px 0 6px;
+}
+.modal .case-fields > label:first-child {
+  margin-top: 0;
+}
+.case-fields input:not([type="checkbox"]),
+.case-fields textarea,
+.cases-json textarea {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  max-height: 220px;
+}
+.case-fields textarea,
+.cases-json textarea {
+  font-family: Consolas, monospace;
+}
+.case-args {
+  margin: 9px 0 12px;
+}
+.case-arg {
+  display: flex;
+  align-items: start;
+  gap: 6px;
+  margin: 6px 0;
+}
+.case-arg textarea {
+  min-height: 32px;
+  flex: 1;
+}
+.case-oracle {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 14px 0 0;
+  padding: 10px 0 0;
+  min-width: 0;
+}
+.case-oracle legend {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 6px 0 0;
+}
+.modal .case-oracle .oracle-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  margin: 8px 0;
+}
+.case-oracle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--green);
+}
+.cases-json label {
+  display: block;
+}
+.cases-json textarea {
+  max-height: 42dvh;
+}
+.cases-json {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cases-json textarea {
+  min-height: 80px;
+}
+@media (max-width: 600px) {
+  .modal:has(.cases-editor) {
+    padding: 18px;
+  }
+  .cases-form {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+    height: 42dvh;
+  }
+  .cases-list {
+    display: flex;
+    align-items: start;
+    gap: 5px;
+    overflow-x: auto;
+  }
+  .case-list-row {
+    flex: none;
+    max-width: 140px;
+  }
+  .case-fields {
+    border-left: 0;
+    padding: 0 4px 0 0;
+  }
+  .case-add {
+    margin-top: 0;
+    flex: none;
+  }
+}

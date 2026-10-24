@@ -1,6 +1,8 @@
 import SingleRunOutput from "./SingleRunOutput";
 import TestProgressView from "./TestProgressView";
 import CodeInsights from "./CodeInsights";
+import TestCasesEditor from "./TestCasesEditor";
+import { parseCases } from "./testCases";
 import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
@@ -2902,6 +2904,7 @@ function RunDialog({
   const [cases, setCases] = useState(
     '[\n  {"id":"case-1","name":"Вход 1","stdinUtf8":"7\\n","argv":[]},\n  {"id":"case-2","name":"Вход 2","stdinUtf8":"21\\n","argv":[]},\n  {"id":"case-3","name":"Вход 3","stdinUtf8":"99\\n","argv":[]}\n]',
   );
+  const [caseFormError, setCaseFormError] = useState<string | null>(null);
   const [baseRevision, setBaseRevision] = useState(
     proposal?.baseRevisionId ?? project.originalRevisionId ?? revision.id,
   );
@@ -2936,9 +2939,11 @@ function RunDialog({
           },
         });
       } else {
-        const parsed: unknown = JSON.parse(cases);
-        if (!Array.isArray(parsed) || parsed.length === 0)
-          throw new Error("Добавьте хотя бы один вход.");
+        const parsed = parseCases(cases);
+        if (caseFormError || parsed.error || !parsed.cases)
+          throw new Error(
+            caseFormError ?? parsed.error ?? "Проверьте тестовые входы",
+          );
         const suite = await api<{ id: string }>(
           projectPath(project.id) + "/test-suites",
           {
@@ -2946,7 +2951,7 @@ function RunDialog({
             body: {
               mode: "console",
               entryPoint: entry.trim(),
-              cases: parsed,
+              cases: parsed.cases,
               comparisonPolicyId: "exact-v1",
             },
           },
@@ -2986,8 +2991,12 @@ function RunDialog({
           if (e.key === "Escape" && !busy) onClose();
           if (e.key === "Tab") {
             const elements = e.currentTarget.querySelectorAll<HTMLElement>(
-              "button:not(:disabled),input,textarea,select",
+              "button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)",
             );
+            if (!elements.length) {
+              e.preventDefault();
+              return;
+            }
             if (e.shiftKey && document.activeElement === elements[0]) {
               e.preventDefault();
               elements[elements.length - 1]?.focus();
@@ -3009,82 +3018,79 @@ function RunDialog({
             <Icon name="close" size={14} />
           </button>
         </div>
-        <label htmlFor="entrypoint">Класс с main</label>
-        <input
-          ref={focus}
-          id="entrypoint"
-          value={entry}
-          onChange={(e) => setEntry(e.target.value)}
-          placeholder="com.example.Main"
-        />
-        {kind === "run" ? (
-          <>
-            <label htmlFor="argv">Аргументы · JSON-массив</label>
-            <input
-              id="argv"
-              value={argv}
-              onChange={(e) => setArgv(e.target.value)}
-            />
-            <label htmlFor="stdin">Стандартный ввод</label>
-            <textarea
-              id="stdin"
-              rows={6}
-              value={stdin}
-              onChange={(e) => setStdin(e.target.value)}
-              spellCheck={false}
-            />
-            <p className="small quiet">
-              Версия {short(revision.id)} · один запуск · java21-v1
-            </p>
-          </>
-        ) : (
-          <>
-            <div className="version-pair">
-              <label>
-                Базовая версия
-                <select
-                  value={baseRevision}
-                  onChange={(e) => setBaseRevision(e.target.value)}
-                >
-                  {historyRows.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {short(r.id)}
-                      {r.id === project.originalRevisionId ? " · исходная" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span>→</span>
-              <label>
-                Кандидат
-                <select
-                  value={candidate}
-                  onChange={(e) => setCandidate(e.target.value)}
-                >
-                  {historyRows.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {short(r.id)}
-                      {r.id === project.headRevisionId ? " · текущая" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <label htmlFor="test-cases">Входные данные · JSON cases</label>
-            <textarea
-              id="test-cases"
-              className="test-cases"
-              rows={9}
-              value={cases}
-              onChange={(e) => setCases(e.target.value)}
-              spellCheck={false}
-            />
-            <p className="small quiet">
-              Точные stdout, stderr и код завершения. По 3 наблюдения каждой
-              версии на вход. Совпадение относится только к этому набору.
-            </p>
-          </>
-        )}
+        <fieldset className="run-fields" disabled={busy}>
+          <label htmlFor="entrypoint">Класс с main</label>
+          <input
+            ref={focus}
+            id="entrypoint"
+            value={entry}
+            onChange={(e) => setEntry(e.target.value)}
+            placeholder="com.example.Main"
+          />
+          {kind === "run" ? (
+            <>
+              <label htmlFor="argv">Аргументы · JSON-массив</label>
+              <input
+                id="argv"
+                value={argv}
+                onChange={(e) => setArgv(e.target.value)}
+              />
+              <label htmlFor="stdin">Стандартный ввод</label>
+              <textarea
+                id="stdin"
+                rows={6}
+                value={stdin}
+                onChange={(e) => setStdin(e.target.value)}
+                spellCheck={false}
+              />
+              <p className="small quiet">
+                Версия {short(revision.id)} · один запуск · java21-v1
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="version-pair">
+                <label>
+                  Базовая версия
+                  <select
+                    value={baseRevision}
+                    onChange={(e) => setBaseRevision(e.target.value)}
+                  >
+                    {historyRows.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {short(r.id)}
+                        {r.id === project.originalRevisionId
+                          ? " · исходная"
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span>→</span>
+                <label>
+                  Кандидат
+                  <select
+                    value={candidate}
+                    onChange={(e) => setCandidate(e.target.value)}
+                  >
+                    {historyRows.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {short(r.id)}
+                        {r.id === project.headRevisionId ? " · текущая" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <TestCasesEditor
+                raw={cases}
+                onChange={setCases}
+                onValidityChange={setCaseFormError}
+              />
+              <p className="small quiet">3 запуска каждой версии на вход.</p>
+            </>
+          )}
+        </fieldset>
         {error && (
           <div className="notice error" role="alert">
             {error}
@@ -3097,7 +3103,7 @@ function RunDialog({
           <button
             className="primary"
             onClick={() => void submit()}
-            disabled={busy}
+            disabled={busy || (kind === "compare" && !!caseFormError)}
           >
             {busy ? "Отправка…" : kind === "run" ? "Запустить" : "Сравнить"}
           </button>
