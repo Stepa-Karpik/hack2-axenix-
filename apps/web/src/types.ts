@@ -18,6 +18,7 @@ export interface Revision {
   createdAt: string;
   bundleHash: string;
   origin: string;
+  sourceRevisionId?: string;
   files: SourceFile[];
 }
 export interface SourceRange {
@@ -39,6 +40,8 @@ export interface GraphNode {
   sourceRange: SourceRange | null;
   synthetic: boolean;
   editableFields: string[];
+  allowedOperations?: string[];
+  insertionPositions?: string[];
   editableFieldRanges?: Record<string, SourceRange>;
   parentId: string | null;
 }

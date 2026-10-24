@@ -50,3 +50,21 @@ export function nodeAtOffset<
         (b.sourceRange!.endOffset - b.sourceRange!.startOffset),
     )[0];
 }
+
+export const operationLabels: Record<string, string> = {
+  replace_expression: "Изменить выражение",
+  insert_statement: "Вставить оператор",
+  delete_statement: "Удалить оператор",
+};
+
+export function nodeOperations(node: { allowedOperations?: string[] } | null) {
+  return (node?.allowedOperations ?? []).filter((op) =>
+    Object.hasOwn(operationLabels, op),
+  );
+}
+
+export const statementTemplates: Record<string, string> = {
+  statement: 'System.out.println("value");',
+  condition: 'if (true) {\n    System.out.println("value");\n}',
+  loop: "for (int index = 0; index < 1; index++) {\n    System.out.println(index);\n}",
+};

@@ -299,4 +299,24 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     )
     .not.toBe(before.headRevisionId);
   await expect(page.locator(".monaco-editor")).toContainText("!=");
+  await page.locator(".blueprint-node.IfStmt").click();
+  const exportRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith("/exports") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Экспорт выбранной версии" }).click();
+  const comparisonJob = (
+    await (
+      await page.request.get(
+        "/api/v1/projects/" +
+          projectId +
+          "/runs/" +
+          page.url().split("/runs/")[1],
+      )
+    ).json()
+  ).data;
+  expect(comparisonJob.result.comparisonId).toBeTruthy();
+  expect((await exportRequest).postDataJSON().includeReportIds).toEqual([
+    comparisonJob.result.comparisonId,
+  ]);
 });

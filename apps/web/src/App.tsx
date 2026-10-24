@@ -14,7 +14,15 @@ import type {
   Revision,
   SourceRange,
 } from "./types";
-import { canApply, draftKey, hasChanges, nodeAtOffset } from "./state";
+import {
+  canApply,
+  draftKey,
+  hasChanges,
+  nodeAtOffset,
+  nodeOperations,
+  operationLabels,
+  statementTemplates,
+} from "./state";
 import type { Draft } from "./state";
 import CodeEditor from "./CodeEditor";
 import FlowCanvas, { kindName } from "./FlowCanvas";
@@ -319,6 +327,10 @@ function Workbench({
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [loadingRevision, setLoadingRevision] = useState(false);
   const [expression, setExpression] = useState("");
+  const [operation, setOperation] = useState("");
+  const [position, setPosition] = useState("");
+  const [template, setTemplate] = useState("statement");
+  const [statement, setStatement] = useState(statementTemplates.statement);
   const [intent, setIntent] = useState("semantic_edit");
   const [busy, setBusy] = useState(false);
   const [runnerAvailable, setRunnerAvailable] = useState<boolean | null>(null);
@@ -430,6 +442,7 @@ function Workbench({
     [base],
   );
   async function openRevision(id: string, restore = false) {
+    setProposal(null);
     const openId = ++openGeneration.current;
     setLoadingRevision(true);
     try {
@@ -635,7 +648,7 @@ function Workbench({
     };
   }, [runId, base]);
   function pickNode(n: GraphNode) {
-    if (stale) return;
+    if (stale || busy || saving || loadingRevision) return;
     setSelected(n);
     const bound = editRange(n);
     setRange(bound ?? n.sourceRange);
@@ -656,7 +669,7 @@ function Workbench({
     setProposal(null);
   }
   function offset(value: number) {
-    if (!graph || stale) return;
+    if (!graph || stale || busy || saving || loadingRevision) return;
     const n = nodeAtOffset(graph.nodes, file, value);
     if (n) {
       setSelected(n);
@@ -703,8 +716,71 @@ function Workbench({
       if (importInput.current) importInput.current.value = "";
     }
   }
+  const operations = nodeOperations(selected);
+  const positions = selected?.insertionPositions ?? [];
+  useEffect(() => {
+    setOperation(nodeOperations(selected)[0] ?? "");
+    setPosition(selected?.insertionPositions?.[0] ?? "");
+    setTemplate("statement");
+    setStatement(statementTemplates.statement);
+    setIntent("semantic_edit");
+    setProposal(null);
+  }, [selected?.id, revision?.id]);
+  useEffect(() => {
+    setProposal(null);
+  }, [operation, position, statement, expression, intent]);
+  const inFlight =
+    busy ||
+    saving ||
+    loadingRevision ||
+    !!dialog ||
+    (!!job && ["queued", "running"].includes(job.status));
+  async function restoreRevision(sourceId: string) {
+    if (
+      !project?.headRevisionId ||
+      sourceId === project.headRevisionId ||
+      inFlight
+    )
+      return;
+    if (dirty || conflict) {
+      setError("Сначала сохраните локальную правку. Черновик сохранён.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api<Revision>(`${base}/revisions/${sourceId}/restore`, {
+        method: "POST",
+        head: project.headRevisionId,
+        body: { expectedHeadRevisionId: project.headRevisionId },
+      });
+      setProject({ ...project, headRevisionId: r.id });
+      setReportId(undefined);
+      await openRevision(r.id);
+      await refreshHistory();
+    } catch (e) {
+      setError(message(e));
+      if (e instanceof ApiError && e.code === "REVISION_CONFLICT")
+        setConflict(true);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function prepare() {
-    if (!selected || !analysis || !revision || stale) return;
+    if (
+      !selected ||
+      !analysis ||
+      !revision ||
+      stale ||
+      historical ||
+      inFlight ||
+      !operations.includes(operation) ||
+      (operation === "insert_statement" &&
+        (!positions.includes(position) || !statement.trim())) ||
+      (operation === "replace_expression" &&
+        (!editRange(selected) || !expression.trim()))
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -715,8 +791,13 @@ function Workbench({
           analysisId: analysis.id,
           methodId: selected.methodId,
           nodeId: selected.id,
-          operation: "replace_expression",
-          payload: { field: selected.editableFields[0], source: expression },
+          operation,
+          payload:
+            operation === "delete_statement"
+              ? {}
+              : operation === "insert_statement"
+                ? { position, source: statement }
+                : { field: selected.editableFields[0], source: expression },
           intent,
         },
       });
@@ -739,7 +820,22 @@ function Workbench({
     }
   }
   async function apply() {
-    if (!proposal || !project) return;
+    if (
+      !proposal ||
+      !project ||
+      inFlight ||
+      dirty ||
+      historical ||
+      conflict ||
+      !canApply(
+        proposal.status,
+        proposal.baseRevisionId,
+        project.headRevisionId,
+        proposal.intent,
+        exactMatched,
+      )
+    )
+      return;
     setBusy(true);
     try {
       const p = await api<Project>(base + "/head", {
@@ -929,6 +1025,7 @@ function Workbench({
                       className={
                         "method-item " + (methodId === m.id ? "active" : "")
                       }
+                      disabled={inFlight}
                       onClick={() => {
                         setMethodId(m.id);
                         setFile(f);
@@ -956,36 +1053,58 @@ function Workbench({
           </div>
           <div className="revision-list">
             {historyRows.map((r, i) => (
-              <button
-                key={r.id}
-                className={revision?.id === r.id ? "current" : ""}
-                onClick={() => {
-                  if (dirty) {
-                    setError(
-                      "Локальная правка сохранена. Сначала сохраните её на сервер или скачайте черновик.",
-                    );
-                    return;
-                  }
-                  void openRevision(r.id);
-                }}
-              >
-                <span className="revision-dot" />
-                <span>
-                  {short(r.id)}{" "}
-                  <small>
-                    {r.id === project?.originalRevisionId
-                      ? "Исходная"
-                      : r.origin === "candidate"
-                        ? "Кандидат"
-                        : i === 0
-                          ? "Последняя"
-                          : new Date(r.createdAt).toLocaleTimeString("ru-RU", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                  </small>
-                </span>
-              </button>
+              <div className="revision-row" key={r.id}>
+                <button
+                  disabled={inFlight}
+                  className={revision?.id === r.id ? "current" : ""}
+                  onClick={() => {
+                    if (dirty) {
+                      setError(
+                        "Локальная правка сохранена. Сначала сохраните её на сервер или скачайте черновик.",
+                      );
+                      return;
+                    }
+                    void openRevision(r.id);
+                  }}
+                >
+                  <span className="revision-dot" />
+                  <span>
+                    {short(r.id)}{" "}
+                    <small>
+                      {r.id === project?.originalRevisionId
+                        ? "Исходная"
+                        : r.origin === "restore"
+                          ? "Восстановлена"
+                          : r.origin === "candidate"
+                            ? "Кандидат"
+                            : i === 0
+                              ? "Последняя"
+                              : new Date(r.createdAt).toLocaleTimeString(
+                                  "ru-RU",
+                                  {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )}
+                    </small>
+                  </span>
+                </button>
+                {r.id !== project?.headRevisionId && (
+                  <button
+                    className="restore-revision"
+                    aria-label={"Восстановить версию " + short(r.id)}
+                    title={
+                      dirty || conflict
+                        ? "Сначала сохраните локальную правку"
+                        : "Восстановить как новую версию"
+                    }
+                    disabled={inFlight || dirty || conflict}
+                    onClick={() => void restoreRevision(r.id)}
+                  >
+                    Восстановить
+                  </button>
+                )}
+              </div>
             ))}
           </div>
           <div className="local-label">
@@ -1056,7 +1175,10 @@ function Workbench({
         {historical && (
           <div className="notice">
             Просмотр сохранённой версии {short(revision?.id)}{" "}
-            <button onClick={() => void openRevision(project!.headRevisionId!)}>
+            <button
+              disabled={inFlight || dirty}
+              onClick={() => void openRevision(project!.headRevisionId!)}
+            >
               Открыть текущую
             </button>
           </div>
@@ -1294,7 +1416,9 @@ function Workbench({
                     <button
                       className="primary"
                       disabled={
-                        busy ||
+                        inFlight ||
+                        historical ||
+                        conflict ||
                         !canApply(
                           proposal.status,
                           proposal.baseRevisionId,
@@ -1308,7 +1432,9 @@ function Workbench({
                     >
                       Применить
                     </button>
-                    <button onClick={() => setProposal(null)}>Отклонить</button>
+                    <button disabled={busy} onClick={() => setProposal(null)}>
+                      Отклонить
+                    </button>
                   </div>
                   {proposal.diff?.map((d, i) => (
                     <div key={i} className="diff">
@@ -1402,25 +1528,94 @@ function Workbench({
                   Перейти к коду <Icon name="external" size={14} />
                 </button>
               )}
-              {!!editRange(selected) ? (
+              {operations.length > 0 ? (
                 <div className="expression-form">
-                  <label htmlFor="expression">
-                    {selected.editableFields[0] === "condition"
-                      ? "Условие"
-                      : "Выражение"}
-                  </label>
-                  <textarea
-                    id="expression"
-                    value={expression}
-                    onChange={(e) => setExpression(e.target.value)}
-                    rows={5}
-                    spellCheck={false}
-                    disabled={stale}
-                  />
+                  <label htmlFor="node-operation">Действие</label>
+                  <select
+                    id="node-operation"
+                    value={operation}
+                    disabled={inFlight || stale || historical}
+                    onChange={(e) => setOperation(e.target.value)}
+                  >
+                    {operations.map((op) => (
+                      <option key={op} value={op}>
+                        {operationLabels[op]}
+                      </option>
+                    ))}
+                  </select>
+                  {operation === "replace_expression" &&
+                    editRange(selected) && (
+                      <>
+                        <label htmlFor="expression">
+                          {selected.editableFields[0] === "condition"
+                            ? "Условие"
+                            : "Выражение"}
+                        </label>
+                        <textarea
+                          id="expression"
+                          value={expression}
+                          onChange={(e) => setExpression(e.target.value)}
+                          rows={5}
+                          spellCheck={false}
+                          disabled={inFlight || stale || historical}
+                        />
+                      </>
+                    )}
+                  {operation === "insert_statement" && (
+                    <>
+                      <label htmlFor="insert-position">Позиция</label>
+                      <select
+                        id="insert-position"
+                        value={position}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setPosition(e.target.value)}
+                      >
+                        {positions.map((p) => (
+                          <option key={p} value={p}>
+                            {(
+                              {
+                                before: "Перед узлом",
+                                after: "После узла",
+                                body_start: "В начале метода",
+                                body_end: "В конце метода",
+                              } as Record<string, string>
+                            )[p] ?? p}
+                          </option>
+                        ))}
+                      </select>
+                      <label htmlFor="statement-template">Шаблон</label>
+                      <select
+                        id="statement-template"
+                        value={template}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => {
+                          setTemplate(e.target.value);
+                          setStatement(statementTemplates[e.target.value]);
+                        }}
+                      >
+                        <option value="statement">Оператор</option>
+                        <option value="condition">Условие</option>
+                        <option value="loop">Цикл</option>
+                      </select>
+                      <label htmlFor="statement-source">Java оператор</label>
+                      <textarea
+                        id="statement-source"
+                        value={statement}
+                        rows={6}
+                        spellCheck={false}
+                        disabled={inFlight || stale || historical}
+                        onChange={(e) => setStatement(e.target.value)}
+                      />
+                    </>
+                  )}
+                  {operation === "delete_statement" && (
+                    <p className="small quiet">Удаление выбранного оператора</p>
+                  )}
                   <label htmlFor="change-intent">Цель изменения</label>
                   <select
                     id="change-intent"
                     value={intent}
+                    disabled={inFlight || stale || historical}
                     onChange={(e) => setIntent(e.target.value)}
                   >
                     <option value="semantic_edit">Изменить логику</option>
@@ -1430,19 +1625,28 @@ function Workbench({
                   </select>
                   <button
                     className="primary wide"
-                    disabled={busy || stale || historical || !expression.trim()}
+                    disabled={
+                      inFlight ||
+                      stale ||
+                      historical ||
+                      !operations.includes(operation) ||
+                      (operation === "replace_expression" &&
+                        (!editRange(selected) || !expression.trim())) ||
+                      (operation === "insert_statement" &&
+                        (!positions.includes(position) || !statement.trim()))
+                    }
                     onClick={() => void prepare()}
                   >
                     {busy ? "Проверка…" : "Подготовить изменение"}
                   </button>
-                  <p className="small quiet">
-                    {stale ? "Сначала сохраните и исправьте исходник." : ""}
-                  </p>
+                  {stale && (
+                    <p className="small quiet">
+                      Сначала сохраните и исправьте исходник.
+                    </p>
+                  )}
                 </div>
               ) : (
-                <p className="inspector-note">
-                  Для этого узла изменение выражения недоступно.
-                </p>
+                <p className="inspector-note">Нет доступных действий</p>
               )}
             </>
           ) : (

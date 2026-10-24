@@ -1292,3 +1292,26 @@ select:focus-visible,
 .blueprint-node.loop_back .node-meta {
   display: none;
 }
+
+.revision-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.revision-row > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.revision-list .restore-revision {
+  width: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 5px 4px;
+}
+.expression-form select,
+.expression-form textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}

@@ -43,10 +43,20 @@ public final class EngineModel {
     public record GraphNode(String id, String revisionId, String analysisId, String methodId,
                             String kind, String label, SourceRange sourceRange, String astBinding,
                             String parentId, boolean synthetic, List<String> editableFields,
-                            Map<String, SourceRange> editableFieldRanges) {
+                            Map<String, SourceRange> editableFieldRanges, List<String> allowedOperations,
+                            List<String> insertionPositions) {
         public GraphNode {
             editableFields = List.copyOf(editableFields);
             editableFieldRanges = editableFieldRanges == null ? Map.of() : Map.copyOf(editableFieldRanges);
+            allowedOperations = allowedOperations == null ? List.of() : List.copyOf(allowedOperations);
+            insertionPositions = insertionPositions == null ? List.of() : List.copyOf(insertionPositions);
+        }
+        public GraphNode(String id, String revisionId, String analysisId, String methodId,
+                         String kind, String label, SourceRange sourceRange, String astBinding,
+                         String parentId, boolean synthetic, List<String> editableFields,
+                         Map<String, SourceRange> editableFieldRanges) {
+            this(id, revisionId, analysisId, methodId, kind, label, sourceRange, astBinding,
+                    parentId, synthetic, editableFields, editableFieldRanges, List.of(), List.of());
         }
     }
     public record Edge(String id, String source, String target, String kind, String label, String completionContext) {}
@@ -61,10 +71,13 @@ public final class EngineModel {
                            List<Declaration> declarations, Graph graph) {
         public Analysis { diagnostics = List.copyOf(diagnostics); coverage = List.copyOf(coverage); declarations = List.copyOf(declarations); }
     }
-    /** field is "expression" or "condition"; no untyped AST payload crosses this boundary. */
+    /** Typed operation payloads; no untyped AST or arbitrary graph mutation crosses this boundary. */
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
-                              String operation, ReplaceExpression payload, String intent) {}
-    public record ReplaceExpression(String field, String expression) {}
+                              String operation, EditPayload payload, String intent) {}
+    public sealed interface EditPayload permits ReplaceExpression, InsertStatement, DeleteStatement {}
+    public record ReplaceExpression(String field, String expression) implements EditPayload {}
+    public record InsertStatement(String position, String source) implements EditPayload {}
+    public record DeleteStatement() implements EditPayload {}
     public record TextChange(String filePath, int startOffset, int endOffset, String before, String after) {}
     public record Candidate(Map<String, String> files, List<TextChange> changes, String parseStatus,
                             String compileStatus, String verificationStatus, List<Diagnostic> diagnostics) {

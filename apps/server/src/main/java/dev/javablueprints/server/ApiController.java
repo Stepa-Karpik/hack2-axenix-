@@ -53,7 +53,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression"),
+            List.of("replace_expression", "insert_statement", "delete_statement"),
             "runner",
             map("available", worker.available(), "profileId", "java21-v1"),
             "limits",
@@ -160,6 +160,25 @@ public class ApiController {
           var job = w.enqueue(p, "analyze", map("revisionId", rev.get("id")));
           rev.put("analysisJob", job);
           return rev;
+        });
+  }
+
+  @PostMapping("/projects/{p}/revisions/{r}/restore")
+  Object restore(
+      @PathVariable String p,
+      @PathVariable String r,
+      @RequestHeader(value = "If-Match", required = false) String match,
+      @RequestHeader(value = "Idempotency-Key", required = false) String key,
+      @RequestBody Map<String, Object> b) {
+    fields(b, "expectedHeadRevisionId");
+    str(b, "expectedHeadRevisionId");
+    String expected = w.expected(match, b);
+    return mutation(
+        p + ":restore", key, map("sourceRevisionId", r, "expected", expected), 201,
+        () -> {
+          var restored = w.restore(p, r, expected);
+          restored.put("analysisJob", w.enqueue(p, "analyze", map("revisionId", restored.get("id"))));
+          return restored;
         });
   }
 
@@ -317,6 +336,9 @@ public class ApiController {
       @RequestBody Map<String, Object> b) {
     fields(
         b, "baseRevisionId", "analysisId", "methodId", "nodeId", "operation", "payload", "intent");
+    editPayload(b);
+    str(b, "methodId");
+    str(b, "nodeId");
     String r = str(b, "baseRevisionId");
     w.analysis(p, r, str(b, "analysisId"));
     if (!Set.of("semantic_edit", "preserve_behavior").contains(str(b, "intent")))
@@ -644,6 +666,47 @@ public class ApiController {
     Set<String> a = Set.of(allowed);
     if (!a.containsAll(b.keySet()))
       throw new ApiError(400, "INVALID_REQUEST", "Unknown request field");
+  }
+
+  static EditPayload editPayload(Map<String, Object> command) {
+    if (!(command.get("payload") instanceof Map<?, ?> raw))
+      throw new ApiError(400, "INVALID_REQUEST", "payload must be an object");
+    Map<String, Object> payload = (Map<String, Object>) raw;
+    return switch (str(command, "operation")) {
+      case "replace_expression" -> {
+        fields(payload, "field", "source");
+        String field = str(payload, "field");
+        if (!Set.of("expression", "condition").contains(field))
+          throw new ApiError(400, "INVALID_REQUEST", "Unknown expression field");
+        yield new ReplaceExpression(field, editSource(payload));
+      }
+      case "insert_statement" -> {
+        fields(payload, "position", "source");
+        String position = str(payload, "position");
+        if (!Set.of("before", "after", "body_start", "body_end").contains(position))
+          throw new ApiError(400, "INVALID_REQUEST", "Unknown insertion position");
+        yield new InsertStatement(position, editSource(payload));
+      }
+      case "delete_statement" -> {
+        fields(payload);
+        yield new DeleteStatement();
+      }
+      default -> throw new ApiError(400, "INVALID_REQUEST", "Unsupported graph operation");
+    };
+  }
+
+  static String editSource(Map<String, Object> payload) {
+    String source = str(payload, "source");
+    try {
+      int size = StandardCharsets.UTF_8.newEncoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .encode(java.nio.CharBuffer.wrap(source)).remaining();
+      if (size > 1048576)
+        throw new ApiError(413, "INPUT_LIMIT_EXCEEDED", "Edit source limit is 1 MiB");
+    } catch (CharacterCodingException e) {
+      throw new ApiError(400, "INVALID_REQUEST", "Edit source must contain valid Unicode");
+    }
+    return source;
   }
 
   static int limit(int n) {

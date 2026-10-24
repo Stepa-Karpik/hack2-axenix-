@@ -275,8 +275,6 @@ public class JobWorker {
     String base = str(in, "baseRevisionId"), proposalId = str(in, "proposalId");
     var rev = w.revision(p, base);
     Analysis analysis = w.convert(w.analysis(p, base, str(in, "analysisId")), Analysis.class);
-    Map<String, Object> payload = (Map<String, Object>) in.get("payload");
-    ApiController.fields(payload, "field", "source");
     var command =
         new EditCommand(
             base,
@@ -284,7 +282,7 @@ public class JobWorker {
             str(in, "methodId"),
             str(in, "nodeId"),
             str(in, "operation"),
-            new ReplaceExpression(str(payload, "field"), str(payload, "source")),
+            ApiController.editPayload(in),
             str(in, "intent"));
     Candidate candidate = engine.propose(new SourceBundle(base, w.files(rev)), analysis, command);
     Map<String, Object> saved =

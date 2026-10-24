@@ -1,6 +1,6 @@
 # Java Blueprints
 
-A local Java workbench that connects source code to a structured control-flow graph. Import a program, inspect a method, edit a supported expression, review the generated diff, and compile or compare immutable revisions in isolated Java containers.
+A local Java workbench that connects source code to a structured control-flow graph. Import a program, inspect a method, edit expressions or statements, review the generated diff, and compile or compare immutable revisions in isolated Java containers.
 
 ## Preview
 
@@ -12,9 +12,10 @@ A local Java workbench that connects source code to a structured control-flow gr
 
 1. Create a project and import one or more `.java` files, then edit the imported source in the editor.
 2. Save and analyze the revision. Selecting a graph node reveals its exact source range and supported edit fields.
-3. Propose an expression or condition change. The original head stays intact while the candidate compiles.
+3. Change an expression or condition, insert a statement, or delete a supported statement from the graph. Empty methods accept an insertion at their entry node. Condition and loop templates provide editable starting points. The original head stays intact while the candidate compiles.
 4. Review the diff. A semantic change can be applied explicitly after compilation. A change marked as preserving behavior additionally requires a matching comparison for the exact two revisions.
 5. Run a single console input, or compare a versioned test suite. Download the selected canonical Java snapshot as a ZIP archive.
+6. Restore a historical snapshot from the history panel. Restoration creates a new revision with its source revision recorded; previous revisions remain intact. Save or discard an unsaved draft before restoring.
 
 A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
 
@@ -109,7 +110,7 @@ pnpm test:web
 pnpm build
 ```
 
-The Java command runs parser/graph/edit tests, comparison tests and real PostgreSQL HTTP integration tests. Each backend integration run creates its own randomly named schema and removes that schema afterward. It checks concurrent head updates, idempotent retries, immutable storage, invalid drafts, strict import normalization, original artifact bytes, ZIP export content, scoped IDs, CSRF/origin checks, layout bindings and fenced job publication.
+The Java command runs parser/graph/edit tests, comparison tests and real PostgreSQL HTTP integration tests. Each backend integration run creates its own randomly named schema and removes that schema afterward. It checks structural edit anchors and source preservation, concurrent head updates, idempotent restoration with provenance, immutable storage, invalid drafts, strict import normalization, original artifact bytes, ZIP export content, scoped IDs, CSRF/origin checks, layout bindings and fenced job publication.
 
 Docker execution integration tests are opt-in through `JB_RUNNER_INTEGRATION=true` and require a Linux controller. A Windows API/client can call that controller over authenticated HTTP; the controller's Docker subprocesses must run on Linux. Tests cover actual compilation, exact UTF-8 streams, three observations per side, intentional mismatches, compilation errors, timeout, output limits, cancellation and sandbox boundaries. Ordinary `test.ps1` does not claim to run those opt-in checks. See [the runner integration commands](infra/runner/README.md#repeat-the-execution-integration-checks) for the complete controller setup and invocation.
 
@@ -121,13 +122,15 @@ pnpm --filter @java-blueprints/web exec playwright install chromium
 pnpm --filter @java-blueprints/web exec playwright test
 ```
 
-These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, invalid drafts, responsive light/dark layouts and actual candidate verification.
+These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
 
 ## Data and API
 
 The API lives under `/api/v1`. `GET /session` establishes a local cookie and returns a session-bound CSRF token. Mutations require the token and an idempotency UUID. Head mutations also require `If-Match` with the current revision UUID, or `empty` for a project without a head. A concurrent change returns a conflict instead of overwriting another save.
 
 Revisions retain canonical UTF-8 source with LF line endings and a SHA-256 bundle hash. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
+
+Graph nodes advertise `allowedOperations` and `insertionPositions`. The change endpoint accepts `replace_expression`, `insert_statement` and `delete_statement` with operation-specific payloads. Insertions use a bound statement or method entry, never a client-supplied source offset. Compilation validates the complete candidate before it becomes applicable. `POST /projects/{p}/revisions/{r}/restore` creates a new revision with `sourceRevisionId`, checks the current head, and starts a fresh analysis. Restoration does not inherit a previous revision's verification result.
 
 A comparison means **matched on the recorded tests**, not a proof of equivalence. It requires a nonempty suite, complete observations and stable exact stdout/stderr/exit results. Equal timeouts, OOM, truncated output, cancellation or unavailable execution never count as a match. A standalone run does not satisfy the verification gate for a behavior-preserving change.
 
@@ -151,7 +154,9 @@ Source file and case identifiers follow the shared runner policy. Source paths u
 
 ## Current scope
 
-The implemented slice supports source import/save/history, JavaParser-backed method graphs, source navigation, typed expression/condition replacement, separate layout persistence, detached proposals with diff and explicit apply, console runs, versioned console suites, repeated comparison and source export.
+The implemented slice supports source import/save/history/restore, JavaParser-backed method graphs, source navigation, typed expression/condition replacement and statement insertion/deletion, separate layout persistence, detached proposals with diff and explicit apply, console runs, versioned console suites, repeated comparison and source export.
+
+Structural edits are limited to supported methods and actual block statement lists. A statement with internal comments cannot be deleted through the graph; adjacent comments and untouched source are retained. Opaque constructs and expression fragments are not structural edit anchors. Historical restoration is explicit; a general undo/redo stack and statement wrapping or reordering are not implemented.
 
 The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution is unsupported, and complexity is reported as unknown. General symbol renaming, structural extraction, class decomposition, automatic optimization, method harnesses and benchmarking are not implemented. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
 

@@ -43,3 +43,29 @@ test("source ranges are half-open UTF16 offsets", () => {
   assert.equal(nodeAtOffset([n], "A.java", 4), n);
   assert.equal(nodeAtOffset([n], "A.java", 5), undefined);
 });
+
+test("structural controls follow only explicit node capabilities", async () => {
+  const { nodeOperations } = await import("./state.ts");
+  assert.deepEqual(nodeOperations(null), []);
+  assert.deepEqual(nodeOperations({ editableFields: ["expression"] }), []);
+  assert.deepEqual(
+    nodeOperations({
+      allowedOperations: ["insert_statement", "delete_statement", "unknown"],
+    }),
+    ["insert_statement", "delete_statement"],
+  );
+});
+
+test("pending, rejected and unavailable proposals cannot apply", () => {
+  for (const status of [
+    "queued",
+    "running",
+    "rejected",
+    "unavailable",
+    "compile_error",
+  ])
+    assert.equal(
+      canApply(status, "base", "base", "semantic_edit", true),
+      false,
+    );
+});

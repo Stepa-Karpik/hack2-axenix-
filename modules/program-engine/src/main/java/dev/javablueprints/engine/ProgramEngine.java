@@ -21,7 +21,7 @@ import java.util.*;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
-    public static final String VERSION = "engine-0.1.1";
+    public static final String VERSION = "engine-0.2.0";
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
 
     private JavaParser parser() {
@@ -44,14 +44,39 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!"replace_expression".equals(command.operation())) throw failure("UNSUPPORTED_OPERATION", "Only replace_expression is implemented");
+        if (!Set.of("replace_expression", "insert_statement", "delete_statement").contains(command.operation())) {
+            throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
+        }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
         GraphNode selected = analysis.graph().nodes().stream().filter(n -> n.id().equals(command.nodeId())).findFirst()
                 .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Node does not belong to this analysis"));
         if (!selected.methodId().equals(command.methodId())) throw failure("ANALYSIS_CONFLICT", "Node does not belong to the selected method");
-        ReplaceExpression payload = command.payload();
-        if (payload == null || payload.expression() == null || payload.expression().isBlank()) throw failure("INVALID_EDIT", "Replacement expression is required");
         Node target = parsed.bindings().get(selected.id());
+        TextChange change = switch (command.operation()) {
+            case "replace_expression" -> {
+                if (!(command.payload() instanceof ReplaceExpression payload)) throw failure("INVALID_EDIT", "Expected expression payload");
+                yield replaceExpression(bundle, parsed, selected, target, payload);
+            }
+            case "insert_statement" -> {
+                if (!(command.payload() instanceof InsertStatement payload)) throw failure("INVALID_EDIT", "Expected insertion payload");
+                yield insertStatement(parsed, selected, target, payload);
+            }
+            case "delete_statement" -> {
+                if (!(command.payload() instanceof DeleteStatement)) throw failure("INVALID_EDIT", "Expected deletion payload");
+                yield deleteStatement(bundle, parsed, selected, target);
+            }
+            default -> throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
+        };
+        String source = bundle.files().get(change.filePath());
+        Map<String, String> files = new TreeMap<>(bundle.files());
+        files.put(change.filePath(), source.substring(0, change.startOffset()) + change.after() + source.substring(change.endOffset()));
+        Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
+        if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its project context");
+        return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics());
+    }
+
+    private TextChange replaceExpression(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, ReplaceExpression payload) {
+        if (payload == null || payload.expression() == null || payload.expression().isBlank()) throw failure("INVALID_EDIT", "Replacement expression is required");
         Expression expression;
         if ("condition".equals(payload.field())) {
             expression = condition(target);
@@ -62,11 +87,7 @@ public final class ProgramEngine {
         if (!selected.editableFields().contains(payload.field())) throw failure("UNSUPPORTED_OPERATION", "Expression is outside editable scope");
         var replacement = parser().parseExpression(payload.expression());
         if (!replacement.isSuccessful() || replacement.getResult().isEmpty()) throw failure("INVALID_EDIT", "Replacement must parse as one Java expression");
-        for (JavaToken token : expression.getTokenRange().orElseThrow()) {
-            if (token.getText().startsWith("/*") || token.getText().startsWith("//")) {
-                throw failure("UNSUPPORTED_OPERATION", "Replacement would discard an internal comment");
-            }
-        }
+        if (containsComment(expression)) throw failure("UNSUPPORTED_OPERATION", "Replacement would discard an internal comment");
         String path = selected.sourceRange().filePath();
         SourceRange range = parsed.maps().get(path).range(expression);
         String source = bundle.files().get(path);
@@ -82,12 +103,89 @@ public final class ProgramEngine {
             // Preserve surrounding operator precedence for expressions nested inside a larger tree.
             after = "(" + payload.expression() + ")";
         }
-        Map<String, String> files = new TreeMap<>(bundle.files());
-        files.put(path, source.substring(0, range.startOffset()) + after + source.substring(range.endOffset()));
-        Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
-        if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its project context");
-        return new Candidate(files, List.of(new TextChange(path, range.startOffset(), range.endOffset(), before, after)),
-                "valid", "not_requested", "unverified", candidate.diagnostics());
+        return new TextChange(path, range.startOffset(), range.endOffset(), before, after);
+    }
+
+    private TextChange insertStatement(Parsed parsed, GraphNode selected, Node target, InsertStatement payload) {
+        if (!selected.allowedOperations().contains("insert_statement")) throw failure("UNSUPPORTED_OPERATION", "Node is not an insertion anchor");
+        if (payload.position() == null || !selected.insertionPositions().contains(payload.position())) throw failure("INVALID_EDIT", "Position is not available on this anchor");
+        if (payload.source() == null || payload.source().isBlank() || payload.source().indexOf('\r') >= 0 || payload.source().indexOf('\uFEFF') >= 0) {
+            throw failure("INVALID_EDIT", "One canonical LF Java statement is required");
+        }
+        // Parsing a wrapper also verifies EOF and prevents a second statement or trailing tokens.
+        var result = parser().parseBlock("{\n" + payload.source() + "\n}");
+        if (!result.isSuccessful() || result.getResult().isEmpty() || result.getResult().orElseThrow().getStatements().size() != 1) {
+            throw failure("INVALID_EDIT", "Insertion must contain exactly one Java statement");
+        }
+        Statement inserted = result.getResult().orElseThrow().getStatement(0);
+        if (unsupportedFlow(inserted)) throw failure("UNSUPPORTED_OPERATION", "Inserted statement uses unsupported control flow");
+        boolean bodyAnchor = selected.kind().equals("entry");
+        BlockStmt block = bodyAnchor && target instanceof BlockStmt body ? body : statementContainer(target);
+        if (block == null) throw failure("UNSUPPORTED_OPERATION", "Insertion requires a real block binding");
+        validateJumps(inserted, block);
+        String path = selected.sourceRange().filePath();
+        SourceMap map = parsed.maps().get(path);
+        SourceRange range = map.range(target);
+        int offset = switch (payload.position()) {
+            case "before" -> range.startOffset();
+            case "after" -> range.endOffset();
+            case "body_start" -> map.offsets.get(block.getTokenRange().orElseThrow().getBegin())[1];
+            case "body_end" -> map.offsets.get(block.getTokenRange().orElseThrow().getEnd())[0];
+            default -> throw failure("INVALID_EDIT", "Unknown insertion position");
+        };
+        // Newlines isolate inserted text from adjacent // comments, including one-line bodies.
+        return new TextChange(path, offset, offset, "", "\n" + payload.source() + "\n");
+    }
+
+    private TextChange deleteStatement(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target) {
+        if (!selected.allowedOperations().contains("delete_statement") || statementContainer(target) == null) {
+            throw failure("UNSUPPORTED_OPERATION", "Deletion requires a statement element of a supported block");
+        }
+        if (containsComment(target)) throw failure("UNSUPPORTED_OPERATION", "Deletion would discard an internal comment");
+        String path = selected.sourceRange().filePath();
+        SourceRange range = parsed.maps().get(path).range(target);
+        return new TextChange(path, range.startOffset(), range.endOffset(),
+                bundle.files().get(path).substring(range.startOffset(), range.endOffset()), "");
+    }
+
+    private static BlockStmt statementContainer(Node target) {
+        if (!(target instanceof Statement statement) || !(target.getParentNode().orElse(null) instanceof BlockStmt block)) return null;
+        return block.getStatements().stream().anyMatch(s -> s == statement) ? block : null;
+    }
+
+    private static boolean containsComment(Node node) {
+        for (JavaToken token : node.getTokenRange().orElseThrow()) {
+            if (token.getCategory().isComment()) return true;
+        }
+        return false;
+    }
+
+    private static boolean unsupportedFlow(Node body) {
+        return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt
+                || s instanceof LabeledStmt || s instanceof SynchronizedStmt || s instanceof ForEachStmt
+                || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
+                || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
+                || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
+    }
+
+    private static boolean isLoop(Node node) {
+        return node instanceof ForStmt || node instanceof WhileStmt || node instanceof DoStmt || node instanceof ForEachStmt;
+    }
+
+    private static void validateJumps(Statement inserted, BlockStmt destination) {
+        for (Statement jump : inserted.findAll(Statement.class).stream().filter(s -> s instanceof BreakStmt || s instanceof ContinueStmt).toList()) {
+            boolean loop = false;
+            Node cursor = jump;
+            while (cursor != inserted) {
+                cursor = cursor.getParentNode().orElseThrow();
+                if (isLoop(cursor)) { loop = true; break; }
+            }
+            for (cursor = destination; !loop && cursor != null; cursor = cursor.getParentNode().orElse(null)) {
+                if (cursor instanceof CallableDeclaration<?>) break;
+                if (isLoop(cursor)) loop = true;
+            }
+            if (!loop) throw failure("INVALID_EDIT", "break/continue requires an enclosing supported loop");
+        }
     }
 
     private Expression condition(Node node) {
@@ -161,6 +259,8 @@ public final class ProgramEngine {
                 new Capability("parse", builder.invalid ? "failed" : "passed", "JavaParser 3.28.2, Java 21, preview disabled"),
                 new Capability("control_flow", "partial", "Structured if/while/do/for, return/throw and unlabeled loop jumps; exceptional calls and opaque constructs are not complete CFG"),
                 new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
+                new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
+                new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
                 new Capability("symbols", "unsupported", "No resolved call/type claims; classpath symbol analysis not implemented"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
                 new Capability("OPT-MEMBERSHIP-001", "unsupported", "Alias, escape, dominance and effect proof not implemented"));
@@ -274,10 +374,21 @@ public final class ProgramEngine {
                 fieldRanges = Map.of("condition", map.range(condition(ast)));
             }
             List<String> fields = List.copyOf(fieldRanges.keySet());
-            String text = ast == null ? kind : map.source.substring(map.range(ast).startOffset(), map.range(ast).endOffset());
+            List<String> operations = new ArrayList<>();
+            List<String> positions = List.of();
+            if (!fields.isEmpty()) operations.add("replace_expression");
+            if (!opaqueMethod && "entry".equals(kind) && ast instanceof BlockStmt) {
+                operations.add("insert_statement");
+                positions = List.of("body_start", "body_end");
+            } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null) {
+                operations.add("insert_statement");
+                if (!containsComment(ast)) operations.add("delete_statement");
+                positions = List.of("before", "after");
+            }
+            String text = ast == null || "entry".equals(kind) ? kind : map.source.substring(map.range(ast).startOffset(), map.range(ast).endOffset());
             if (text.length() > 180) text = text.substring(0, 177) + "...";
             nodes.add(new GraphNode(id, bundle.revisionId(), analysisId, methodId, kind, text,
-                    ast == null ? null : map.range(ast), id, parent, ast == null, fields, fieldRanges));
+                    ast == null ? null : map.range(ast), id, parent, ast == null, fields, fieldRanges, operations, positions));
             if (ast != null) { bindings.put(id, ast); astIds.put(ast, id); }
             return id;
         }
@@ -286,12 +397,8 @@ public final class ProgramEngine {
         }
         void method(CallableDeclaration<?> callable, BlockStmt body, String declaration, String fqName, SourceMap sourceMap) {
             methodId = id(); map = sourceMap; astIds.clear();
-            opaqueMethod = body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt || s instanceof SwitchStmt
-                    || s instanceof LabeledStmt || s instanceof SynchronizedStmt || s instanceof ForEachStmt
-                    || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
-                    || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
-                    || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
-            root = node(null, "entry", null);
+            opaqueMethod = unsupportedFlow(body);
+            root = node(body, "entry", null);
             normalExit = node(null, "normal_exit", null);
             exceptionalExit = node(null, "exceptional_exit", null);
             String first;

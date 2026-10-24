@@ -145,6 +145,112 @@ class WorkspaceIntegrationTest {
   }
 
   @Test
+  void restoreCreatesFreshUnverifiedRevisionWithScopedSourceAndIdempotentCas() throws Exception {
+    String p = project(), path = "/projects/" + p + "/revisions";
+    var original = obj(post(path, sources(code), id(), "empty"));
+    String first = str(original, "id");
+    var bad = obj(post(path, sources("public class Main { broken ???"), id(), first));
+    String invalid = str(bad, "id");
+    String restorePath = path + "/" + first + "/restore", key = id();
+    var body = map("expectedHeadRevisionId", invalid);
+    assertEquals(400, post(restorePath, Map.of(), id(), invalid).status);
+    assertEquals(400, post(restorePath, map("expectedHeadRevisionId", invalid, "files", List.of()), id(), invalid).status);
+    assertEquals(400, post(restorePath, map("expectedHeadRevisionId", first), id(), invalid).status);
+    assertEquals(428, post(restorePath, body, id(), null).status);
+    assertEquals(404, post(path + "/" + id() + "/restore", body, id(), invalid).status);
+    String other = project();
+    String foreign = str(obj(post("/projects/" + other + "/revisions", sources(code), id(), "empty")), "id");
+    assertEquals(404, post(path + "/" + foreign + "/restore", body, id(), invalid).status);
+    var reply = post(restorePath, body, key, invalid);
+    assertEquals(201, reply.status, reply.body.toString());
+    var restored = obj(reply);
+    String current = str(restored, "id");
+    assertNotEquals(first, current);
+    assertEquals(invalid, restored.get("parentRevisionId"));
+    assertEquals(first, restored.get("sourceRevisionId"));
+    assertEquals("restore", restored.get("kind"));
+    assertEquals("restore", restored.get("origin"));
+    assertEquals("semantic_edit", restored.get("intent"));
+    assertEquals("unverified", restored.get("verificationStatus"));
+    assertEquals(original.get("bundleHash"), restored.get("bundleHash"));
+    assertEquals(original.get("files"), restored.get("files"));
+    assertEquals(original, w.revision(p, first));
+    assertEquals(first, w.project(p).get("originalRevisionId"));
+    assertEquals(restored, obj(post(restorePath, body, key, invalid)));
+    assertEquals(409, post(restorePath, map("expectedHeadRevisionId", current), key, current).status);
+    assertEquals(409, post(restorePath, body, id(), invalid).status);
+    var persisted = w.revision(p, current);
+    assertEquals(first, persisted.get("sourceRevisionId"));
+    assertFalse(persisted.containsKey("analysisId"));
+    assertFalse(persisted.containsKey("verificationReportId"));
+    assertEquals(1, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=? AND input->>'revisionId'=?", Integer.class, uuid(p), current));
+    String job = str((Map<String, Object>) restored.get("analysisJob"), "id");
+    assertEquals("succeeded", waitJob(p, job).get("status"));
+    assertEquals("valid", w.analysis(p, current, null).get("parseStatus"));
+    // Restoring an invalid historical draft is valid source-history work, not a verified candidate.
+    var invalidReply = post(path + "/" + invalid + "/restore", map("expectedHeadRevisionId", current), id(), current);
+    assertEquals(201, invalidReply.status, invalidReply.body.toString());
+    var invalidRestored = obj(invalidReply);
+    assertEquals("unverified", invalidRestored.get("verificationStatus"));
+    assertEquals(bad.get("files"), invalidRestored.get("files"));
+    assertEquals("succeeded", waitJob(p, str((Map<String, Object>) invalidRestored.get("analysisJob"), "id")).get("status"));
+    assertEquals("invalid", w.analysis(p, str(invalidRestored, "id"), null).get("parseStatus"));
+  }
+
+  @Test
+  void malformedGraphPayloadsAreRejectedBeforeQueueing() throws Exception {
+    String p = project();
+    var base = map("baseRevisionId", id(), "analysisId", id(), "methodId", "method", "nodeId", "node", "intent", "semantic_edit");
+    var invalid = List.of(
+        map("operation", "insert_statement", "payload", map("position", "sideways", "source", "x++;")),
+        map("operation", "insert_statement", "payload", map("position", "before", "source", 12)),
+        map("operation", "insert_statement", "payload", map("position", "before", "source", " ")),
+        map("operation", "insert_statement", "payload", map("position", "before", "source", "x++;", "extra", true)),
+        map("operation", "delete_statement", "payload", map("source", "x++;")),
+        map("operation", "delete_statement", "payload", List.of()),
+        map("operation", "replace_expression", "payload", map("field", "body", "source", "x")),
+        map("operation", "wrap", "payload", Map.of()));
+    for (var edit : invalid) {
+      var command = new LinkedHashMap<>(base);
+      command.putAll(edit);
+      var reply = post("/projects/" + p + "/changes", command, id(), null);
+      assertEquals(400, reply.status, reply.body.toString());
+    }
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM jobs WHERE project_id=?", Integer.class, uuid(p)));
+    assertEquals(0, w.db.queryForObject("SELECT count(*) FROM resources WHERE project_id=?", Integer.class, uuid(p)));
+  }
+
+  @Test
+  void structuralCommandsCreateDetachedCandidatesAndRetainCompileGate() throws Exception {
+    String p = project();
+    String originalCode = "public class Main { public static void main(String[] args) { System.out.println(1); } }";
+    String revision = str(obj(post("/projects/" + p + "/revisions", sources(originalCode), id(), "empty")), "id");
+    var engine = new dev.javablueprints.engine.ProgramEngine();
+    var analysis = engine.inspect(new dev.javablueprints.engine.EngineModel.SourceBundle(revision, w.files(w.revision(p, revision))));
+    w.putResource(p, analysis.id(), "analysis", analysis);
+    var node = analysis.graph().nodes().stream().filter(n -> n.allowedOperations().contains("delete_statement")).findFirst().orElseThrow();
+    for (String operation : List.of("insert_statement", "delete_statement")) {
+      var payload = operation.equals("insert_statement") ? map("position", "before", "source", "System.out.println(2);") : Map.<String, Object>of();
+      var body = map("baseRevisionId", revision, "analysisId", analysis.id(), "methodId", node.methodId(), "nodeId", node.id(), "operation", operation, "payload", payload, "intent", "semantic_edit");
+      var submitted = post("/projects/" + p + "/changes", body, id(), null);
+      assertEquals(202, submitted.status, submitted.body.toString());
+      assertEquals("succeeded", waitJob(p, str(obj(submitted), "jobId")).get("status"));
+      var proposal = w.resource(p, str(obj(submitted), "id"), "proposal");
+      assertEquals("rejected", proposal.get("status"), "Disabled runner cannot authorize apply");
+      assertEquals("unavailable", ((Map<?, ?>) proposal.get("checks")).get("compileStatus"));
+      assertEquals("valid", ((Map<?, ?>) proposal.get("checks")).get("parseStatus"));
+      String candidateId = str(proposal, "candidateRevisionId");
+      assertNotEquals(revision, candidateId);
+      String changed = w.files(w.revision(p, candidateId)).get("Main.java");
+      if (operation.equals("insert_statement")) assertTrue(changed.contains("System.out.println(2);"));
+      else assertFalse(changed.contains("System.out.println(1);"));
+      assertFalse(((List<?>) proposal.get("diff")).isEmpty());
+      assertEquals(revision, w.project(p).get("headRevisionId"));
+      assertEquals(409, post("/projects/" + p + "/head", map("expectedHeadRevisionId", revision, "candidateRevisionId", candidateId, "proposalId", proposal.get("id")), id(), revision).status);
+    }
+  }
+
+  @Test
   void securityScopeUnavailableAndExport() throws Exception {
     String p = project();
     var save = post("/projects/" + p + "/revisions", sources(code), id(), "empty");
@@ -315,6 +421,18 @@ class WorkspaceIntegrationTest {
                 .build(),
             HttpResponse.BodyHandlers.ofByteArray());
     assertArrayEquals(raw, original.body());
+    String importedId = str(rev, "id");
+    String later = str(obj(post("/projects/" + imported + "/revisions", sources(code), id(), importedId)), "id");
+    var restoredReply = post("/projects/" + imported + "/revisions/" + importedId + "/restore",
+        map("expectedHeadRevisionId", later), id(), later);
+    assertEquals(201, restoredReply.status, restoredReply.body.toString());
+    var restored = obj(restoredReply);
+    assertEquals(rev.get("files"), restored.get("files"), "Raw refs, hashes and normalization metadata survive restore");
+    assertEquals(rev.get("bundleHash"), restored.get("bundleHash"));
+    assertEquals(importedId, w.project(imported).get("originalRevisionId"));
+    var restoredFile = (Map<?, ?>) ((List<?>) w.revision(imported, str(restored, "id")).get("files")).getFirst();
+    assertArrayEquals(raw, w.db.queryForObject("SELECT bytes FROM artifacts WHERE project_id=? AND id=?", byte[].class, uuid(imported), uuid(restoredFile.get("rawArtifactRef").toString())));
+    assertTrue(w.revisions(imported, 100).stream().anyMatch(r -> importedId.equals(r.get("sourceRevisionId"))));
     var exported =
         obj(
             post(

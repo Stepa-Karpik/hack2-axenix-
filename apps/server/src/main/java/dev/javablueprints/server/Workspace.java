@@ -331,6 +331,32 @@ public class Workspace {
     return rev;
   }
 
+  Map<String, Object> restore(String p, String sourceId, String expected) {
+    var source = revision(p, sourceId);
+    var project = project(p);
+    if (!expected.equals(Objects.toString(project.get("headRevisionId"), "empty")))
+      throw new ApiError(409, "REVISION_CONFLICT", "Project head changed");
+    // Copy only source data, never analysis, proposal checks or prior verification authority.
+    for (Object value : (List<?>) source.get("files")) {
+      var file = (Map<?, ?>) value;
+      Object rawRef = file.get("rawArtifactRef");
+      if (rawRef != null && db.queryForObject(
+          "SELECT count(*) FROM artifacts WHERE project_id=? AND id=? AND kind='original_source'",
+          Integer.class, uuid(p), uuid(rawRef.toString())) != 1) throw missing();
+    }
+    String r = id();
+    var restored = map(
+        "id", r, "projectId", p, "parentRevisionId", expected.equals("empty") ? null : expected,
+        "origin", "restore", "kind", "restore", "intent", "semantic_edit",
+        "sourceRevisionId", sourceId, "verificationStatus", "unverified",
+        "createdAt", Instant.now().toString(), "bundleHash", source.get("bundleHash"),
+        "languageProfileId", source.get("languageProfileId"), "files", source.get("files"));
+    db.update("INSERT INTO revisions(id,project_id,parent_revision_id,data)VALUES(?,?,?,?::jsonb)",
+        uuid(r), uuid(p), expected.equals("empty") ? null : uuid(expected), encode(restored));
+    cas(p, expected, r);
+    return restored;
+  }
+
   String artifact(String p, String kind, String media, byte[] bytes) {
     String a = id();
     write(
