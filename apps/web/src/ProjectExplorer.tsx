@@ -71,6 +71,9 @@ export default function ProjectExplorer({
 }) {
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [selected, setSelected] = useState("");
+  useEffect(() => {
+    setSelected(active);
+  }, [active]);
   const [action, setAction] = useState<"file" | "folder" | "move" | null>(null);
   const [target, setTarget] = useState("");
   const [error, setError] = useState("");

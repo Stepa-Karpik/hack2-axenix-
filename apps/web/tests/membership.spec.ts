@@ -229,6 +229,24 @@ test("membership recommendation compiles a detached index and applies only after
   await expect(
     page.getByRole("button", { name: "Применить", exact: true }),
   ).toBeDisabled();
+  const cacheKey = "java-blueprints:prepared-proposal:" + f.id;
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), cacheKey),
+  ).toBe(p.id);
+  await page
+    .getByRole("button", { name: "Скрыть Изменения", exact: true })
+    .click();
+  await page.reload();
+  await expect(page.locator(".local-label")).toHaveText("Сохранено", {
+    timeout: 30000,
+  });
+  await expect(page.locator('[data-panel-id="changes"]')).not.toBeVisible();
+  await revealPanel(page, "changes", "Изменения");
+  await expect(page.locator(".proposal .added")).toContainText("jbMembership");
+  await expect(
+    page.getByRole("button", { name: "Применить", exact: true }),
+  ).toBeDisabled();
+  expect((await head(page.request, f.base)).id).toBe(f.original.id);
   const forged = await page.request.post(f.base + "/changes", {
     headers: await headers(page.request),
     data: {
@@ -275,6 +293,10 @@ test("membership recommendation compiles a detached index and applies only after
     expect(row.baseExecutions).toHaveLength(3);
     expect(row.candidateExecutions).toHaveLength(3);
   }
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "К изменению", exact: true }),
+  ).toBeVisible({ timeout: 30000 });
   await page.getByRole("button", { name: "К изменению", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Применить", exact: true }),
@@ -283,6 +305,9 @@ test("membership recommendation compiles a detached index and applies only after
   await expect
     .poll(async () => (await head(page.request, f.base)).id)
     .toBe(proposal.candidateRevisionId);
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), cacheKey),
+  ).toBeNull();
   await expect(
     page.locator('.blueprint-node[title*="jbMembership"]').first(),
   ).toBeVisible({ timeout: 30000 });

@@ -3,6 +3,7 @@ import TestProgressView from "./TestProgressView";
 import CodeInsights from "./CodeInsights";
 import TestCasesEditor from "./TestCasesEditor";
 import { parseCases } from "./testCases";
+import { readPrepared, writePrepared, clearPrepared } from "./preparedProposal";
 import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
 import { ThemeToggle } from "./theme";
@@ -427,6 +428,8 @@ function Workbench({
   const [dialog, setDialog] = useState<"run" | "compare" | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const proposalEpoch = useRef(0);
+  const restoredProposal = useRef<string | null>(null);
   const [loadingRevision, setLoadingRevision] = useState(true);
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const [expression, setExpression] = useState("");
@@ -599,6 +602,7 @@ function Workbench({
     [base],
   );
   async function openRevision(id: string, restore = false) {
+    proposalEpoch.current++;
     setProposal(null);
     setReferenceId(null);
     setRange(null);
@@ -618,7 +622,12 @@ function Workbench({
           if (raw) {
             const draft = JSON.parse(raw) as Draft;
             if (draft.files && typeof draft.baseRevisionId === "string") {
-              text = draft.files;
+              text = Object.fromEntries(
+                Object.entries(draft.files).map(([path, content]) => [
+                  path,
+                  content.replace(/\r\n?/g, "\n"),
+                ]),
+              );
               dirs = draft.directories ?? [];
               setBaseId(draft.baseRevisionId);
               if (draft.baseRevisionId !== r.id) {
@@ -909,6 +918,7 @@ function Workbench({
     );
   }
   function edit(text: string) {
+    proposalEpoch.current++;
     const next = { ...filesRef.current, [file]: text };
     filesRef.current = next;
     setFiles(next);
@@ -1142,6 +1152,7 @@ function Workbench({
     movePosition,
   });
   useEffect(() => {
+    proposalEpoch.current++;
     setOperation(nodeOperations(selected)[0] ?? "");
     setPosition(selected?.insertionPositions?.[0] ?? "");
     setTemplate("statement");
@@ -1178,6 +1189,7 @@ function Workbench({
     }
   }, [selected?.id, revision?.id, dropEdit?.serial, optimizationEdit?.serial]);
   useEffect(() => {
+    proposalEpoch.current++;
     setProposal(null);
   }, [
     operation,
@@ -1189,6 +1201,99 @@ function Workbench({
     movePosition,
     wrapCondition,
     elseSource,
+  ]);
+  useEffect(() => {
+    if (
+      loadingRevision ||
+      analyzing ||
+      dirty ||
+      historical ||
+      conflict ||
+      !revision ||
+      !project?.headRevisionId ||
+      proposal ||
+      busy
+    )
+      return;
+    const id = readPrepared(projectId);
+    if (!id || restoredProposal.current === id) return;
+    restoredProposal.current = id;
+    const epoch = proposalEpoch.current,
+      opened = openGeneration.current;
+    const headId = project.headRevisionId;
+    const controller = new AbortController();
+    controllers.current.add(controller);
+    const current = () =>
+      mounted.current &&
+      !controller.signal.aborted &&
+      epoch === proposalEpoch.current &&
+      opened === openGeneration.current;
+    void (async () => {
+      let p = await api<Proposal>(base + "/changes/" + id, {
+        signal: controller.signal,
+      });
+      if (!current()) return;
+      if (
+        p.baseRevisionId !== headId ||
+        !["queued", "running", "ready"].includes(p.status)
+      ) {
+        clearPrepared(projectId, id);
+        return;
+      }
+      if (p.status !== "ready") {
+        await pollJob(
+          () =>
+            api<Job>(base + "/jobs/" + p.jobId, { signal: controller.signal }),
+          controller.signal,
+        );
+        if (!current()) return;
+        p = await api<Proposal>(base + "/changes/" + id, {
+          signal: controller.signal,
+        });
+      }
+      if (!current()) return;
+      if (
+        p.baseRevisionId !== headId ||
+        p.status !== "ready" ||
+        !p.candidateRevisionId
+      ) {
+        clearPrepared(projectId, id);
+        return;
+      }
+      const candidateRevision = await api<Revision>(
+        base + "/revisions/" + p.candidateRevisionId,
+        { signal: controller.signal },
+      );
+      if (!current()) return;
+      setHistoryRows((rows) =>
+        rows.some((r) => r.id === candidateRevision.id)
+          ? rows
+          : [candidateRevision, ...rows],
+      );
+      setProposal(p);
+    })()
+      .catch((e) => {
+        if (!current() || e.name === "AbortError") return;
+        if (e instanceof ApiError && e.status === 404)
+          clearPrepared(projectId, id);
+        else setError("Не удалось восстановить изменение: " + message(e));
+      })
+      .finally(() => controllers.current.delete(controller));
+    return () => {
+      controller.abort();
+      controllers.current.delete(controller);
+    };
+  }, [
+    base,
+    projectId,
+    project?.headRevisionId,
+    revision?.id,
+    loadingRevision,
+    analyzing,
+    dirty,
+    historical,
+    conflict,
+    busy,
   ]);
   const inFlight =
     busy ||
@@ -1241,6 +1346,7 @@ function Workbench({
       return;
     setBusy(true);
     setError("");
+    const epoch = ++proposalEpoch.current;
     try {
       const p = await api<Proposal>(base + "/changes", {
         method: "POST",
@@ -1255,6 +1361,9 @@ function Workbench({
             operation === "optimize_membership" ? "preserve_behavior" : intent,
         },
       });
+      if (!mounted.current || epoch !== proposalEpoch.current) return;
+      writePrepared(projectId, p.id);
+      restoredProposal.current = p.id;
       setProposal(p);
       setDock("changes");
       const final = await track({
@@ -1263,6 +1372,7 @@ function Workbench({
         type: "change",
       });
       const ready = await api<Proposal>(base + "/changes/" + p.id);
+      if (!mounted.current || epoch !== proposalEpoch.current) return;
       setProposal(ready);
       void refreshHistory();
       if (final.status === "failed")
@@ -1305,6 +1415,7 @@ function Workbench({
         },
       });
       setProject(p);
+      clearPrepared(projectId, proposal.id);
       setProposal({ ...proposal, status: "applied" });
       await openRevision(p.headRevisionId!);
       void refreshHistory();
@@ -2307,7 +2418,14 @@ function Workbench({
               >
                 Применить
               </button>
-              <button disabled={busy} onClick={() => setProposal(null)}>
+              <button
+                disabled={busy}
+                onClick={() => {
+                  proposalEpoch.current++;
+                  clearPrepared(projectId, proposal.id);
+                  setProposal(null);
+                }}
+              >
                 Отклонить
               </button>
             </div>
@@ -2914,10 +3032,21 @@ function RunDialog({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const focus = useRef<HTMLInputElement>(null);
+  const requestController = useRef<AbortController | null>(null);
+  const dialogActive = useRef(true);
   useEffect(() => {
+    dialogActive.current = true;
     focus.current?.focus();
+    return () => {
+      dialogActive.current = false;
+      requestController.current?.abort();
+    };
   }, []);
   async function submit() {
+    if (requestController.current || !dialogActive.current) return;
+    const controller = new AbortController();
+    requestController.current = controller;
+    const current = () => dialogActive.current && !controller.signal.aborted;
     setBusy(true);
     setError("");
     try {
@@ -2928,6 +3057,7 @@ function RunDialog({
         if (!Array.isArray(args) || args.some((a) => typeof a !== "string"))
           throw new Error("Аргументы должны быть JSON-массивом строк.");
         j = await api<Job>(projectPath(project.id) + "/runs", {
+          signal: controller.signal,
           method: "POST",
           body: {
             revisionId: revision.id,
@@ -2947,6 +3077,7 @@ function RunDialog({
         const suite = await api<{ id: string }>(
           projectPath(project.id) + "/test-suites",
           {
+            signal: controller.signal,
             method: "POST",
             body: {
               mode: "console",
@@ -2956,7 +3087,9 @@ function RunDialog({
             },
           },
         );
+        if (!current()) return;
         j = await api<Job>(projectPath(project.id) + "/comparisons", {
+          signal: controller.signal,
           method: "POST",
           body: {
             baseRevisionId: baseRevision,
@@ -2966,13 +3099,16 @@ function RunDialog({
           },
         });
       }
-      onStart(j);
+      if (current()) onStart(j);
     } catch (e) {
+      if (!current()) return;
       const msg = message(e);
       setError(msg);
       onError(msg);
     } finally {
-      setBusy(false);
+      if (requestController.current === controller)
+        requestController.current = null;
+      if (current()) setBusy(false);
     }
   }
   return (

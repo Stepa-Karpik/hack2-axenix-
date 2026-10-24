@@ -92,6 +92,11 @@ export default function CodeEditor({
   const viewPath = useRef(path);
   viewPath.current = path;
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const activeModelPath = useRef(modelPath ?? path);
+  activeModelPath.current = modelPath ?? path;
+  const canonicalizing = useRef(false);
   const decorations = useRef<monaco.editor.IEditorDecorationsCollection | null>(
     null,
   );
@@ -158,7 +163,15 @@ export default function CodeEditor({
       language={language}
       theme={theme === "dark" ? "blueprints-dark" : "blueprints-light"}
       value={value}
-      onChange={(v) => onChange(v ?? "")}
+      onChange={(v) => {
+        if (
+          canonicalizing.current ||
+          editor.current?.getModel()?.uri.toString() !==
+            monaco.Uri.parse(activeModelPath.current).toString()
+        )
+          return;
+        onChangeRef.current((v ?? "").replace(/\r\n?/g, "\n"));
+      }}
       options={{
         readOnly,
         editContext: false,
@@ -177,6 +190,18 @@ export default function CodeEditor({
       }}
       onMount={(instance) => {
         editor.current = instance;
+        const canonicalModel = () => {
+          const model = instance.getModel();
+          if (model && model.getEOL() !== "\n") {
+            canonicalizing.current = true;
+            try {
+              model.setEOL(monaco.editor.EndOfLineSequence.LF);
+            } finally {
+              canonicalizing.current = false;
+            }
+          }
+        };
+        canonicalModel();
         onReady?.({
           undo: () => {
             instance.focus();
@@ -216,7 +241,10 @@ export default function CodeEditor({
           dom?.removeEventListener("paste", paste, true),
         );
         decorations.current = instance.createDecorationsCollection();
-        instance.onDidChangeModel(() => highlight.current());
+        instance.onDidChangeModel(() => {
+          canonicalModel();
+          highlight.current();
+        });
         try {
           const view = JSON.parse(
             localStorage.getItem(
