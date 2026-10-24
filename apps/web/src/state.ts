@@ -95,6 +95,7 @@ export const operationLabels: Record<string, string> = {
   wrap_while: "Обернуть в while",
   add_else: "Добавить ветку else",
   remove_else: "Удалить ветку else",
+  optimize_membership: "Индексировать поиск в цикле",
 };
 
 export function nodeOperations(node: { allowedOperations?: string[] } | null) {

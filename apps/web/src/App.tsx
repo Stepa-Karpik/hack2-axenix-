@@ -1125,6 +1125,11 @@ function Workbench({
   const target = targets.find((n) => n.id === targetNodeId);
   const moveOptions =
     selected && target && graph ? movePositions(selected, target, graph) : [];
+  const [optimizationEdit, setOptimizationEdit] = useState<{
+    nodeId: string;
+    serial: number;
+  } | null>(null);
+  const handledOptimization = useRef<number | null>(null);
   const changePayload = blockEditPayload(selected, graph, operation, {
     position,
     statement,
@@ -1159,7 +1164,17 @@ function Workbench({
       setStatement(statementTemplates[dropEdit.kind]);
       setPosition(dropEdit.position);
     }
-  }, [selected?.id, revision?.id, dropEdit?.serial]);
+    if (
+      optimizationEdit &&
+      optimizationEdit.serial !== handledOptimization.current &&
+      optimizationEdit.nodeId === selected?.id &&
+      selected?.allowedOperations?.includes("optimize_membership")
+    ) {
+      setOperation("optimize_membership");
+      setIntent("preserve_behavior");
+      handledOptimization.current = optimizationEdit.serial;
+    }
+  }, [selected?.id, revision?.id, dropEdit?.serial, optimizationEdit?.serial]);
   useEffect(() => {
     setProposal(null);
   }, [
@@ -1234,7 +1249,8 @@ function Workbench({
           nodeId: selected.id,
           operation,
           payload: changePayload,
-          intent,
+          intent:
+            operation === "optimize_membership" ? "preserve_behavior" : intent,
         },
       });
       setProposal(p);
@@ -1783,6 +1799,22 @@ function Workbench({
           analysis={analysis}
           methodId={methodId}
           focusKey={inspectorFocus}
+          optimizationEnabled={!inFlight && !historical && !stale}
+          onOptimize={(nodeId) => {
+            if (inFlight || historical || stale) return;
+            const node = graph?.nodes.find(
+              (item) =>
+                item.id === nodeId &&
+                item.allowedOperations?.includes("optimize_membership"),
+            );
+            if (!node) return;
+            setMethodId(node.methodId);
+            pickNode(node);
+            setOptimizationEdit((previous) => ({
+              nodeId,
+              serial: (previous?.serial ?? 0) + 1,
+            }));
+          }}
           current={
             !!analysis &&
             analysis.revisionId === revision?.id &&
@@ -1812,27 +1844,30 @@ function Workbench({
             setMode("split");
           }}
         >
-          <div className="analysis-summary">
-            <strong>
-              <Check size={21} />
-              {stale
-                ? "Есть изменения"
-                : analysis?.parseStatus === "valid"
-                  ? "Синтаксис проверен"
-                  : "Проверка исходника"}
-            </strong>
-            <dl>
-              <dt>Узлы</dt>
-              <dd>{methodExecutionNodes.length || "—"}</dd>
-              <dt>Связи</dt>
-              <dd>
-                {graph?.edges.filter(
-                  (e) =>
-                    methodNodeIds.has(e.source) && methodNodeIds.has(e.target),
-                ).length ?? "—"}
-              </dd>
-            </dl>
-          </div>
+          {!selected && (
+            <div className="analysis-summary">
+              <strong>
+                <Check size={21} />
+                {stale
+                  ? "Есть изменения"
+                  : analysis?.parseStatus === "valid"
+                    ? "Синтаксис проверен"
+                    : "Проверка исходника"}
+              </strong>
+              <dl>
+                <dt>Узлы</dt>
+                <dd>{methodExecutionNodes.length || "—"}</dd>
+                <dt>Связи</dt>
+                <dd>
+                  {graph?.edges.filter(
+                    (e) =>
+                      methodNodeIds.has(e.source) &&
+                      methodNodeIds.has(e.target),
+                  ).length ?? "—"}
+                </dd>
+              </dl>
+            </div>
+          )}
           {selected ? (
             <>
               <div
@@ -1873,7 +1908,11 @@ function Workbench({
                     id="node-operation"
                     value={operation}
                     disabled={inFlight || stale || historical}
-                    onChange={(e) => setOperation(e.target.value)}
+                    onChange={(e) => {
+                      setOperation(e.target.value);
+                      if (e.target.value === "optimize_membership")
+                        setIntent("preserve_behavior");
+                    }}
                   >
                     {operations.map((op) => (
                       <option key={op} value={op}>
@@ -2046,11 +2085,28 @@ function Workbench({
                       Удалить все операторы ветки else
                     </p>
                   )}
+                  {operation === "optimize_membership" && (
+                    <div
+                      className="optimization-assumptions"
+                      aria-label="Условия оптимизации"
+                    >
+                      {analysis?.optimizations
+                        ?.find((op) => op.nodeId === selected.id)
+                        ?.assumptions.map((assumption, index) => (
+                          <p key={index}>{assumption}</p>
+                        ))}
+                    </div>
+                  )}
                   <label htmlFor="change-intent">Цель изменения</label>
                   <select
                     id="change-intent"
                     value={intent}
-                    disabled={inFlight || stale || historical}
+                    disabled={
+                      inFlight ||
+                      stale ||
+                      historical ||
+                      operation === "optimize_membership"
+                    }
                     onChange={(e) => setIntent(e.target.value)}
                   >
                     <option value="semantic_edit">Изменить логику</option>
@@ -2172,7 +2228,16 @@ function Workbench({
         (!report?.testResults || ["queued", "running"].includes(job.status)) ? (
           <TestProgressView job={job} />
         ) : report?.testResults ? (
-          <ReportView report={report} projectId={projectId} />
+          <>
+            {proposal?.status === "ready" && exactMatched && (
+              <div className="verified-change">
+                <button className="subtle" onClick={() => setDock("changes")}>
+                  К изменению <Icon name="external" size={13} />
+                </button>
+              </div>
+            )}
+            <ReportView report={report} projectId={projectId} />
+          </>
         ) : (
           <div className="output-empty">
             <span className="terminal-prompt">
@@ -2209,6 +2274,18 @@ function Workbench({
                   ? "Изменение логики"
                   : "Сохранение поведения"}
               </span>
+              {proposal.intent === "preserve_behavior" &&
+                proposal.status === "ready" &&
+                proposal.candidateRevisionId &&
+                !exactMatched && (
+                  <button
+                    className="primary"
+                    disabled={inFlight || historical || dirty || conflict}
+                    onClick={() => setDialog("compare")}
+                  >
+                    Проверить на тестах
+                  </button>
+                )}
               <button
                 className="primary"
                 disabled={
@@ -2253,12 +2330,6 @@ function Workbench({
                 {proposal.checks.verificationStatus}
               </p>
             )}
-            {proposal.intent === "preserve_behavior" &&
-              proposal.candidateRevisionId && (
-                <button onClick={() => setDialog("compare")}>
-                  Проверить base / candidate
-                </button>
-              )}
             {proposal.error && (
               <div className="notice error" role="alert">
                 {proposal.error.message}

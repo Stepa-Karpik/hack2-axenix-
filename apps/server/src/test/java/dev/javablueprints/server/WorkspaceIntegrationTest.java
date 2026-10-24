@@ -693,6 +693,26 @@ class WorkspaceIntegrationTest {
   }
 
   @Test
+  void membershipOperationHasTypedPayloadAndCannotDowngradePreservationIntent() throws Exception {
+    String p=project();
+    String source="class Main { void m(String[] queries){ java.util.ArrayList<String> allowed=new java.util.ArrayList<>(); allowed.add(\"Aa\"); for(String query:queries){if(allowed.contains(query))System.out.println(query);} } }";
+    String revision=str(obj(post("/projects/"+p+"/revisions",sources(source),id(),"empty")),"id");
+    var a=analyzeRevision(p,revision);
+    var typed=w.convert(a,Analysis.class);
+    assertEquals(1,typed.optimizations().size());
+    var opportunity=typed.optimizations().getFirst();
+    var body=map("baseRevisionId",revision,"analysisId",a.get("id"),"methodId",opportunity.methodId(),"nodeId",opportunity.nodeId(),"operation","optimize_membership","payload",Map.of(),"intent","semantic_edit");
+    assertEquals(400,post("/projects/"+p+"/changes",body,id(),null).status);
+    body.put("intent","preserve_behavior");body.put("payload",map("source","arbitrary()"));
+    assertEquals(400,post("/projects/"+p+"/changes",body,id(),null).status);
+    body.put("payload",Map.of());
+    assertInstanceOf(dev.javablueprints.engine.EngineModel.OptimizeMembership.class,ApiController.editPayload(body));
+    assertEquals(revision,w.project(p).get("headRevisionId"));
+    var old=new LinkedHashMap<>(a);old.remove("optimizations");
+    assertTrue(w.convert(old,Analysis.class).optimizations().isEmpty());
+  }
+
+  @Test
   void semanticModelSurvivesDatabaseAndHttpWithAnalysisScopedBindings() throws Exception {
     String p = project();
     String main = "// 😀\npackage sample; public class Main { int value=1; int parameter(int value){return this.value + value;} int local(){int value=3;return value;} int call(){return Util.twice(value);} public static void main(String[] args){System.out.println(new Main().call());}}";

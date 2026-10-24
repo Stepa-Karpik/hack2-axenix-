@@ -779,6 +779,12 @@ public class ApiController {
         fields(payload);
         yield new RemoveElse();
       }
+        case "optimize_membership" -> {
+          fields(payload);
+          if (!"preserve_behavior".equals(command.get("intent")))
+            throw new ApiError(400,"INVALID_REQUEST","Optimization requires preserve_behavior");
+          yield new OptimizeMembership();
+        }
       default -> throw new ApiError(400, "INVALID_REQUEST", "Unsupported graph operation");
     };
   }

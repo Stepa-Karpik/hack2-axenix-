@@ -81,7 +81,8 @@ class SemanticAnalysisTest {
         assertEquals("java.util.ArrayList", symbol(a, "local", "raw").resolvedType());
         assertEquals("Main.Sub", symbol(a, "local", "sub").resolvedType());
         assertFalse(target(a, refAt(a, source, "custom.contains(q)", "call")).external());
-        assertTrue(a.coverage().stream().anyMatch(c -> c.feature().equals("OPT-MEMBERSHIP-001") && c.status().equals("unsupported")));
+        assertTrue(a.coverage().stream().anyMatch(c -> c.feature().equals("OPT-MEMBERSHIP-001") && c.status().equals("partial")));
+        assertTrue(a.optimizations().isEmpty());
     }
 
     @Test void nullAmbiguityIsExplicitAndMostSpecificAndOtherArgumentsAreRespected() {

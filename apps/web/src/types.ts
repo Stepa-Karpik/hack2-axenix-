@@ -98,6 +98,17 @@ export interface Analysis {
     findings: CodeFinding[];
     findingsTruncated: boolean;
   } | null;
+  optimizations?: OptimizationOpportunity[];
+}
+export interface OptimizationOpportunity {
+  ruleId: string;
+  ruleVersion: string;
+  nodeId: string;
+  methodId: string;
+  receiverName: string;
+  querySites: number;
+  sourceRange: SourceRange;
+  assumptions: string[];
 }
 export interface MethodMetrics {
   methodId: string;

@@ -17,6 +17,8 @@ export default function CodeInsights({
   current,
   children,
   onNavigate,
+  onOptimize,
+  optimizationEnabled,
 }: {
   analysis: Analysis | null;
   methodId: string;
@@ -24,6 +26,8 @@ export default function CodeInsights({
   current: boolean;
   children: ReactNode;
   onNavigate: (range: SourceRange, methodId?: string) => void;
+  onOptimize: (nodeId: string) => void;
+  optimizationEnabled: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("node");
   const id = useId();
@@ -31,6 +35,7 @@ export default function CodeInsights({
   const metric = quality?.methods.find((m) => m.methodId === methodId);
   const method = analysis?.graph?.methods.find((m) => m.id === methodId);
   const diagnostics = analysis?.diagnostics ?? [];
+  const optimizations = analysis?.optimizations ?? [];
   useEffect(() => {
     if (focusKey > 0) setTab("node");
   }, [focusKey]);
@@ -41,7 +46,7 @@ export default function CodeInsights({
     key === "problems"
       ? diagnostics.length
       : key === "recommendations"
-        ? (quality?.findings.length ?? 0)
+        ? (quality?.findings.length ?? 0) + optimizations.length
         : 0;
   return (
     <div className="code-insights">
@@ -140,13 +145,45 @@ export default function CodeInsights({
       >
         {!quality ? (
           <p className="insight-empty">Нужен актуальный анализ</p>
-        ) : quality.findings.length === 0 ? (
+        ) : quality.findings.length === 0 && optimizations.length === 0 ? (
           <p className="insight-empty">
             <Check size={16} /> Рекомендаций нет
           </p>
         ) : (
           <>
             <div className="insight-findings">
+              {optimizations.map((op) => (
+                <article
+                  className="insight-finding"
+                  key={op.nodeId}
+                  data-optimization={op.ruleId}
+                >
+                  <button
+                    className="finding-location"
+                    disabled={!current}
+                    onClick={() => onNavigate(op.sourceRange, op.methodId)}
+                    title="Перейти к коду"
+                  >
+                    <Info size={14} />
+                    <strong>Повторный поиск в списке</strong>
+                    <ArrowUpRight size={14} />
+                  </button>
+                  <code className="finding-source">
+                    {op.sourceRange.filePath}:{op.sourceRange.startLine} ·{" "}
+                    {op.receiverName}
+                  </code>
+                  <p className="small quiet">
+                    Мест поиска в цикле: {op.querySites}
+                  </p>
+                  <button
+                    className="subtle optimization-open"
+                    disabled={!current || !optimizationEnabled}
+                    onClick={() => onOptimize(op.nodeId)}
+                  >
+                    Открыть изменение
+                  </button>
+                </article>
+              ))}
               {quality.findings.map((f) => (
                 <article
                   className="insight-finding"

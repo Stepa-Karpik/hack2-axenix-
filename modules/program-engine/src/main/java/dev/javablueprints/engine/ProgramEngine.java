@@ -18,12 +18,13 @@ import java.io.DataOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.function.Function;
 
 /** Source-first, side-effect-free Java 21 analysis. Never compiles or executes input programs. */
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.9.0"; }
+    private static String analyzerVersion() { return "engine-0.10.0"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -55,7 +56,7 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else").contains(command.operation())) {
+        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership").contains(command.operation())) {
             throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
@@ -63,7 +64,17 @@ public final class ProgramEngine {
                 .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Node does not belong to this analysis"));
         if (!selected.methodId().equals(command.methodId())) throw failure("ANALYSIS_CONFLICT", "Node does not belong to the selected method");
         Node target = parsed.bindings().get(selected.id());
+        MembershipOptimization.Rewrite membership = null;
         TextChange change = switch (command.operation()) {
+            case "optimize_membership" -> {
+                if (!(command.payload() instanceof OptimizeMembership)) throw failure("INVALID_EDIT", "Expected empty optimization payload");
+                if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT", "Optimization requires preserve_behavior and exact comparison before apply");
+                requireOperation(selected,"optimize_membership");
+                var plan=parsed.optimizations().get(selected.id());
+                if(plan==null)throw failure("UNSUPPORTED_OPERATION","Membership preconditions are not proven");
+                membership=plan.rewrite(bundle);
+                yield membership.change();
+            }
             case "replace_expression" -> {
                 if (!(command.payload() instanceof ReplaceExpression payload)) throw failure("INVALID_EDIT", "Expected expression payload");
                 yield replaceExpression(bundle, parsed, selected, target, payload);
@@ -103,6 +114,7 @@ public final class ProgramEngine {
         files.put(change.filePath(), source.substring(0, change.startOffset()) + change.after() + source.substring(change.endOffset()));
         Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
         if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its project context");
+        if (membership!=null&&!MembershipOptimization.validCandidate(candidate,membership)) throw failure("UNSUPPORTED_OPERATION","Generated index must resolve to the standard JDK HashSet<String>");
         return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics());
     }
 
@@ -488,6 +500,14 @@ public final class ProgramEngine {
                     return builder.maps.get(path).range(node);
                 }, builder.declarationBindings);
         builder.declarations.addAll(semantic.declarations());
+        Function<Node,SourceRange> ranges = node -> {
+            CompilationUnit unit = node.findCompilationUnit().orElseThrow();
+            String path = builder.units.entrySet().stream().filter(e -> e.getValue() == unit).findFirst().orElseThrow().getKey();
+            return builder.maps.get(path).range(node);
+        };
+        var membership = builder.invalid ? new MembershipOptimization.Result(graph,List.of(),Map.of())
+                : MembershipOptimization.inspect(graph,builder.bindings,semantic.model(),builder.units.values(),ranges);
+        graph=membership.graph();
         QualityModel quality = builder.invalid ? QualityModel.empty() : QualityAnalyzer.inspect(id,
                 builder.declarationBindings, graph.methods(), node -> {
                     CompilationUnit unit = node.findCompilationUnit().orElseThrow();
@@ -507,14 +527,14 @@ public final class ProgramEngine {
                 new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
                 new Capability("code_insights", builder.invalid ? "not_requested" : "passed", "Lexical body lines, structural statements/nesting/branching/calls; bounded recommendations are heuristic reading aids, not runtime cost or safe automatic refactoring"),
-                new Capability("OPT-MEMBERSHIP-001", "unsupported", "Alias, escape, dominance and effect proof not implemented"));
+                new Capability("OPT-MEMBERSHIP-001", builder.invalid ? "not_requested" : "partial", "Closed local standard ArrayList<String>, literal construction writes, no alias/escape/reassignment/other uses; one HashSet index before a direct loop. At most64 loop candidates; resource/timing equivalence and performance gain unproven; exact comparison required before preserve apply"));
         Analysis analysis = new Analysis(id, bundle.revisionId(), bundleHash(bundle), VERSION, "3.28.2", "JAVA_21",
                 builder.invalid ? "invalid" : "valid", "not_requested", builder.invalid ? "not_requested" : "partial", SOURCE_MAP_VERSION,
-                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model(), quality);
-        return new Parsed(analysis, builder.bindings, builder.maps);
+                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model(), quality, membership.opportunities());
+        return new Parsed(analysis, builder.bindings, builder.maps, membership.plans());
     }
 
-    private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps) {}
+    private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps, Map<String,MembershipOptimization.Plan> optimizations) {}
     private static boolean boundedAst(Node root) {
         record AtDepth(Node node, int depth) {}
         Deque<AtDepth> pending = new ArrayDeque<>(); pending.push(new AtDepth(root, 0));

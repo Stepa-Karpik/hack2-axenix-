@@ -1470,3 +1470,25 @@
   color: var(--muted);
   font-size: 11px;
 }
+.optimization-assumptions {
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.optimization-assumptions p {
+  margin: 0 0 9px;
+}
+.optimization-open {
+  margin-top: 3px;
+  font-size: 11px;
+}
+.verified-change {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 8px;
+}
+.verified-change button {
+  font-size: 11px;
+  color: var(--green);
+}

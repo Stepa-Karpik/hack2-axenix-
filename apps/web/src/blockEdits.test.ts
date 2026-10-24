@@ -45,6 +45,26 @@ const a = node("a", 10),
   c = node("c", 30);
 const graph = { revisionId: "r", analysisId: "a", nodes: [a, b, c] };
 
+test("membership action needs an advertised exact graph binding and carries no source payload", () => {
+  const loop = node("loop", 40, { allowedOperations: ["optimize_membership"] });
+  const bound = { ...graph, nodes: [loop] };
+  assert.deepEqual(nodeOperations(loop), ["optimize_membership"]);
+  assert.deepEqual(
+    blockEditPayload(loop, bound, "optimize_membership", fields),
+    {},
+  );
+  assert.equal(
+    blockEditPayload(
+      loop,
+      { ...bound, analysisId: "old" },
+      "optimize_membership",
+      fields,
+    ),
+    null,
+  );
+  assert.equal(blockEditPayload(a, graph, "optimize_membership", fields), null);
+});
+
 test("move destinations require advertised sibling anchors in the exact source context", () => {
   const invalid = [
     node("nested", 40, { parentId: "nestedBody" }),

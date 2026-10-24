@@ -54,7 +54,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.9.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.10.0");
   let layoutWrites = 0;
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().endsWith("/layout"))

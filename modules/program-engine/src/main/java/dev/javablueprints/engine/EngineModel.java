@@ -77,11 +77,22 @@ public final class EngineModel {
                            String compileStatus, String symbolStatus, String sourceMapVersion,
                            List<Diagnostic> diagnostics, List<Capability> coverage,
                            List<Declaration> declarations, Graph graph, String symbolEnvironmentHash,
-                           SemanticModel semantics, QualityModel quality) {
+                           SemanticModel semantics, QualityModel quality, List<OptimizationOpportunity> optimizations) {
         public Analysis {
             diagnostics = List.copyOf(diagnostics); coverage = List.copyOf(coverage); declarations = List.copyOf(declarations);
             semantics = semantics == null ? SemanticModel.empty() : semantics;
             quality = quality == null ? QualityModel.empty() : quality;
+            optimizations = optimizations == null ? List.of() : List.copyOf(optimizations);
+        }
+        public Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
+                        String parserVersion, String languageLevel, String parseStatus,
+                        String compileStatus, String symbolStatus, String sourceMapVersion,
+                        List<Diagnostic> diagnostics, List<Capability> coverage,
+                        List<Declaration> declarations, Graph graph, String symbolEnvironmentHash,
+                        SemanticModel semantics, QualityModel quality) {
+            this(id, revisionId, bundleHash, analyzerVersion, parserVersion, languageLevel, parseStatus,
+                    compileStatus, symbolStatus, sourceMapVersion, diagnostics, coverage, declarations,
+                    graph, symbolEnvironmentHash, semantics, quality, null);
         }
         public Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
                         String parserVersion, String languageLevel, String parseStatus,
@@ -115,6 +126,11 @@ public final class EngineModel {
     public record CodeFinding(String id, String methodId, String nodeId, String severity, String code,
                               String title, String explanation, String recommendation, String expectedEffect,
                               int observed, int threshold, SourceRange sourceRange) {}
+    public record OptimizationOpportunity(String ruleId, String ruleVersion, String nodeId, String methodId,
+                                           String receiverName, int querySites, SourceRange sourceRange,
+                                           List<String> assumptions) {
+        public OptimizationOpportunity { assumptions = List.copyOf(assumptions); }
+    }
     public record SymbolEnvironment(String schemaVersion, String resolverVersion, String configVersion,
                                     String jdkVersion, String jdkVendor, String environmentHash) {}
     public record SemanticModel(String schemaVersion, SymbolEnvironment environment, List<Symbol> symbols,
@@ -142,7 +158,7 @@ public final class EngineModel {
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
                               String operation, EditPayload payload, String intent) {}
     public sealed interface EditPayload permits ReplaceExpression, ReplaceStatement, InsertStatement, DeleteStatement,
-            MoveStatement, WrapStatement, AddElse, RemoveElse {}
+            MoveStatement, WrapStatement, AddElse, RemoveElse, OptimizeMembership {}
     public record ReplaceExpression(String field, String expression) implements EditPayload {}
     public record ReplaceStatement(String source) implements EditPayload {}
     public record InsertStatement(String position, String source) implements EditPayload {}
@@ -151,6 +167,7 @@ public final class EngineModel {
     public record WrapStatement(String condition) implements EditPayload {}
     public record AddElse(String source) implements EditPayload {}
     public record RemoveElse() implements EditPayload {}
+    public record OptimizeMembership() implements EditPayload {}
     public record TextChange(String filePath, int startOffset, int endOffset, String before, String after) {}
     public record Candidate(Map<String, String> files, List<TextChange> changes, String parseStatus,
                             String compileStatus, String verificationStatus, List<Diagnostic> diagnostics) {
