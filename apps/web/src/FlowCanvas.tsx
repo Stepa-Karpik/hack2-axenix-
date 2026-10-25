@@ -1,5 +1,12 @@
+import {
+  GraphHistory,
+  graphHistoryShortcut,
+  positionsOf,
+} from "./graphHistory";
 import { useEffect, useState, useMemo, useCallback, useRef, memo } from "react";
 import useFlowRoutes from "./useFlowRoutes";
+import { groupByMethod } from "./flowScene";
+import { FlowOverview, OverviewDetail } from "./FlowOverview";
 import {
   ReactFlow,
   Background,
@@ -13,6 +20,7 @@ import {
   EdgeLabelRenderer,
   ViewportPortal,
   useViewport,
+  useUpdateNodeInternals,
 } from "@xyflow/react";
 import type {
   Node,
@@ -64,10 +72,14 @@ import {
   methodViewKey,
   stableNodeKeys,
   placeManualFlow,
+  clearDropOffset,
 } from "./flowLayout";
 import { api, projectPath } from "./api";
 import { operationAnchor } from "./state";
 type FlowData = {
+  compact?: boolean;
+  compactWidth?: number;
+  compactHeight?: number;
   label: string;
   kind: string;
   line: string;
@@ -93,7 +105,32 @@ const nodeIcons = {
   structure: Braces,
 };
 function BlueprintNode({ data, id }: NodeProps<Node<FlowData>>) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  const previousCompact = useRef(data.compact);
+  useEffect(() => {
+    if (previousCompact.current && !data.compact) updateNodeInternals(id);
+    previousCompact.current = data.compact;
+  }, [data.compact, id, updateNodeInternals]);
   const Glyph = nodeIcons[data.visualKind ?? "operation"];
+  if (data.compact)
+    return (
+      <div
+        className={
+          "blueprint-node blueprint-node-compact " +
+          data.kind +
+          (data.selected ? " selected" : "")
+        }
+        style={{
+          width: data.compactWidth ?? 264,
+          height: data.compactHeight ?? 84,
+        }}
+        title={data.fullLabel}
+        aria-label={data.fullLabel}
+        data-node-id={id}
+        data-node-kind={data.kind}
+        data-visual-kind={data.visualKind}
+      />
+    );
   return (
     <div
       data-insert-position={data.dropPosition}
@@ -491,7 +528,16 @@ export default function FlowCanvas({
   const overviewManualIds = useRef(new Set<string>());
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
   const [spacePan, setSpacePan] = useState(false);
-  const gestureRef = useRef<{ scope: string; committed: boolean } | null>(null);
+  const gestureRef = useRef<{
+    scope: string;
+    committed: boolean;
+    history?: boolean;
+  } | null>(null);
+  const positionHistory = useRef(new GraphHistory());
+  const dragStart = useRef<ReturnType<typeof positionsOf>>([]);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const layoutSaving = useRef(false);
   const clickSelection = useRef<{
     scope: string;
     nodeId: string;
@@ -605,15 +651,25 @@ export default function FlowCanvas({
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   useEffect(() => {
+    positionHistory.current.clear();
+    dragStart.current = [];
+  }, [scope]);
+  useEffect(() => {
     const focus = (event: Event) => {
       const id = (event as CustomEvent).detail?.nodeId;
-      const node = nodesRef.current.find(candidate => candidate.id === id);
+      const node = nodesRef.current.find((candidate) => candidate.id === id);
       if (!node || !flow.current) return;
-      const area = safeArea(), zoom = Math.max(.75, Math.min(1, flow.current.getViewport().zoom));
-      void flow.current.setViewport({ x: area.x + area.width / 2 - (node.position.x + 132) * zoom, y: area.y + area.height / 2 - (node.position.y + 42) * zoom, zoom });
+      const area = safeArea(),
+        zoom = Math.max(0.75, Math.min(1, flow.current.getViewport().zoom));
+      void flow.current.setViewport({
+        x: area.x + area.width / 2 - (node.position.x + 132) * zoom,
+        y: area.y + area.height / 2 - (node.position.y + 42) * zoom,
+        zoom,
+      });
     };
     window.addEventListener("java-blueprints:tour-focus-node", focus);
-    return () => window.removeEventListener("java-blueprints:tour-focus-node", focus);
+    return () =>
+      window.removeEventListener("java-blueprints:tour-focus-node", focus);
   }, []);
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -654,6 +710,10 @@ export default function FlowCanvas({
         : graph.nodes.filter((n) => n.methodId === methodId),
     [graph, scopeMethodId],
   );
+  const graphNodesByMethod = useMemo(
+    () => groupByMethod(graph.nodes),
+    [graph.nodes],
+  );
   const overviewKeys = useMemo(() => {
     const result = new Map<string, string>(),
       counts = new Map<string, number>();
@@ -665,12 +725,12 @@ export default function FlowCanvas({
       const key = methodViewKey(projectId, m, m.id);
       if (counts.get(key) !== 1) continue;
       for (const [id, nodeKey] of stableNodeKeys(
-        graph.nodes.filter((n) => n.methodId === m.id),
+        graphNodesByMethod.get(m.id) ?? [],
       ))
         result.set(id, JSON.stringify([key, nodeKey]));
     }
     return result;
-  }, [graph, projectId]);
+  }, [graph.methods, graphNodesByMethod, projectId]);
   const nodeKeys = useMemo(() => stableNodeKeys(methodNodes), [methodNodes]);
   useEffect(() => {
     if (
@@ -779,6 +839,7 @@ export default function FlowCanvas({
   useEffect(() => {
     if (overview) {
       const visible = executionNodes(methodNodes, edges);
+      const visibleByMethod = groupByMethod(visible);
       const positions = new Map<string, { x: number; y: number }>();
       const origins = new Map<string, { x: number; y: number }>();
       let x = 0,
@@ -790,8 +851,8 @@ export default function FlowCanvas({
           a.sourceRange.filePath.localeCompare(b.sourceRange.filePath) ||
           a.sourceRange.startOffset - b.sourceRange.startOffset,
       )) {
-        const all = methodNodes.filter((n) => n.methodId === m.id),
-          shown = visible.filter((n) => n.methodId === m.id);
+        const all = graphNodesByMethod.get(m.id) ?? [],
+          shown = visibleByMethod.get(m.id) ?? [];
         const local = arrangeFlow(shown, edges, all),
           keys = stableNodeKeys(all);
         const manual = new Map<string, { x: number; y: number }>();
@@ -1275,6 +1336,7 @@ export default function FlowCanvas({
     };
   }, [sceneNodes, methodNodes, edges, provisional]);
   const routing = useFlowRoutes(routeScene);
+  const [compactOverview, setCompactOverview] = useState(false);
   const renderedEdges = useMemo(() => {
     const routes = routeFlowEdges(sceneNodes, edges);
     const boxes = routeScene.boxes;
@@ -1372,12 +1434,23 @@ export default function FlowCanvas({
     routing.routes,
   ]);
   const renderedNodes = useMemo(() => {
+    const methodsByNode = new Map(
+      methodNodes.map((node) => [node.id, node.methodId]),
+    );
+    const boxesByMethod = new Map<string, RouteBox[]>();
     const boxes = sceneNodes.map((node) => ({
       id: node.id,
       ...node.position,
       width: node.measured?.width ?? 264,
       height: node.measured?.height ?? 84,
     }));
+    for (const box of boxes) {
+      const owner = methodsByNode.get(box.id);
+      if (!owner) continue;
+      const group = boxesByMethod.get(owner);
+      if (group) group.push(box);
+      else boxesByMethod.set(owner, [box]);
+    }
     const areas: Node<FlowData>[] = loopAreas(methodNodes, boxes).map(
       (area) => ({
         id: area.id,
@@ -1405,9 +1478,7 @@ export default function FlowCanvas({
     );
     const frames: Node<FlowData>[] = overview
       ? graph.methods.flatMap((m) => {
-          const members = boxes.filter(
-            (b) => methodNodes.find((n) => n.id === b.id)?.methodId === m.id,
-          );
+          const members = boxesByMethod.get(m.id) ?? [];
           if (!members.length) return [];
           const x = Math.min(...members.map((b) => b.x)) - 24,
             y = Math.min(...members.map((b) => b.y)) - 18;
@@ -1444,12 +1515,34 @@ export default function FlowCanvas({
         ...n,
         data: {
           ...n.data,
+          compact: compactOverview,
+          compactWidth: n.measured?.width ?? 264,
+          compactHeight: n.measured?.height ?? 84,
           dropPosition:
             dropTarget?.highlightId === n.id ? dropTarget.position : undefined,
         },
       })),
     ];
-  }, [sceneNodes, methodNodes, dropTarget, overview, graph.methods, methodId]);
+  }, [
+    sceneNodes,
+    methodNodes,
+    dropTarget,
+    overview,
+    graph.methods,
+    methodId,
+    compactOverview,
+  ]);
+  const overviewBoxes = useMemo(() => {
+    const byId = new Map(sceneNodes.map((node) => [node.id, node]));
+    return routeScene.boxes.map((box) => {
+      const node = byId.get(box.id);
+      return {
+        ...box,
+        visualKind: node?.data.visualKind,
+        selected: node?.selected || node?.data.selected,
+      };
+    });
+  }, [routeScene.boxes, sceneNodes]);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
@@ -1485,7 +1578,10 @@ export default function FlowCanvas({
     },
     [provisional],
   );
-  async function saveLayout(dragged: Node<FlowData>) {
+  async function saveLayout(
+    dragged: Node<FlowData>,
+    snapshot?: Node<FlowData>[],
+  ) {
     if (
       stale ||
       readOnly ||
@@ -1496,21 +1592,60 @@ export default function FlowCanvas({
       return;
     gestureRef.current.committed = true;
     const realIds = new Set(methodNodes.map((n) => n.id));
-    const finalNodes = (flow.current?.getNodes() ?? nodesRef.current).filter(
-      (n) => realIds.has(n.id),
-    );
-    const current = finalNodes.map((n) =>
+    const finalNodes = (
+      snapshot ??
+      flow.current?.getNodes() ??
+      nodesRef.current
+    ).filter((n) => realIds.has(n.id));
+    let current = finalNodes.map((n) =>
       n.id === dragged.id ? { ...n, position: dragged.position } : n,
     );
+    // History replay restores exact snapshots; only a real drop is nudged off
+    // cards it would otherwise cover.
+    if (!snapshot) {
+      const box = (n: Node<FlowData>) => ({
+        id: n.id,
+        ...n.position,
+        width: n.measured?.width ?? 264,
+        height: n.measured?.height ?? 84,
+      });
+      const isMoved = (n: Node<FlowData>) => n.id === dragged.id || n.selected;
+      const offset = clearDropOffset(
+        current.filter(isMoved).map(box),
+        current.filter((n) => !isMoved(n)).map(box),
+      );
+      if (offset.x || offset.y)
+        current = current.map((n) =>
+          isMoved(n)
+            ? {
+                ...n,
+                position: {
+                  x: n.position.x + offset.x,
+                  y: n.position.y + offset.y,
+                },
+              }
+            : n,
+        );
+    }
     nodesRef.current = current;
     setNodes(current);
+    if (
+      gestureRef.current.history !== false &&
+      positionHistory.current.commit(dragStart.current, positionsOf(current))
+    )
+      window.dispatchEvent(
+        new CustomEvent("java-blueprints:graph-source-history", {
+          detail: { command: "clear_redo" },
+        }),
+      );
     if (overview) {
       for (const n of current.filter((n) => n.id === dragged.id || n.selected))
         overviewManualIds.current.add(n.id);
       persistOverview(current);
       return;
     }
-    if (!layout) {
+    const currentLayout = layoutRef.current;
+    if (!currentLayout) {
       setLayoutError("Координаты ещё загружаются; перемещение не отправлено");
       return;
     }
@@ -1529,6 +1664,7 @@ export default function FlowCanvas({
         JSON.stringify([...remembered]),
       );
     } catch {}
+    layoutSaving.current = true;
     try {
       const requestedScope = scope;
       const saved = await api<Layout>(
@@ -1539,22 +1675,25 @@ export default function FlowCanvas({
             analysisId: graph.analysisId,
             methodId,
             sourceMapVersion: graph.sourceMapVersion,
-            layoutVersion: layout.layoutVersion,
+            layoutVersion: currentLayout.layoutVersion,
             positions: current.map((n) => ({
               nodeId: n.id,
               ...n.position,
             })),
-            collapsedNodeIds: layout.collapsedNodeIds,
-            viewport: flow.current?.getViewport() ?? layout.viewport,
+            collapsedNodeIds: currentLayout.collapsedNodeIds,
+            viewport: flow.current?.getViewport() ?? currentLayout.viewport,
           },
         },
       );
       if (scopeRef.current !== requestedScope) return;
+      layoutRef.current = saved;
       setLayout(saved);
       setLayoutError("");
     } catch (e) {
       if (scopeRef.current === scope)
         setLayoutError(e instanceof Error ? e.message : "Ошибка схемы");
+    } finally {
+      layoutSaving.current = false;
     }
   }
   return (
@@ -1566,12 +1705,76 @@ export default function FlowCanvas({
         (spacePan ? " space-pan" : "")
       }
       data-graph-view={overview ? "overview" : "method"}
+      data-scene-logical-nodes={sceneNodes.length}
+      data-scene-logical-edges={edges.length}
+      data-scene-detail={compactOverview ? "overview" : "full"}
       data-routing-state={
         routing.pending ? "pending" : routing.failed ? "limited" : "ready"
       }
       data-provisional-scene={provisional ? "true" : undefined}
       ref={container}
+      tabIndex={0}
+      aria-label="Полотно схемы. Ctrl+Z — отменить, Ctrl+Shift+Z — повторить"
+      onKeyDownCapture={(event) => {
+        if (
+          (event.target as Element).closest(
+            "input,textarea,[contenteditable=true],.monaco-editor",
+          )
+        )
+          return;
+        const command = graphHistoryShortcut(event.nativeEvent);
+        if (!command) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (stale || readOnly || provisional || layoutSaving.current) return;
+        const current = nodesRef.current;
+        const snapshot =
+          command === "undo"
+            ? positionHistory.current.undo(positionsOf(current))
+            : positionHistory.current.redo(positionsOf(current));
+        if (!snapshot) {
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:graph-source-history", {
+              detail: { command },
+            }),
+          );
+          return;
+        }
+        const points = new Map(snapshot.map((point) => [point.id, point]));
+        const next = current.map((node) => {
+          const point = points.get(node.id);
+          return point
+            ? { ...node, position: { x: point.x, y: point.y } }
+            : node;
+        });
+        nodesRef.current = next;
+        setNodes(next);
+        const remembered = new Map(manualPositions.current.get(viewKey));
+        for (const node of next) {
+          const key = nodeKeys.get(node.id);
+          if (key) remembered.set(key, { ...node.position });
+        }
+        manualPositions.current.set(viewKey, remembered);
+        try {
+          localStorage.setItem(
+            `java-blueprints:positions:v2:${viewKey}`,
+            JSON.stringify([...remembered]),
+          );
+        } catch {}
+        gestureRef.current = {
+          scope: scopeRef.current,
+          committed: false,
+          history: false,
+        };
+        if (next[0]) void saveLayout(next[0], next);
+      }}
       onPointerDownCapture={(event) => {
+        if (
+          !(event.target as Element).closest(
+            "button,input,textarea,[contenteditable=true]",
+          )
+        )
+          event.currentTarget.focus({ preventScroll: true });
         const target = (event.target as Element).closest(
           ".react-flow__node-blueprint",
         );
@@ -1700,10 +1903,11 @@ export default function FlowCanvas({
           });
         }}
         nodes={renderedNodes}
-        edges={renderedEdges}
+        edges={compactOverview ? [] : renderedEdges}
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         onNodesChange={changes}
+        nodeDragThreshold={5}
         multiSelectionKeyCode={["Control", "Meta"]}
         selectionKeyCode={["Control", "Shift"]}
         panActivationKeyCode="Space"
@@ -1721,9 +1925,11 @@ export default function FlowCanvas({
           );
         }}
         onNodeDragStart={() => {
+          dragStart.current = positionsOf(nodesRef.current);
           gestureRef.current = { scope: scopeRef.current, committed: false };
         }}
         onSelectionDragStart={() => {
+          dragStart.current = positionsOf(nodesRef.current);
           gestureRef.current = { scope: scopeRef.current, committed: false };
         }}
         onNodeDragStop={(_, node) => void saveLayout(node)}
@@ -1793,10 +1999,17 @@ export default function FlowCanvas({
         nodesConnectable={false}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         minZoom={overview ? 0.03 : 0.15}
-        onlyRenderVisibleElements={sceneNodes.length > 1500}
+        onlyRenderVisibleElements={sceneNodes.length > 150}
         maxZoom={1.5}
         attributionPosition="bottom-left"
       >
+        <OverviewDetail
+          enabled={sceneNodes.length > 150}
+          onChange={setCompactOverview}
+        />
+        {compactOverview && (
+          <FlowOverview boxes={overviewBoxes} edges={renderedEdges} />
+        )}
         {provisional && visualPreview && (
           <ViewportPortal>
             <svg className="graph-preview-connectors" aria-hidden="true">

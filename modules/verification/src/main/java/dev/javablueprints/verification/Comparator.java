@@ -7,6 +7,9 @@ public final class Comparator {
     private Comparator() {}
     public static boolean equal(Observation a, Observation b) { return Objects.equals(a.exitCode(), b.exitCode()) && a.stdout().equals(b.stdout()) && a.stderr().equals(b.stderr()); }
     public static Comparison compare(List<TestCase> cases,List<TestResult> results,Observation bc,Observation cc) {
+        return compare(cases,results,bc,cc,false);
+    }
+    public static Comparison compare(List<TestCase> cases,List<TestResult> results,Observation bc,Observation cc,boolean methodMode) {
         if(cases.isEmpty())throw new IllegalArgumentException("Empty suite");
         if(cases.stream().map(TestCase::id).distinct().count()!=cases.size())throw new IllegalArgumentException("Duplicate case ids");
         int base=0,candidate=0,matched=0;boolean mismatch=false,complete=true;
@@ -25,14 +28,15 @@ public final class Comparator {
                 if(e.truncated())reasons.add("output_limit");
                 if(e.cleanupPending())reasons.add("cleanup_pending");
                 if(e.exitCode()==null&&e.outcome()==ExecutionOutcome.exited)reasons.add("incomplete");
+                if(methodMode && MethodContract.result(e.methodResult())==null) reasons.add("method_result_missing_or_incomplete");
             }
             boolean caseMatched=false,caseMismatch=false;
             if(reasons.isEmpty()) {
                 var b=r.baseExecutions().getFirst();var d=r.candidateExecutions().getFirst();
-                if(r.baseExecutions().stream().anyMatch(e->!equal(b,e))||r.candidateExecutions().stream().anyMatch(e->!equal(d,e)))reasons.add("nondeterministic");
+                if(r.baseExecutions().stream().anyMatch(e->!(methodMode?MethodContract.equal(b,e):equal(b,e)))||r.candidateExecutions().stream().anyMatch(e->!(methodMode?MethodContract.equal(d,e):equal(d,e))))reasons.add("nondeterministic");
                 else if((b.exitCode()!=0||d.exitCode()!=0)&&c.expectedExitCode()==null)reasons.add("nonzero_without_oracle");
                 else {
-                    boolean same=equal(b,d);
+                    boolean same=methodMode?MethodContract.equal(b,d)&&MethodContract.oracle(c,b)&&MethodContract.oracle(c,d):equal(b,d);
                     if(c.expectedExitCode()!=null)same&=Objects.equals(c.expectedExitCode(),b.exitCode())&&Objects.equals(c.expectedExitCode(),d.exitCode());
                     if(c.expectedStdout()!=null)same&=Bytes.text(c.expectedStdout()).equals(b.stdout())&&Bytes.text(c.expectedStdout()).equals(d.stdout());
                     if(c.expectedStderr()!=null)same&=Bytes.text(c.expectedStderr()).equals(b.stderr())&&Bytes.text(c.expectedStderr()).equals(d.stderr());

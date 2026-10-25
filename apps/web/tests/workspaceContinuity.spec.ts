@@ -1,6 +1,25 @@
 import { test, expect, type Page } from "@playwright/test";
 const projectId = "88888888-8888-4888-8888-888888888888";
 async function fixture(page: Page) {
+  const accountId = "workspace-continuity-account";
+  await page.addInitScript((id) => {
+    for (const scope of ["home", "workspace", "settings", "profile"])
+      localStorage.setItem(
+        "java-blueprints:onboarding:v1:" + id + ":" + scope,
+        "done",
+      );
+  }, accountId);
+  await page.addInitScript((id) => {
+    localStorage.setItem(
+      "java-blueprints:window-state:" + id,
+      JSON.stringify({
+        navigationDocked: false,
+        collapsedNavigation: false,
+        focused: "code",
+        maximized: null,
+      }),
+    );
+  }, projectId);
   const mutations: string[] = [];
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
@@ -10,13 +29,19 @@ async function fixture(page: Page) {
     let data: unknown;
     if (path === "/session")
       data = {
-        user: null,
+        user: {
+          id: accountId,
+          username: "continuity_fixture",
+          displayName: "Workspace continuity",
+          emailVerified: true,
+          authMethod: "password",
+        },
         mode: "local",
         csrfToken: "workspace-continuity",
         capabilities: {
           registration: true,
           emailDelivery: false,
-          legacyGuestWorkspace: true,
+          legacyGuestWorkspace: false,
         },
       };
     else if (path === "/capabilities") data = { runner: { available: false } };
@@ -27,9 +52,9 @@ async function fixture(page: Page) {
         headRevisionId: null,
         originalRevisionId: null,
         updatedAt: "2026-10-25T00:00:00Z",
-        role: "local_guest",
-        ownerId: null,
-        visibility: "legacy_local",
+        role: "owner",
+        ownerId: accountId,
+        visibility: "private",
         canEdit: true,
       };
     else if (path === `/projects/${projectId}/revisions`) data = [];
@@ -66,6 +91,13 @@ test("collapsed navigation uses current rectangles for drag ghost and exact drop
     .getByRole("button", { name: "Свернуть навигацию", exact: true })
     .click();
   await expect(navigation).toHaveCSS("height", "40px");
+  await project.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations()
+        .map((animation) => animation.finished.catch(() => {})),
+    );
+  });
   const before = (await project.boundingBox())!,
     grip = (await project.locator(".tile-grip").boundingBox())!;
   await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);

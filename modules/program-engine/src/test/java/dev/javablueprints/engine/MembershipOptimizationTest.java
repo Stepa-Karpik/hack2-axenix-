@@ -94,4 +94,68 @@ class MembershipOptimizationTest {
         var error=assertThrows(EngineException.class,()->propose(source,a,"preserve_behavior"));
         assertEquals("UNSUPPORTED_OPERATION",error.code());
     }
+
+    @Test void indexesStandardLinkedListsAndInterfaceDeclarationsWithImmutableScalarKeys() {
+        for(String owner:List.of("java.util.ArrayList","java.util.LinkedList")) {
+            for(String declared:List.of(owner,"java.util.List")) {
+                String source="class Main { static int search(Integer[] queries) { "+declared+"<Integer> allowed=new "+owner+"<>(); allowed.add(1); allowed.add(-2); allowed.add(null); int result=0; for(Integer query:queries) { if(allowed.contains(query))result++; } return result; } }";
+                var a=inspect(source);
+                assertEquals(1,a.optimizations().size(),source);
+                String candidate=propose(source,a,"preserve_behavior").files().get("Main.java");
+                assertTrue(candidate.contains("java.util.HashSet<java.lang.Integer> jbMembership = new java.util.HashSet<>(allowed);"));
+                assertTrue(candidate.contains("allowed.add(-2)"));
+                assertTrue(candidate.contains("jbMembership.contains(query)"));
+            }
+        }
+    }
+
+    @Test void acceptsOnlyBoundImmutableQueriesAndMatchingLiteralConstruction() {
+        for(var scalar:List.of(new String[]{"Long","long","1L"},new String[]{"Boolean","boolean","true"},new String[]{"Character","char","'Ж'"},new String[]{"Integer","int","7"})) {
+            String source="class Main { static int search("+scalar[1]+" query) { java.util.List<"+scalar[0]+"> allowed=new java.util.LinkedList<>(); allowed.add("+scalar[2]+"); int result=0; while(result<2) { if(allowed.contains(query))result++; else break; } return result; } }";
+            var a=inspect(source);
+            assertEquals(1,a.optimizations().size(),source);
+            assertTrue(propose(source,a,"preserve_behavior").files().get("Main.java").contains("HashSet<java.lang."+scalar[0]+">"));
+        }
+        for(String declaration:List.of("java.util.List<Object> allowed=new java.util.ArrayList<>();", "java.util.List<Integer> allowed=java.util.List.of(1);")) {
+            String source="class Main { static int search(Integer query) { "+declaration+" int result=0; while(result<2) { if(allowed.contains(query))result++; else break; } return result; } }";
+            assertTrue(inspect(source).optimizations().isEmpty(),source);
+        }
+    }
+
+    @Test void preservesEffectfulMethodQuerySourceCountAndShortCircuitPositionExactly() {
+        String source="class Main { static int calls; static String next(String query){calls++;System.out.print(calls);return query;}"
+                +" static int search(String[] queries){ "+setup+" int result=0; for(String query:queries){"
+                +"if(query!=null && allowed.contains(next(query)))result++;"
+                +"if(allowed.contains(next(query)) || allowed.contains(next(null)))result++;} return result; } }";
+        var a=inspect(source);
+        assertEquals(1,a.optimizations().size());
+        assertEquals(3,a.optimizations().getFirst().querySites());
+        String candidate=propose(source,a,"preserve_behavior").files().get("Main.java");
+        assertTrue(candidate.contains("if(query!=null && jbMembership.contains(next(query)))result++;"));
+        assertTrue(candidate.contains("if(jbMembership.contains(next(query)) || jbMembership.contains(next(null)))result++;"));
+        assertEquals(source.split("next\\(",-1).length,candidate.split("next\\(",-1).length);
+        assertTrue(candidate.contains("static String next(String query){calls++;System.out.print(calls);return query;}"));
+    }
+
+    @Test void retainsThrowingQueryAndPrimitiveBoxingWithoutMovingOrDuplicatingCalls() {
+        for(var query:List.of(new String[]{"String","String","\"Aa\"","if(++calls==2)throw new IllegalStateException(\"query\");return value;"},
+                new String[]{"Integer","int","7","calls++;return value;"})) {
+            String source="class Main {static int calls;static "+query[1]+" next("+query[1]+" value){"+query[3]+"}"
+                    +"static int search(){java.util.ArrayList<"+query[0]+"> allowed=new java.util.ArrayList<>();allowed.add("+query[2]+");int result=0;"
+                    +"while(result<3){if(allowed.contains(next("+query[2]+")))result++;else break;}return result;} }";
+            var a=inspect(source);assertEquals(1,a.optimizations().size(),source);
+            String candidate=propose(source,a,"preserve_behavior").files().get("Main.java");
+            assertTrue(candidate.contains("if(jbMembership.contains(next("+query[2]+")))result++;else break;"));
+            assertEquals(source.split("next\\(",-1).length,candidate.split("next\\(",-1).length);
+        }
+    }
+
+    @Test void effectfulQueriesStillRefuseListEscapeMutationAndUnknownResultTypes() {
+        for(String source:List.of(
+                "class Main {static String next(java.util.List<String> list){list.clear();return \"Aa\";}static int search(){"+setup+"int result=0;while(result<2){if(allowed.contains(next(allowed)))result++;else break;}return result;}}",
+                "class Main {static Object next(){return \"Aa\";}static int search(){"+setup+"int result=0;while(result<2){if(allowed.contains(next()))result++;else break;}return result;}}",
+                "class Main {static String next(){return \"Aa\";}static int search(){"+setup+"int result=0;while(result<2){allowed.add(\"change\");if(allowed.contains(next()))result++;else break;}return result;}}",
+                "class Main {static int search(){"+setup+"int result=0;while(result<2){if(allowed.contains(missing()))result++;else break;}return result;}}"))
+            assertTrue(inspect(source).optimizations().isEmpty(),source);
+    }
 }

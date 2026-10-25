@@ -16,6 +16,7 @@ class AssistantControllerTest {
     var controller = new AssistantController(accounts, service);
     when(accounts.require(r)).thenThrow(new ApiError(401, "AUTH_REQUIRED", "Sign in required"));
     assertThrows(ApiError.class, () -> controller.status(r));
+    assertThrows(ApiError.class, () -> controller.refreshCodeProposal(id(),id(),r));
     assertThrows(ApiError.class, () -> controller.list(r));
     assertThrows(ApiError.class, () -> controller.create(r));
     assertThrows(ApiError.class, () -> controller.get(id(), r));

@@ -77,6 +77,145 @@ class AssistantIntegrationTest {
                 "Предлагаю действие", List.of(AssistantActions.validate(type, args))));
   }
 
+  String username(String actor) {
+    return w.db.queryForObject("SELECT username FROM accounts WHERE id=?",String.class,uuid(actor));
+  }
+
+  Map<String,Object> offer(String actor,String cid,String type,Map<String,Object> args,Map<String,Object> context) {
+    response(type,args);
+    return action(service.send(actor,cid,map("content","Выполнить действие","context",context)));
+  }
+
+  @Test
+  void friendActionsRequireRecipientOwnershipAndCannotReplayOrUseRecreatedRelationship() {
+    String alice=account(),bob=account(),outsider=account(),cid=conversation(alice);
+    var offered=offer(alice,cid,"friend_request",map("username",username(bob)),map());
+    String aid=str(offered,"id");
+    assertTrue(w.db.queryForList("SELECT id FROM friend_requests WHERE sender_id=?",uuid(alice)).isEmpty());
+    assertThrows(ApiError.class,()->service.act(outsider,cid,aid,map()));
+    service.act(alice,cid,aid,map());
+    String request=w.db.queryForObject("SELECT id::text FROM friend_requests WHERE sender_id=? AND recipient_id=?",String.class,uuid(alice),uuid(bob));
+    service.act(alice,cid,aid,map());
+    assertEquals(1,w.db.queryForObject("SELECT count(*) FROM friend_requests WHERE id=?",Integer.class,uuid(request)));
+    assertThrows(ApiError.class,()->new AssistantSocialActions(service.accountActions).snapshot(alice,"friend_accept",map("requestId",request)));
+    String bc=conversation(bob);
+    var accept=offer(bob,bc,"friend_accept",map("requestId",request),map());
+    service.act(bob,bc,str(accept,"id"),map());
+    assertTrue(service.accountActions.friends(alice,bob));
+    String removeCid=conversation(alice);
+    var remove=offer(alice,removeCid,"friend_remove",map("username",username(bob)),map());
+    service.accountActions.removeFriendActor(alice,bob);
+    w.db.update("INSERT INTO friendships(first_id,second_id,created_at) VALUES(least(?::uuid,?::uuid),greatest(?::uuid,?::uuid),now()+interval '1 second')",alice,bob,alice,bob);
+    assertEquals("ASSISTANT_ACTION_STALE",assertThrows(ApiError.class,()->service.act(alice,removeCid,str(remove,"id"),map())).code);
+    assertTrue(service.accountActions.friends(alice,bob));
+    String dc=conversation(outsider);
+    service.accountActions.inviteActor(bob,username(outsider));
+    String declineRequest=w.db.queryForObject("SELECT id::text FROM friend_requests WHERE sender_id=? AND recipient_id=?",String.class,uuid(bob),uuid(outsider));
+    var decline=offer(outsider,dc,"friend_decline",map("requestId",declineRequest),map());
+    service.act(outsider,dc,str(decline,"id"),map());
+    assertTrue(w.db.queryForList("SELECT id FROM friend_requests WHERE id=?",uuid(declineRequest)).isEmpty());
+    assertFalse(service.accountActions.friends(bob,outsider));
+  }
+
+  @Test
+  void roleGrantChangeRevokeRequiresExactTypedConfirmationAndBoundMembership() {
+    String owner=account(),friend=account(),stranger=account(),pid=project(owner);
+    w.db.update("INSERT INTO friendships(first_id,second_id) VALUES(least(?::uuid,?::uuid),greatest(?::uuid,?::uuid))",owner,friend,owner,friend);
+    String cid=conversation(owner);
+    var grant=offer(owner,cid,"project_role",map("projectId",pid,"username",username(friend),"role","viewer"),map("projectId",pid));
+    for(String value:List.of("Да","да ","yes")) assertThrows(ApiError.class,()->service.act(owner,cid,str(grant,"id"),map("confirmation",value)));
+    service.act(owner,cid,str(grant,"id"),map("confirmation","да"));
+    assertEquals("viewer",w.db.queryForObject("SELECT role FROM project_members WHERE project_id=? AND account_id=?",String.class,uuid(pid),uuid(friend)));
+    String cc=conversation(owner);
+    var change=offer(owner,cc,"project_role",map("projectId",pid,"username",username(friend),"role","editor"),map("projectId",pid));
+    w.db.update("UPDATE project_members SET role='editor' WHERE project_id=? AND account_id=?",uuid(pid),uuid(friend));
+    assertEquals("ASSISTANT_ACTION_STALE",assertThrows(ApiError.class,()->service.act(owner,cc,str(change,"id"),map("confirmation","да"))).code);
+    String rc=conversation(owner);
+    var revoke=offer(owner,rc,"project_role",map("projectId",pid,"username",username(friend),"role","remove"),map("projectId",pid));
+    service.act(owner,rc,str(revoke,"id"),map("confirmation","да"));
+    assertTrue(w.db.queryForList("SELECT role FROM project_members WHERE project_id=? AND account_id=?",uuid(pid),uuid(friend)).isEmpty());
+    assertThrows(ApiError.class,()->new AssistantSocialActions(service.accountActions).snapshot(stranger,"project_role",map("projectId",pid,"username",username(friend),"role","viewer")));
+    assertThrows(ApiError.class,()->new AssistantSocialActions(service.accountActions).snapshot(owner,"project_role",map("projectId",pid,"username",username(stranger),"role","editor")));
+  }
+
+  @Test
+  void codeProposalRequiresExplicitSourceConsentExactTextAndIsDetachedWithIsolatedCompileGate() {
+    String owner=account(),viewer=account(),pid=project(owner),cid=conversation(owner);
+    String source="class Main { static int value() { return 1; } }";
+    var base=w.save(pid,"empty",mapTexts("Main.java",source),Map.of(),"fixture","semantic_edit",true);
+    String rid=str(base,"id"); int start=source.indexOf("1;");
+    var args=map("baseRevisionId",rid,"filePath","Main.java","startOffset",start,"endOffset",start+1,"expectedText","1","replacement","2","intent","semantic_edit");
+    assertFalse(service.facts(owner,map("projectId",pid,"filePath","Main.java")).containsKey("selectedSource"));
+    var facts=service.facts(owner,map("projectId",pid,"filePath","Main.java","includeSource",true));
+    assertEquals(source,facts.get("selectedSource"));
+    assertNull(service.binding(owner,AssistantActions.validate("code_edit",args),service.facts(owner,map("projectId",pid,"filePath","Main.java"))));
+    var bad=new LinkedHashMap<>(args); bad.put("expectedText","3");
+    assertThrows(ApiError.class,()->AssistantCodeProposals.replacement(w,pid,bad));
+    assertThrows(ApiError.class,()->AssistantCodeProposals.requireEditor(w,viewer,pid));
+    var offered=offer(owner,cid,"code_edit",args,map("projectId",pid,"filePath","Main.java","includeSource",true));
+    var result=service.act(owner,cid,str(offered,"id"),map());
+    var command=(Map<?,?>)result.get("command"); var commandArgs=(Map<String,Object>)command.get("args");
+    String proposalId=str(commandArgs,"proposalId"),jobId=str(commandArgs,"jobId");
+    var proposal=w.resource(pid,proposalId,"proposal");
+    assertEquals(rid,w.project(pid).get("headRevisionId"));
+    assertNotEquals(rid,proposal.get("candidateRevisionId"));
+    assertEquals("compile",w.job(pid,jobId).get("type"));
+    assertFalse(service.act(owner,cid,str(offered,"id"),map()).containsKey("command"));
+    String attempt=id();
+    var execution=map("phase","compile","outcome","exited","exitCode",0,"truncated",false,"cleanupPending",false,"jobId",jobId,"attemptId",attempt);
+    var compileResult=map("resultKind","compilation","revisionId",proposal.get("candidateRevisionId"),"executionProfileId","java21-v1","execution",execution);
+    w.db.update("UPDATE jobs SET status='succeeded',attempt_id=?,result=?::jsonb WHERE id=?",uuid(attempt),w.encode(compileResult),uuid(jobId));
+    var ready=new AssistantCodeProposals(w).refresh(owner,pid,proposalId);
+    assertEquals("ready",ready.get("status"));
+    assertEquals("passed",((Map<?,?>)ready.get("checks")).get("compileStatus"));
+    assertEquals(rid,w.project(pid).get("headRevisionId"));
+    assertThrows(ApiError.class,()->new AssistantCodeProposals(w).refresh(viewer,pid,proposalId));
+  }
+
+  Map<String,String> mapTexts(String path,String source) { return Map.of(path,source); }
+
+  @Test
+  void sourceOptInUsesOnlyVerifiedCurrentMethodForLargeFiles() {
+    String owner=account(),pid=project(owner);
+    String prefix="/*"+"private unrelated comment ".repeat(600)+"*/\nclass Main { ";
+    String method="static int value() { return 1; }";
+    String source=prefix+method+" }";
+    var rev=w.save(pid,"empty",mapTexts("Main.java",source),Map.of(),"fixture","semantic_edit",true);
+    String rid=str(rev,"id");
+    var analysis=new dev.javablueprints.engine.ProgramEngine().inspect(
+        new dev.javablueprints.engine.EngineModel.SourceBundle(rid,Map.of("Main.java",source)));
+    String methodId=analysis.graph().methods().stream().filter(m->m.sourceRange().startOffset()==prefix.length()).findFirst().orElseThrow().id();
+    w.putResource(pid,analysis.id(),"analysis",analysis);
+    var noConsent=service.facts(owner,map("projectId",pid,"filePath","Main.java","methodId",methodId));
+    assertFalse(noConsent.containsKey("selectedSource"));
+    var facts=service.facts(owner,map("projectId",pid,"filePath","Main.java","methodId",methodId,"includeSource",true));
+    assertEquals(method,facts.get("selectedSource"));
+    assertEquals(prefix.length(),facts.get("sourceStartOffset"));
+    assertEquals(prefix.length()+method.length(),facts.get("sourceEndOffset"));
+    assertFalse(facts.toString().contains("private unrelated"));
+    var wrong=service.facts(owner,map("projectId",pid,"filePath","Main.java","methodId","unknown","includeSource",true));
+    assertEquals(false,wrong.get("sourceIncluded"));
+    var outside=AssistantActions.validate("code_edit",map("baseRevisionId",rid,"filePath","Main.java","startOffset",0,"endOffset",2,"expectedText","/*","replacement","//","intent","semantic_edit"));
+    assertNull(service.binding(owner,outside,facts));
+  }
+
+  @Test
+  void failedTruncatedWrongAttemptOrWrongRevisionCompilationCannotAuthorizeCandidate() {
+    String owner=account(),pid=project(owner),source="class Main { int value = 1; }";
+    var base=w.save(pid,"empty",mapTexts("Main.java",source),Map.of(),"fixture","semantic_edit",true);
+    int offset=source.indexOf("1;");
+    var args=map("baseRevisionId",base.get("id"),"filePath","Main.java","startOffset",offset,"endOffset",offset+1,"expectedText","1","replacement","2","intent","preserve_behavior");
+    for(String variant:List.of("nonzero","truncated","cleanup","wrong_attempt","wrong_revision","cancelled")) {
+      var proposal=w.tx.execute(tx->new AssistantCodeProposals(w).prepare(owner,pid,args));
+      String jobId=str(proposal,"jobId"),attempt=id();
+      var execution=map("phase","compile","outcome","exited","exitCode",variant.equals("nonzero")?1:0,"truncated",variant.equals("truncated"),"cleanupPending",variant.equals("cleanup"),"jobId",jobId,"attemptId",variant.equals("wrong_attempt")?id():attempt);
+      var result=map("resultKind","compilation","revisionId",variant.equals("wrong_revision")?id():proposal.get("candidateRevisionId"),"executionProfileId","java21-v1","execution",execution);
+      w.db.update("UPDATE jobs SET status=?,attempt_id=?,result=?::jsonb WHERE id=?",variant.equals("cancelled")?"cancelled":"succeeded",uuid(attempt),w.encode(result),uuid(jobId));
+      assertEquals("rejected",new AssistantCodeProposals(w).refresh(owner,pid,str(proposal,"id")).get("status"),variant);
+      assertEquals(base.get("id"),w.project(pid).get("headRevisionId"));
+    }
+  }
+
   @Test
   void durableHistoryIsAccountIsolatedAndIgnoresClientPassStatus() {
     String owner = account(), other = account(), pid = project(owner), cid = conversation(owner);
@@ -151,9 +290,9 @@ class AssistantIntegrationTest {
 
   @Test
   void executableWorkspaceCommandsAreBoundToProjectAndClaimedOnce() {
-    for(String type:List.of("run_program","workspace_action")) {
+    for(String type:List.of("run_program","workspace_action","layout_action")) {
       String actor=account(),other=account(),pid=project(actor),cid=conversation(actor);
-      response(type,type.equals("workspace_action")?map("action","create_file"):map());
+      response(type,type.equals("workspace_action")?map("action","create_file"):type.equals("layout_action")?map("operation","hide","panel","analysis"):map());
       var a=action(service.send(actor,cid,map("content","Действие","context",map("projectId",pid))));
       String aid=a.get("id").toString();
       assertThrows(ApiError.class,()->service.act(other,cid,aid,map()));

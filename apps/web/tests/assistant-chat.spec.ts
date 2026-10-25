@@ -278,6 +278,55 @@ test("assistant is absent for anonymous visitors", async ({ page }) => {
   ).toHaveCount(0);
 });
 
+test("assistant source context is opt-in and role access requires exact typed confirmation", async ({ page }) => {
+  await fixture(page);
+  const sent: any[] = [], confirmations: any[] = [];
+  await page.route("**/api/v1/assistant/conversations/*/messages", async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ json: { data: { id: "conversation-fixture", title: "Доступ", messages: [
+      { id: "request", role: "user", content: "Дай доступ friend", createdAt: "2026-10-25T10:00:00Z" },
+      { id: "answer", role: "assistant", content: "Подтвердите точные изменения.", createdAt: "2026-10-25T10:00:01Z", actions: [
+        { id: "role", type: "project_role", args: { projectId: "fixture-project", username: "friend", role: "editor" }, risk: "typed", label: "Изменить доступ к проекту", description: "Проект fixture-project: доступ @friend станет editor. Введите да.", status: "pending" },
+        { id: "edit", type: "code_edit", args: { filePath: "Main.java", expectedText: "return 1;", replacement: "return 2;" }, risk: "confirm", label: "Подготовить правку кода", description: "Отдельный кандидат Main.java; исходная версия не изменится", status: "pending" },
+      ] },
+    ] } } });
+  });
+  await page.route("**/api/v1/assistant/conversations/*/actions/role", async (route) => {
+    confirmations.push(route.request().postDataJSON());
+    await route.fulfill({ json: { data: { action: { id: "role", type: "project_role", status: "completed" } } } });
+  });
+  await page.goto("/projects");
+  await page.getByRole("button", { name: "Открыть беседу с помощником" }).click();
+  const chat = page.getByRole("dialog", { name: "Помощник — беседа" });
+  const consent=chat.getByRole("checkbox",{ name: /Передать DeepSeek/ });
+  await expect(consent).not.toBeChecked();
+  await chat.getByLabel("Сообщение помощнику").fill("Дай доступ friend");
+  await chat.getByRole("button",{name:"Отправить сообщение"}).click();
+  await expect.poll(()=>sent.length).toBe(1);
+  expect(sent[0].context.includeSource).toBe(false);
+  const role=chat.locator(".assistant-action").filter({hasText:"доступ @friend станет editor"});
+  const confirm=role.getByRole("button",{name:"Изменить доступ к проекту",exact:true});
+  await expect(confirm).toBeDisabled();
+  await role.getByRole("textbox").fill("Да");
+  await expect(confirm).toBeDisabled();
+  await role.getByRole("textbox").fill("да ");
+  await expect(confirm).toBeDisabled();
+  expect(confirmations).toHaveLength(0);
+  await role.getByRole("textbox").fill("да");
+  await confirm.click();
+  await expect.poll(()=>confirmations.length).toBe(1);
+  expect(confirmations[0]).toEqual({confirmation:"да"});
+  await expect(role.getByText("Выполнено",{exact:true})).toBeVisible();
+  await chat.getByText("Предлагаемый фрагмент · Main.java",{exact:true}).click();
+  await expect(chat.getByText("return 1;",{exact:true})).toBeVisible();
+  await expect(chat.getByText("return 2;",{exact:true})).toBeVisible();
+  await consent.check();
+  await chat.getByLabel("Сообщение помощнику").fill("Подготовь правку");
+  await chat.getByRole("button",{name:"Отправить сообщение"}).click();
+  await expect.poll(()=>sent.length).toBe(2);
+  expect(sent[1].context.includeSource).toBe(true);
+});
+
 test("assistant tracks unread replies and stop prevents a late reply from replacing the conversation", async ({
   page,
 }) => {

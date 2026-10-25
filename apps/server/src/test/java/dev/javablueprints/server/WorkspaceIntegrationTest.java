@@ -1272,22 +1272,30 @@ class WorkspaceIntegrationTest {
   }
 
   @Test
-  void expiredLeaseFinalizesAttemptAndRejectsProposal() {
+  void expiredLeaseFinalizesAttemptAndRejectsProposal() throws Exception {
     String p = w.createProject("lease-regression").get("id").toString(),
         j = id(),
         attempt = id(),
         proposal = id();
     w.db.update(
         "INSERT INTO"
-            + " jobs(id,project_id,type,status,input,attempt_id,lease_until,started_at)VALUES(?,?,'change','running','{}',?,now()-interval"
-            + " '1 second',now()-interval '1 minute')",
+            + " jobs(id,project_id,type,status,input,attempt_id,lease_until,started_at)VALUES(?,?,'change','running','{}',?,now()+interval"
+            + " '1 minute',now()-interval '1 minute')",
         uuid(j),
         uuid(p),
         uuid(attempt));
     w.db.update(
         "INSERT INTO job_attempts(id,job_id,status)VALUES(?,?,'running')", uuid(attempt), uuid(j));
     w.putResource(p, proposal, "proposal", map("id", proposal, "jobId", j, "status", "queued"));
-    worker.expireLeases();
+    w.db.update("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id=?", uuid(j));
+    // The scheduled worker can hold the row selected with SKIP LOCKED.
+    // Wait for that transaction to commit before checking its terminal result.
+    long expires = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+    do {
+      worker.expireLeases();
+      if ("failed".equals(w.job(p, j).get("status"))) break;
+      Thread.sleep(50);
+    } while (System.nanoTime() < expires);
     assertEquals("failed", w.job(p, j).get("status"));
     assertEquals(
         "failed",

@@ -5,11 +5,13 @@ if(-not $env:JAVA_HOME){$jbPortable=Get-ChildItem "$jbRoot/.local/tools/jdk21" -
 if($env:JAVA_HOME){$env:Path="$env:JAVA_HOME/bin;$env:Path"}
 $env:MAVEN_USER_HOME="$jbRoot/.local/cache/maven-wrapper"
 if(-not(Test-Path .env)){Copy-Item .env.example .env}
-$jbConfig=Get-Content .env -Raw
+# Read as UTF-8 explicitly: Windows PowerShell defaults to the ANSI codepage, and
+# writing that text back as UTF-8 re-encoded non-ASCII comments on every run.
+$jbConfig=[IO.File]::ReadAllText("$jbRoot/.env",[Text.UTF8Encoding]::new($false))
 if($jbConfig -match '(?m)^JB_DB_PASSWORD=(?:replace_with_local_random_secret)?\s*$'){$jbSecret=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));$jbConfig=[regex]::Replace($jbConfig,'(?m)^JB_DB_PASSWORD=.*$',"JB_DB_PASSWORD=$jbSecret")}
 if($jbConfig -match '(?m)^JB_RUNNER_CONTROLLER_TOKEN=\s*$'){$jbSecret=[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32));$jbConfig=[regex]::Replace($jbConfig,'(?m)^JB_RUNNER_CONTROLLER_TOKEN=.*$',"JB_RUNNER_CONTROLLER_TOKEN=$jbSecret")}
 [IO.File]::WriteAllText("$jbRoot/.env",$jbConfig,[Text.UTF8Encoding]::new($false))
-foreach($jbLine in Get-Content .env){if($jbLine -match '^([A-Z][A-Z0-9_]*)=(.*)$'){[Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')}}
+foreach($jbLine in Get-Content .env -Encoding UTF8){if($jbLine -match '^([A-Z][A-Z0-9_]*)=(.*)$'){[Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process')}}
 # Keep this project distribution awake while native Windows Java accesses its database.
 $jbKeepaliveFile=Join-Path $jbRoot '.local/wsl-keepalive.pid'
 $jbExistingPid=if(Test-Path $jbKeepaliveFile){Get-Content $jbKeepaliveFile -ErrorAction SilentlyContinue}else{$null}

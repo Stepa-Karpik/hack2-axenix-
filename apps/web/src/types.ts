@@ -81,6 +81,75 @@ export interface Graph {
     certainty?: "exact" | "conservative" | null;
     reason?: string | null;
   }[];
+  initializerContexts?: InitializerContext[];
+  initializationOrders?: InitializationOrder[];
+}
+export interface InitializationStep {
+  kind:
+    | "field_initializer"
+    | "static_initializer_block"
+    | "instance_initializer_block"
+    | "this_call"
+    | "super_call"
+    | "implicit_super_call"
+    | "constructor_body";
+  label: string;
+  contextId: string | null;
+  methodId: string | null;
+  sourceRange: SourceRange | null;
+}
+export interface InitializationOrder {
+  typeDeclarationId: string;
+  typeName: string;
+  staticPhase: InitializationStep[];
+  constructors: {
+    methodId: string | null;
+    label: string;
+    implicitDefault: boolean;
+    delegation: "this" | "super" | "implicit_super";
+    steps: InitializationStep[];
+  }[];
+  coverage: "declared_order" | "partial";
+  reason: string;
+}
+export interface InitializerNode {
+  id: string;
+  revisionId: string;
+  analysisId: string;
+  contextId: string;
+  kind: string;
+  label: string;
+  sourceRange: SourceRange;
+  astBinding: string;
+  parentId: string | null;
+  executionRole: string;
+  editableFields: string[];
+  editableFieldRanges: Record<string, SourceRange>;
+  allowedOperations: string[];
+}
+export interface InitializerContext {
+  id: string;
+  kind:
+    | "field_initializer"
+    | "static_initializer_block"
+    | "instance_initializer_block";
+  ownerTypeDeclarationId: string;
+  fieldDeclarationId: string | null;
+  fieldSymbolId: string | null;
+  label: string;
+  sourceRange: SourceRange;
+  declarationRange: SourceRange;
+  effectiveStatic: boolean;
+  effectiveFinal: boolean;
+  memberIndex: number;
+  declaratorIndex: number | null;
+  streamIndex: number;
+  constantStatus: string;
+  projectionKind: string;
+  coverage: string;
+  reason: string | null;
+  nodes: InitializerNode[];
+  edges: Graph["edges"];
 }
 export interface Diagnostic {
   id: string;
@@ -171,6 +240,13 @@ export interface TestResult {
   difference?: unknown;
 }
 export interface Report {
+  id?: string;
+  mode?: string;
+  methodTarget?: {
+    ownerType: string;
+    methodName: string;
+    parameterTypes: string[];
+  };
   completed?: number;
   wallTimeMs?: number;
   interactive?: boolean;
@@ -255,6 +331,7 @@ export interface ExtractionSummary {
   isStatic: boolean;
 }
 export interface Proposal {
+  origin?: string;
   extraction?: ExtractionSummary | null;
   decomposition?: {
     filePath: string;

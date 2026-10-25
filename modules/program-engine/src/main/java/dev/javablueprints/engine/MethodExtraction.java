@@ -23,7 +23,10 @@ final class MethodExtraction {
         if (!(node instanceof Statement) || !(node.getParentNode().orElse(null) instanceof BlockStmt)) return false;
         var method=node.findAncestor(MethodDeclaration.class).orElse(null);
         return method!=null && method.getParentNode().orElse(null) instanceof ClassOrInterfaceDeclaration owner
-                && !owner.isInterface() && method.getTypeParameters().isEmpty();
+                && !owner.isInterface() && method.getTypeParameters().isEmpty()
+                // Same capture refusal as rewrite(): do not advertise an operation that must fail.
+                && method.findAll(LambdaExpr.class).isEmpty() && method.findAll(LocalClassDeclarationStmt.class).isEmpty()
+                && method.findAll(ObjectCreationExpr.class).stream().noneMatch(n->n.getAnonymousClassBody().isPresent());
     }
     static Rewrite rewrite(SourceBundle bundle, Analysis analysis, GraphNode start, Node first,
                            GraphNode end, Node last, Function<Node,SourceRange> range, String name) {

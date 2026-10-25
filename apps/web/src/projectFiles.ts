@@ -245,3 +245,15 @@ export function remapModels(
     ]),
   );
 }
+/**
+ * Context for methods declared inside a method body (local or anonymous classes),
+ * e.g. "Main.main().new Comparator<Integer>(){}#1.compare" -> "main() · new Comparator<Integer>() #1".
+ * Ordinary and member-class methods return null.
+ */
+export function nestedMethodOwner(fullyQualifiedName: string): string | null {
+  const at = fullyQualifiedName.indexOf("().");
+  if (at < 0) return null;
+  const start = fullyQualifiedName.lastIndexOf(".", at) + 1;
+  const owner = fullyQualifiedName.slice(start, fullyQualifiedName.lastIndexOf("."));
+  return owner.replace(/\(\)\{\}#(\d+)/g, "() #$1").replace("().", "() · ");
+}

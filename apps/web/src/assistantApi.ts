@@ -1,4 +1,5 @@
 import { api } from "./api";
+import type { Proposal } from "./types";
 import type {
   AssistantAction,
   AssistantCommand,
@@ -11,6 +12,8 @@ const conversationPath = (id: string) =>
 const actionPath = (cid: string, aid: string) =>
   `${conversationPath(cid)}/actions/${encodeURIComponent(aid)}`;
 export const assistantApi = {
+  refreshCodeProposal: (projectId: string, proposalId: string) =>
+    api<Proposal>(`/assistant/projects/${encodeURIComponent(projectId)}/code-proposals/${encodeURIComponent(proposalId)}/refresh`, { method: "POST", body: {} }),
   status: (signal?: AbortSignal) =>
     api<{ configured: boolean; model: string }>("/assistant/status", {
       signal,

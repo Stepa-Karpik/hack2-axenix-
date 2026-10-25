@@ -1,0 +1,143 @@
+.initializer-list {
+  padding: 10px 4px;
+  border-top: 1px solid var(--border);
+}
+.initializer-list h3 {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 8px 8px;
+}
+.initializer-list button {
+  display: block;
+  text-align: left;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+}
+.initializer-list button.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.initializer-view {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+.initializer-caption {
+  position: absolute;
+  left: calc(var(--canvas-left, 0px) + 22px);
+  top: calc(var(--canvas-top, 78px) + 85px);
+  width: max(150px, calc(var(--canvas-width, 100%) - 44px));
+  max-height: 76px;
+  overflow: auto;
+  z-index: 2;
+  display: grid;
+  gap: 5px;
+  flex: none;
+}
+.initializer-caption span,
+.initializer-caption p {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.initializer-flow {
+  position: absolute;
+  inset: 0;
+}
+.initializer-flow .react-flow {
+  background: transparent;
+}
+.initializer-flow .react-flow__controls {
+  left: calc(var(--canvas-left, 0px) + var(--canvas-width, 100%) - 104px);
+  top: calc(var(--canvas-top, 0px) + var(--canvas-height, 100%) - 42px);
+  bottom: auto;
+  display: flex;
+  flex-direction: row;
+}
+.initializer-flow .react-flow__controls-button {
+  background: var(--surface);
+  color: var(--text);
+  fill: currentColor;
+  border-color: var(--border);
+}
+.initializer-flow .initializer-node {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  font: 12px/1.5 monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.initializer-flow .initializer-node.selected {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.initializer-flow .initializer-expression {
+  border-color: var(--accent);
+}
+.initializer-inspector {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.initializer-inspector h3,
+.initializer-inspector p {
+  margin: 0;
+}
+.initializer-inspector pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.initializer-inspector form {
+  display: grid;
+  gap: 10px;
+}
+.initializer-inspector textarea {
+  min-height: 100px;
+  resize: vertical;
+  font-family: monospace;
+}
+.initialization-order {
+  margin: 8px 8px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.initialization-order summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.initialization-order h4 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+}
+.initialization-order p {
+  margin: 6px 0 2px;
+  color: var(--muted);
+}
+.initialization-order ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.initialization-order li {
+  padding: 1px 0;
+}
+.initialization-order li button,
+.initialization-order li span {
+  padding: 2px 4px;
+  overflow-wrap: anywhere;
+}
+.initialization-order small {
+  color: var(--muted);
+  margin-right: 4px;
+}
+.initialization-order-scope {
+  font-size: 11px;
+}

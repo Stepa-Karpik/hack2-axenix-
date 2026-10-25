@@ -64,6 +64,11 @@ function FriendsManager() {
       epoch.current++;
     };
   }, [session?.user?.id]);
+  useEffect(() => {
+    const changed = () => { if (session?.user) void load(); };
+    window.addEventListener("java-blueprints:assistant-server-changed", changed);
+    return () => window.removeEventListener("java-blueprints:assistant-server-changed", changed);
+  }, [session?.user?.id]);
   async function mutate(path: string, method = "POST", body: unknown = {}) {
     const ticket = epoch.current;
     if (lock.current) return;

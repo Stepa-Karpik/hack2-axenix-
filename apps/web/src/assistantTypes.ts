@@ -11,6 +11,13 @@ export type AssistantActionType =
   | "set_visibility"
   | "pin_project"
   | "update_profile"
+  | "friend_request"
+  | "friend_accept"
+  | "friend_decline"
+  | "friend_remove"
+  | "project_role"
+  | "code_edit"
+  | "layout_action"
   | "explain";
 export interface AssistantCommand {
   type: AssistantActionType;

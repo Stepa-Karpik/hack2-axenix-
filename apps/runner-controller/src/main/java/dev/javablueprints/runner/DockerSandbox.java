@@ -12,6 +12,10 @@ import java.util.function.BooleanSupplier;
 /** Trusted fixed Docker template. Input bytes are copied; no host bind mounts exist. */
 public final class DockerSandbox {
     static final String LABEL = "dev.javablueprints.sandbox=true";
+    // Docker storage operations can lag on WSL independently of Java execution.
+    // Keep those bounded without charging their latency to the program's 5s limit.
+    static final long ENGINE_SETUP_MS = 30_000;
+    static final long ENGINE_CLEANUP_MS = 45_000;
     private final List<String> prefix;
     private final String namespace;
     private final Set<String> pendingCleanup=ConcurrentHashMap.newKeySet();
@@ -34,11 +38,13 @@ public final class DockerSandbox {
         for(String id:new String(r.stdout()).split("\\s+")) if(!id.isBlank() && id.matches("[a-f0-9]{12,64}")) remove(id);
     }
     public boolean remove(String name) {
-        try {boolean removed=command(List.of("rm","-f",name),new byte[0],10_000,()->false).exit()==0;if(removed)pendingCleanup.remove(name);else pendingCleanup.add(name);return removed;} catch(Exception e) {pendingCleanup.add(name);return false;}
+        try {boolean removed=command(List.of("rm","-f",name),new byte[0],ENGINE_CLEANUP_MS,()->false).exit()==0;if(removed)pendingCleanup.remove(name);else pendingCleanup.add(name);return removed;} catch(Exception e) {pendingCleanup.add(name);return false;}
     }
     public void retryCleanup(){for(String name:List.copyOf(pendingCleanup))remove(name);}
     public boolean cleanupPending(){return !pendingCleanup.isEmpty();}
-    public record Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending,ExecutionMetrics metrics) {}
+    public record Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending,ExecutionMetrics metrics,Bytes methodResult) {
+        public Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending,ExecutionMetrics metrics) {this(outcome,exit,stdout,stderr,truncated,classes,cleanupPending,metrics,null);}
+    }
     public Result execute(Submit submit,Map<String,byte[]> classes,BooleanSupplier cancelled) {
         return execute(submit,classes,cancelled,null);
     }
@@ -49,13 +55,14 @@ public final class DockerSandbox {
         byte[] stdout=new byte[0],stderr=new byte[0]; boolean truncated=false,clean=true;
         Map<String,byte[]> output=Map.of();
         ExecutionMetrics metrics=null;
+        Bytes methodResult=null;
         try {
             Map<String,byte[]> files=new TreeMap<>();
             if(spec.phase()==Phase.compile) spec.sources().forEach((p,b)->files.put(p,b.decode(1024*1024))); else files.putAll(classes);
             List<String> create=new ArrayList<>(List.of("create","--name",name,"--label",LABEL,"--label","dev.javablueprints.namespace="+namespace,"--label","dev.javablueprints.job="+submit.jobId(),"--label","dev.javablueprints.attempt="+submit.attemptId(),"--network","none","--read-only","--user","65534:65534","--cap-drop","ALL","--security-opt","no-new-privileges:true","--memory","512m","--memory-swap","512m","--cpus","1","--pids-limit","128","--ipc","private","--ulimit","core=0","--tmpfs","/workspace:rw,nosuid,nodev,size=64m,mode=1777","--tmpfs","/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777","--workdir","/workspace","--env","LANG=C.UTF-8","--env","LC_ALL=C.UTF-8","--env","TZ=UTC","--entrypoint","/usr/bin/sleep",IMAGE,"infinity"));
-            require(command(create,new byte[0],15_000,cancelled));
-            require(command(List.of("start",name),new byte[0],10_000,cancelled));
-            require(command(List.of("exec","-i",name,"tar","--no-same-owner","--no-same-permissions","-xf","-","-C","/workspace"),ClassArchive.pack(files),10_000,cancelled));
+            require(command(create,new byte[0],ENGINE_SETUP_MS,cancelled));
+            require(command(List.of("start",name),new byte[0],ENGINE_SETUP_MS,cancelled));
+            require(command(List.of("exec","-i",name,"tar","--no-same-owner","--no-same-permissions","-xf","-","-C","/workspace"),ClassArchive.pack(files),ENGINE_SETUP_MS,cancelled));
             List<String> args=new ArrayList<>(List.of("exec"));
             // An empty fixed input needs no attached stream. Closing an already
             // empty CLI pipe can race Docker's attach and leave System.in open.
@@ -80,8 +87,12 @@ public final class DockerSandbox {
             metrics=new ExecutionMetrics(executionWallMs,peak,"cgroup-v2-container-lifetime-including-setup-and-probe");
             outcome=cancelled.getAsBoolean()?ExecutionOutcome.cancelled:r.limit()?ExecutionOutcome.output_limit:r.timeout()?ExecutionOutcome.timeout:oom?ExecutionOutcome.oom:r.exit()==0?ExecutionOutcome.exited:spec.phase()==Phase.compile?ExecutionOutcome.compile_error:ExecutionOutcome.exited;
             if(outcome!=ExecutionOutcome.exited && outcome!=ExecutionOutcome.compile_error) exit=null;
+            if(spec.methodHarness() && spec.phase()==Phase.runtime && outcome==ExecutionOutcome.exited) {
+                var method=command(List.of("exec",name,"/usr/bin/cat",dev.javablueprints.verification.MethodContract.RESULT_PATH),new byte[0],3000,()->false,dev.javablueprints.verification.MethodContract.MAX_RESULT);
+                if(method.exit()==0 && !method.limit() && !method.timeout()) methodResult=Bytes.of(method.stdout());
+            }
             if(spec.phase()==Phase.compile && outcome==ExecutionOutcome.exited) {
-                var archive=command(List.of("exec",name,"tar","--format=ustar","-cf","-","-C","/workspace/classes","."),new byte[0],10_000,cancelled,9*1024*1024);
+                var archive=command(List.of("exec",name,"tar","--format=ustar","-cf","-","-C","/workspace/classes","."),new byte[0],ENGINE_SETUP_MS,cancelled,9*1024*1024);
                 require(archive);output=ClassArchive.unpack(archive.stdout());
             }
         } catch(Exception e) { System.err.println("Sandbox diagnostic: "+e); if(cancelled.getAsBoolean()) outcome=ExecutionOutcome.cancelled; else {outcome=ExecutionOutcome.sandbox_error; stderr="Sandbox setup or artifact validation failed".getBytes(java.nio.charset.StandardCharsets.UTF_8);} }
@@ -89,7 +100,7 @@ public final class DockerSandbox {
             clean=remove(name);
 
         }
-        return new Result(outcome,exit,Bytes.of(stdout),Bytes.of(stderr),truncated,output,!clean,metrics);
+        return new Result(outcome,exit,Bytes.of(stdout),Bytes.of(stderr),truncated,output,!clean,metrics,methodResult);
     }
     static Long peakBytes(String raw) {
         try { String value=raw.trim(); if(!value.matches("[0-9]{1,18}"))return null;

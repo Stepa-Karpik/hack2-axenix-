@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import {
@@ -54,7 +55,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   let layoutWrites = 0;
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().endsWith("/layout"))

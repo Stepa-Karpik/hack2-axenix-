@@ -68,6 +68,40 @@ class AssistantProviderTest {
   }
 
   @Test
+  void socialAndCodeToolsCannotChooseTargetsOutsideTheirBoundedSchemas() {
+    for(String type:List.of("friend_request","friend_remove")) {
+      assertEquals("confirm",AssistantActions.validate(type,map("username","some_user")).risk());
+      assertThrows(ApiError.class,()->AssistantActions.validate(type,map("username","some_user","risk","none")));
+    }
+    assertEquals("typed",AssistantActions.validate("project_role",map("projectId",id(),"username","some_user","role","editor")).risk());
+    assertThrows(ApiError.class,()->AssistantActions.validate("project_role",map("projectId",id(),"username","some_user","role","owner")));
+    for(String path:List.of("C:/Users/Main.java","../Main.java","/Main.java","src\\Main.java","src//Main.java"))
+      assertThrows(ApiError.class,()->AssistantActions.validate("code_edit",map("baseRevisionId",id(),"filePath",path,"startOffset",0,"endOffset",1,"expectedText","1","replacement","2","intent","semantic_edit")));
+    assertThrows(ApiError.class,()->AssistantActions.validate("code_edit",map("baseRevisionId",id(),"filePath","Main.java","startOffset",0.5,"endOffset",1,"expectedText","1","replacement","2","intent","semantic_edit")));
+    assertEquals("confirm",AssistantActions.validate("code_edit",map("baseRevisionId",id(),"filePath","src/Main.java","startOffset",0,"endOffset",1,"expectedText","1","replacement","2","intent","semantic_edit")).risk());
+  }
+
+  @Test
+  void realWindowCommandsAreBoundedGroundedAndQuestionsStayExplanations() {
+    var hide=AssistantActions.knownLayoutRequest("Скрой панель анализа").actions().getFirst();
+    assertEquals("layout_action",hide.type());assertEquals("hide",hide.args().get("operation"));assertEquals("analysis",hide.args().get("panel"));assertEquals("confirm",hide.risk());
+    var swap=AssistantActions.knownLayoutRequest("Поменяй местами код и консоль").actions().getFirst();
+    assertEquals("swap",swap.args().get("operation"));assertEquals("console",swap.args().get("targetPanel"));
+    var resize=AssistantActions.knownLayoutRequest("Сделай ширину кода 35%").actions().getFirst();
+    assertEquals(35,resize.args().get("percent"));assertEquals("width",resize.args().get("axis"));
+    assertEquals("save_default",AssistantActions.knownLayoutRequest("Сохрани базовое расположение окон").actions().getFirst().args().get("operation"));
+    assertEquals("undock_navigation",AssistantActions.knownLayoutRequest("Открепи панель JavaBlueprints").actions().getFirst().args().get("operation"));
+    assertNull(AssistantActions.knownLayoutRequest("Как скрыть панель анализа?"));
+    assertNull(AssistantActions.knownLayoutRequest("Покажи как скрыть панель анализа"));
+    assertNull(AssistantActions.knownLayoutRequest("Не скрывай код"));
+    assertNull(AssistantActions.knownLayoutRequest("Открой проект Demo"));
+    assertEquals("navigation",AssistantActions.validate("layout_action",map("operation","open","panel","JavaBlueprints")).args().get("panel"));
+    assertThrows(ApiError.class,()->AssistantActions.validate("layout_action",map("operation","resize","panel","code","axis","width","percent",90)));
+    assertThrows(ApiError.class,()->AssistantActions.validate("layout_action",map("operation","open","panel","произвольный DOM selector")));
+    assertThrows(ApiError.class,()->AssistantActions.validate("layout_action",map("operation","save","script","alert(1)")));
+  }
+
+  @Test
   void modelCannotSelectRiskOrInventActions() {
     assertThrows(
         ApiError.class, () -> AssistantActions.validate("delete_project", map("projectId", id())));

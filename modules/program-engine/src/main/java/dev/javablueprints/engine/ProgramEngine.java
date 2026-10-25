@@ -6,6 +6,7 @@ import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.CallableDeclaration;
+import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
@@ -25,7 +26,7 @@ import java.util.function.Supplier;
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.13.1"; }
+    private static String analyzerVersion() { return "engine-0.15.1"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -60,10 +61,13 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", "extract_method", "decompose_class", "rename_local").contains(command.operation())) {
+        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", StringConcatOptimization.OPERATION, "extract_method", "decompose_class", "rename_local").contains(command.operation())) {
             throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
+        if ((command.methodId() == null) == (command.initializerContextId() == null))
+            throw failure("INVALID_EDIT", "Exactly one callable or initializer context target is required");
+        if (command.initializerContextId() != null) return proposeInitializer(bundle, analysis, parsed, command);
         GraphNode selected = analysis.graph().nodes().stream().filter(n -> n.id().equals(command.nodeId())).findFirst()
                 .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Node does not belong to this analysis"));
         if (!selected.methodId().equals(command.methodId())) throw failure("ANALYSIS_CONFLICT", "Node does not belong to the selected method");
@@ -89,6 +93,7 @@ public final class ProgramEngine {
                 new DecompositionSummary(rewrite.filePath(),rewrite.className(),rewrite.originalMethodName()));
         }
         MembershipOptimization.Rewrite membership = null;
+        StringConcatOptimization.Rewrite textBuilder = null;
         MethodExtraction.Rewrite extraction = null;
         TextChange change = switch (command.operation()) {
             case "extract_method" -> {
@@ -110,6 +115,15 @@ public final class ProgramEngine {
                 if(plan==null)throw failure("UNSUPPORTED_OPERATION","Membership preconditions are not proven");
                 membership=plan.rewrite(bundle);
                 yield membership.change();
+            }
+            case StringConcatOptimization.OPERATION -> {
+                if (!(command.payload() instanceof OptimizeStringBuilder)) throw failure("INVALID_EDIT", "Expected empty optimization payload");
+                if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT", "Optimization requires preserve_behavior and exact comparison before apply");
+                requireOperation(selected,StringConcatOptimization.OPERATION);
+                var plan=parsed.textPlans().get(selected.id());
+                if(plan==null)throw failure("UNSUPPORTED_OPERATION","String accumulator preconditions are not proven");
+                textBuilder=plan.rewrite(bundle);
+                yield textBuilder.change();
             }
             case "replace_expression" -> {
                 if (!(command.payload() instanceof ReplaceExpression payload)) throw failure("INVALID_EDIT", "Expected expression payload");
@@ -150,11 +164,17 @@ public final class ProgramEngine {
         files.put(change.filePath(), source.substring(0, change.startOffset()) + change.after() + source.substring(change.endOffset()));
         Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
         if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its project context");
-        if (membership!=null&&!MembershipOptimization.validCandidate(candidate,membership)) throw failure("UNSUPPORTED_OPERATION","Generated index must resolve to the standard JDK HashSet<String>");
+        if (membership!=null&&!MembershipOptimization.validCandidate(candidate,membership)) throw failure("UNSUPPORTED_OPERATION","Generated index must resolve to the standard JDK HashSet with the proven immutable key type");
+        if (textBuilder!=null&&!StringConcatOptimization.validCandidate(candidate,textBuilder)) throw failure("UNSUPPORTED_OPERATION","Generated buffer must resolve to the standard JDK StringBuilder and the proven append overloads");
         return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics(),extraction==null?null:extraction.summary());
     }
 
     private TextChange replaceExpression(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, ReplaceExpression payload) {
+        return replaceExpression(bundle, parsed, selected.sourceRange(), selected.editableFields(), target, payload);
+    }
+
+    private TextChange replaceExpression(SourceBundle bundle, Parsed parsed, SourceRange selectedRange,
+                                         List<String> editableFields, Node target, ReplaceExpression payload) {
         if (payload == null || payload.expression() == null || payload.expression().isBlank()) throw failure("INVALID_EDIT", "Replacement expression is required");
         Expression expression;
         if ("condition".equals(payload.field())) {
@@ -163,11 +183,12 @@ public final class ProgramEngine {
         } else if ("expression".equals(payload.field()) && target instanceof Expression expr) {
             expression = expr;
         } else throw failure("INVALID_EDIT", "Target must be an expression or a supported condition");
-        if (!selected.editableFields().contains(payload.field())) throw failure("UNSUPPORTED_OPERATION", "Expression is outside editable scope");
+        if (!editableFields.contains(payload.field())) throw failure("UNSUPPORTED_OPERATION", "Expression is outside editable scope");
         var replacement = parser().parseExpression(payload.expression());
         if (!replacement.isSuccessful() || replacement.getResult().isEmpty()) throw failure("INVALID_EDIT", "Replacement must parse as one Java expression");
+        CaseLabelEdits.validate(expression, replacement.getResult().orElseThrow());
         if (containsComment(expression)) throw failure("UNSUPPORTED_OPERATION", "Replacement would discard an internal comment");
-        String path = selected.sourceRange().filePath();
+        String path = selectedRange.filePath();
         SourceRange range = parsed.maps().get(path).range(expression);
         String source = bundle.files().get(path);
         String before = source.substring(range.startOffset(), range.endOffset());
@@ -185,13 +206,40 @@ public final class ProgramEngine {
         return new TextChange(path, range.startOffset(), range.endOffset(), before, after);
     }
 
+    private Candidate proposeInitializer(SourceBundle bundle, Analysis analysis, Parsed parsed, EditCommand command) {
+        InitializerContext context = analysis.graph().initializerContexts().stream()
+                .filter(c -> c.id().equals(command.initializerContextId())).findFirst()
+                .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Initializer context does not belong to this analysis"));
+        InitializerNode selected = context.nodes().stream().filter(n -> n.id().equals(command.nodeId())).findFirst()
+                .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Node does not belong to this initializer context"));
+        if (!"replace_expression".equals(command.operation()) || !selected.allowedOperations().contains(command.operation()))
+            throw failure("UNSUPPORTED_OPERATION", "Initializer projections allow only bound expression replacement");
+        if (!(command.payload() instanceof ReplaceExpression payload) || !"expression".equals(payload.field()))
+            throw failure("INVALID_EDIT", "Expected initializer expression payload");
+        if (payload.expression() == null || payload.expression().isBlank() || payload.expression().indexOf('\r') >= 0
+                || payload.expression().indexOf('\uFEFF') >= 0) throw failure("INVALID_EDIT", "One canonical LF Java expression is required");
+        var replacement = parser().parseExpression(payload.expression());
+        if (!replacement.isSuccessful() || replacement.getResult().isEmpty()) throw failure("INVALID_EDIT", "Replacement must parse as one Java expression");
+        if (InitializerProjection.opaqueReason(replacement.getResult().orElseThrow()) != null)
+            throw failure("UNSUPPORTED_OPERATION", "Replacement contains an unsupported nested initializer domain");
+        Node target = parsed.bindings().get(selected.id());
+        if (!InitializerProjection.editableExpression(target)) throw failure("UNSUPPORTED_OPERATION", "Expression is outside initializer edit scope");
+        TextChange change = replaceExpression(bundle, parsed, selected.sourceRange(), selected.editableFields(), target, payload);
+        Map<String, String> files = new TreeMap<>(bundle.files());
+        String source = files.get(change.filePath());
+        files.put(change.filePath(), source.substring(0, change.startOffset()) + change.after() + source.substring(change.endOffset()));
+        Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
+        if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its original declaration context");
+        return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics());
+    }
+
     private TextChange replaceStatement(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, ReplaceStatement payload) {
         requireOperation(selected,"replace_statement");
         if(statementContainer(target)==null || containsComment(target)) throw failure("UNSUPPORTED_OPERATION","Replacement requires a comment-free statement in a real block");
         if(payload.source()==null || payload.source().isBlank() || payload.source().indexOf('\r')>=0 || payload.source().indexOf('\uFEFF')>=0) throw failure("INVALID_EDIT","One canonical LF Java statement required");
         var replacement=parser().parseBlock("{\n"+payload.source()+"\n}");
         if(!replacement.isSuccessful() || replacement.getResult().isEmpty() || replacement.getResult().orElseThrow().getStatements().size()!=1) throw failure("INVALID_EDIT","Replacement must be exactly one Java statement");
-        if(unsupportedFlow(replacement.getResult().orElseThrow().getStatement(0))) throw failure("UNSUPPORTED_OPERATION","Unsupported replacement flow");
+        if(unsupportedEditFlow(replacement.getResult().orElseThrow().getStatement(0))) throw failure("UNSUPPORTED_OPERATION","Unsupported replacement flow");
         String path=selected.sourceRange().filePath();
         SourceRange range=parsed.maps().get(path).range(target);
         String source=bundle.files().get(path);
@@ -210,7 +258,7 @@ public final class ProgramEngine {
             throw failure("INVALID_EDIT", "Insertion must contain exactly one Java statement");
         }
         Statement inserted = result.getResult().orElseThrow().getStatement(0);
-        if (unsupportedFlow(inserted)) throw failure("UNSUPPORTED_OPERATION", "Inserted statement uses unsupported control flow");
+        if (unsupportedEditFlow(inserted)) throw failure("UNSUPPORTED_OPERATION", "Inserted statement uses unsupported control flow");
         boolean bodyAnchor = selected.kind().equals("entry");
         BlockStmt block = bodyAnchor && target instanceof BlockStmt body ? body : statementContainer(target);
         if (block == null) throw failure("UNSUPPORTED_OPERATION", "Insertion requires a real block binding");
@@ -293,7 +341,7 @@ public final class ProgramEngine {
         var result = parser().parseBlock("{\n" + payload.source() + "\n}");
         if (!result.isSuccessful() || result.getResult().isEmpty() || result.getResult().orElseThrow().getStatements().size() != 1
                 || !(result.getResult().orElseThrow().getStatement(0) instanceof BlockStmt body)) throw failure("INVALID_EDIT", "Else source must be exactly one braced block");
-        if (unsupportedFlow(body)) throw failure("UNSUPPORTED_OPERATION", "Else body uses unsupported control flow");
+        if (unsupportedEditFlow(body)) throw failure("UNSUPPORTED_OPERATION", "Else body uses unsupported control flow");
         validateJumps(body, statementContainer(target));
         SourceRange range = parsed.maps().get(selected.sourceRange().filePath()).range(target);
         return new TextChange(range.filePath(), range.endOffset(), range.endOffset(), "", "\nelse " + payload.source() + "\n");
@@ -381,10 +429,51 @@ public final class ProgramEngine {
         return false;
     }
 
+    /**
+     * Owner path of a callable. Named types keep their usual dotted name; methods of local
+     * classes and anonymous class bodies include the enclosing method and a per-scope
+     * anonymous index, so equal signatures in different nested bodies stay distinct.
+     */
+    static String callableOwner(Node callable) {
+        List<String> parts = new ArrayList<>();
+        for (Node cursor = callable.getParentNode().orElse(null); cursor != null; cursor = cursor.getParentNode().orElse(null)) {
+            if (cursor instanceof ObjectCreationExpr creation && creation.getAnonymousClassBody().isPresent()) {
+                Node scope = creation.findAncestor(CallableDeclaration.class).map(Node.class::cast)
+                        .orElseGet(() -> creation.findAncestor(TypeDeclaration.class).orElse(null));
+                int index = 0, seen = 0;
+                if (scope != null) for (ObjectCreationExpr other : scope.findAll(ObjectCreationExpr.class)) {
+                    if (other.getAnonymousClassBody().isEmpty()) continue;
+                    seen++;
+                    if (other == creation) { index = seen; break; }
+                }
+                parts.add("new " + creation.getType().asString() + "(){}#" + index);
+            } else if (cursor instanceof TypeDeclaration<?> type) parts.add(type.getNameAsString());
+            else if (cursor instanceof CallableDeclaration<?> enclosing) parts.add(enclosing.getNameAsString() + "()");
+        }
+        Collections.reverse(parts);
+        String prefix = callable.findCompilationUnit().flatMap(CompilationUnit::getPackageDeclaration)
+                .map(p -> p.getNameAsString() + ".").orElse("");
+        return prefix + String.join(".", parts);
+    }
+
+    /** Nested member bodies and captures have their own source domain, not their enclosing callable's. */
+    private static boolean callableExpression(Expression expression, CallableDeclaration<?> callable) {
+        for (Node cursor = expression.getParentNode().orElse(null); cursor != null; cursor = cursor.getParentNode().orElse(null)) {
+            if (cursor instanceof CallableDeclaration<?>) return cursor == callable;
+            if (cursor instanceof BodyDeclaration<?> || cursor instanceof LambdaExpr) return false;
+        }
+        return false;
+    }
+
+    // Edits never introduce new local classes; existing ones are atomic read-only steps.
+    private static boolean unsupportedEditFlow(Node node) {
+        return unsupportedFlow(node) || !node.findAll(LocalClassDeclarationStmt.class).isEmpty();
+    }
+
     private static boolean unsupportedFlow(Node body) {
         return body.findAll(Statement.class).stream().anyMatch(s -> s instanceof TryStmt t && t.getResources().stream().anyMatch(r -> !supportedResource(r)) || s instanceof SwitchStmt sw && !supportedSwitch(sw)
                 || s instanceof LabeledStmt || s instanceof SynchronizedStmt
-                || s instanceof LocalClassDeclarationStmt || s instanceof YieldStmt
+                || s instanceof YieldStmt
                 || s instanceof BreakStmt b && b.getLabel().isPresent() || s instanceof ContinueStmt c && c.getLabel().isPresent())
                 || body.findAll(Expression.class).stream().anyMatch(e -> e.isLambdaExpr() || e.isSwitchExpr());
     }
@@ -539,7 +628,7 @@ public final class ProgramEngine {
                 BlockStmt body = callable instanceof MethodDeclaration m ? m.getBody().orElse(null)
                         : callable instanceof ConstructorDeclaration c ? c.getBody() : null;
                 String declaration = builder.id();
-                String fqName = SemanticAnalyzer.ownerName(callable) + "." + callable.getNameAsString();
+                String fqName = callableOwner(callable) + "." + callable.getNameAsString();
                 String parentType = callable.findAncestor(TypeDeclaration.class).map(typeIds::get).orElse(null);
                 builder.declarationBindings.put(callable, declaration);
                 builder.declarations.add(new Declaration(declaration, entry.getKey(), callable instanceof ConstructorDeclaration ? "constructor" : "method", callable.getNameAsString(), parentType, map.range(callable)));
@@ -548,6 +637,13 @@ public final class ProgramEngine {
         }
         if (builder.invalid) { builder.methods.clear(); builder.nodes.clear(); builder.edges.clear(); builder.bindings.clear(); }
         Graph graph = new Graph(bundle.revisionId(), id, SOURCE_MAP_VERSION, builder.methods, builder.nodes, builder.edges);
+        Function<Node,SourceRange> ranges = node -> {
+            CompilationUnit unit = node.findCompilationUnit().orElseThrow();
+            String path = builder.units.entrySet().stream().filter(e -> e.getValue() == unit).findFirst().orElseThrow().getKey();
+            return builder.maps.get(path).range(node);
+        };
+        if (!builder.invalid) InitializerProjection.declareFields(builder.units.values(), builder.declarationBindings,
+                ranges, builder::id, builder.declarations);
         SemanticAnalyzer.Result semantic = builder.invalid ? new SemanticAnalyzer.Result(SemanticModel.empty(), List.of())
                 : SemanticAnalyzer.inspect(id, builder.units, node -> {
                     CompilationUnit unit = node.findCompilationUnit().orElseThrow();
@@ -555,14 +651,19 @@ public final class ProgramEngine {
                     return builder.maps.get(path).range(node);
                 }, builder.declarationBindings);
         builder.declarations.addAll(semantic.declarations());
-        Function<Node,SourceRange> ranges = node -> {
-            CompilationUnit unit = node.findCompilationUnit().orElseThrow();
-            String path = builder.units.entrySet().stream().filter(e -> e.getValue() == unit).findFirst().orElseThrow().getKey();
-            return builder.maps.get(path).range(node);
-        };
         var membership = builder.invalid ? new MembershipOptimization.Result(graph,List.of(),Map.of())
                 : MembershipOptimization.inspect(graph,builder.bindings,semantic.model(),builder.units.values(),ranges);
         graph=membership.graph();
+        var textBuilders = builder.invalid ? new StringConcatOptimization.Result(graph,List.of(),Map.of())
+                : StringConcatOptimization.inspect(graph,builder.bindings,semantic.model(),builder.units.values(),ranges);
+        graph=textBuilders.graph();
+        List<InitializerContext> initializers = builder.invalid ? List.of() : InitializerProjection.inspect(bundle, id,
+                builder.units.values(), builder.declarationBindings, semantic.model(), ranges, builder::id, builder.bindings);
+        List<InitializationOrder> initializationOrders = builder.invalid ? List.of()
+                : InitializerProjection.orders(builder.units.values(), builder.declarationBindings, initializers, graph.methods(), ranges);
+        graph = new Graph(graph.revisionId(), graph.analysisId(), graph.sourceMapVersion(), graph.methods(), graph.nodes(), graph.edges(),
+                initializers, initializationOrders);
+        SemanticModel semantics = InitializerProjection.attachReferences(semantic.model(), initializers);
         QualityModel quality = builder.invalid ? QualityModel.empty() : QualityAnalyzer.inspect(id,
                 builder.declarationBindings, graph.methods(), node -> {
                     CompilationUnit unit = node.findCompilationUnit().orElseThrow();
@@ -576,23 +677,27 @@ public final class ProgramEngine {
                 new Capability("condition_flow", builder.invalid ? "not_requested" : "partial", "Short-circuit &&/||/!/parentheses in supported if/while/do/for conditions, at most4096 tests/method; each atom evaluated once. In try-containing methods conservative exceptional exits (including unboxing) target active handler, otherwise normal-only projection. Opaque methods unsupported"),
                 new Capability("switch_flow", builder.invalid ? "not_requested" : "partial", "Normal-completion colon statement switch, selector once, raw case/default alternatives and fallthrough; at most 1024 entries/4096 labels per method. Constant/type validity requires isolated compilation; modern/null/pattern/exceptional flow remains unsupported"),
                 new Capability("enhanced_for_flow", builder.invalid ? "not_requested" : "partial", "Normal iteration abstraction, source evaluated once, synthetic check/bind/advance; at most 1024 enhanced-for loops per method. Advance means continuation, not Iterator.next; array/Iterable protocol details and exceptional flow are unknown. Type validity requires isolated compilation"),
-                new Capability("replace_expression", "partial", "Expressions in supported methods; syntax checked, compile/type/scope validation requires isolated runner"),
+                new Capability("initializers", builder.invalid ? "not_requested" : "partial", "Field/static/instance initializer source projections in ordinary top-level/named member classes and interface fields; containment only, no lifecycle CFG. 1024 contexts/type,4096/bundle,4096 nodes/context; unsupported nested domains opaque"),
+                new Capability("replace_expression", "partial", "Expressions in supported methods and initializer projections; syntax checked, compile/type/scope validation requires isolated runner"),
                 new Capability("replace_statement", "partial", "One comment-free supported block statement; exact source replacement and isolated compilation required"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
-                new Capability("decompose_class", builder.invalid ? "not_requested" : "partial", "Closed static int/boolean helper moved into a fresh package-private utility type; original declaration remains a forwarding wrapper. No state/calls/inheritance/unknown flow; isolated compilation and exact comparison required"),
+                new Capability("decompose_class", builder.invalid ? "not_requested" : "partial", "Primitive value or void helpers moved into fresh package-private utility; original instance/static forwarding declarations retained. Only exact private static sibling calls, bounded16-method dependency closure; no state, inheritance, annotations or unknown flow. Isolated compilation and exact comparison required"),
                 new Capability("extract_method", builder.invalid ? "not_requested" : "partial", "Bound contiguous statements in one class method; inferred typed parameters, at most one live local result or tail return; rejects escaping jumps, captures, unresolved names and unsafe exception-observed local writes. Detached compilation and exact comparison required"),
                 new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
                 new Capability("code_insights", builder.invalid ? "not_requested" : "passed", "Lexical body lines, structural statements/nesting/branching/calls; bounded recommendations are heuristic reading aids, not runtime cost or safe automatic refactoring"),
-                new Capability("OPT-MEMBERSHIP-001", builder.invalid ? "not_requested" : "partial", "Closed local standard ArrayList<String>, literal construction writes, no alias/escape/reassignment/other uses; one HashSet index before a direct loop. At most64 loop candidates; resource/timing equivalence and performance gain unproven; exact comparison required before preserve apply"));
+                new Capability("OPT-MEMBERSHIP-001", builder.invalid ? "not_requested" : "partial", "Closed local standard List/ArrayList/LinkedList with String/Integer/Long/Boolean/Character keys, literal construction writes, no alias/escape/reassignment/other uses; one HashSet index before a direct loop. At most64 loop candidates; resource/timing equivalence and performance gain unproven; exact comparison required before preserve apply"),
+                new Capability(StringConcatOptimization.RULE_ID, builder.invalid ? "not_requested" : "partial", "Closed local non-null String accumulator (s = s + a...; s += a;) in one loop with primitive/boxed/String operands and no other loop uses, try, lambda, label or nested class; one java.lang.StringBuilder before the loop, copy-back only after a provably non-empty append. At most1024 loop candidates; memory/OOM equivalence and gain unproven; exact comparison required before preserve apply"));
         Analysis analysis = new Analysis(id, bundle.revisionId(), bundleHash(bundle), VERSION, "3.28.2", "JAVA_21",
                 builder.invalid ? "invalid" : "valid", "not_requested", builder.invalid ? "not_requested" : "partial", SOURCE_MAP_VERSION,
-                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantic.model(), quality, membership.opportunities());
-        return new Parsed(analysis, builder.bindings, builder.maps, membership.plans());
+                builder.diagnostics, coverage, builder.declarations, graph, currentSymbolEnvironmentHash(), semantics, quality,
+                java.util.stream.Stream.concat(membership.opportunities().stream(), textBuilders.opportunities().stream()).toList());
+        return new Parsed(analysis, builder.bindings, builder.maps, membership.plans(), textBuilders.plans());
     }
 
-    private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps, Map<String,MembershipOptimization.Plan> optimizations) {}
+    private record Parsed(Analysis analysis, Map<String, Node> bindings, Map<String, SourceMap> maps, Map<String,MembershipOptimization.Plan> optimizations,
+                          Map<String,StringConcatOptimization.Plan> textPlans) {}
     private record FlowContext(Supplier<String> returned, Supplier<String> thrown, Supplier<String> broken,
                                Supplier<String> continued, String tag, boolean exceptions) {
         FlowContext jumps(String breakTarget, String continueTarget) {
@@ -723,8 +828,8 @@ public final class ProgramEngine {
             String id = id();
             Map<String, SourceRange> fieldRanges = Map.of();
             boolean readOnly = Set.of("condition_test", "switch_selector", "switch_case", "foreach_source", "catch_test", "catch_entry", "finally_entry", "try_entry", "resource_init").contains(kind);
-            if (!opaqueMethod && !readOnly && ast instanceof Expression expression && !expression.isVariableDeclarationExpr()) {
-                fieldRanges = Map.of("expression", map.range(expression));
+            if (!opaqueMethod && !readOnly && (InitializerProjection.editableExpression(ast) || CaseLabelEdits.eligible(ast))) {
+                fieldRanges = Map.of("expression", map.range(ast));
             } else if (!opaqueMethod && condition(ast) != null) {
                 fieldRanges = Map.of("condition", map.range(condition(ast)));
             }
@@ -734,10 +839,10 @@ public final class ProgramEngine {
             if (!fields.isEmpty()) operations.add("replace_expression");
             if (!opaqueMethod && "entry".equals(kind) && ast instanceof BlockStmt) {
                 operations.add("insert_statement");
-                if (ast.getParentNode().orElse(null) instanceof MethodDeclaration method && method.isStatic()
-                        && Set.of("int","boolean").contains(method.getTypeAsString())) operations.add("decompose_class");
+                if (ast.getParentNode().orElse(null) instanceof MethodDeclaration method
+                        && ClassDecomposition.supportsReturnType(method.getTypeAsString())) operations.add("decompose_class");
                 positions = List.of("body_start", "body_end");
-            } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null) {
+            } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null && !(ast instanceof LocalClassDeclarationStmt)) {
                 if (!containsComment(ast)) operations.add("replace_statement");
                 operations.add("insert_statement");
                 if (!containsComment(ast)) operations.add("delete_statement");
@@ -827,6 +932,7 @@ public final class ProgramEngine {
             if (!opaqueMethod && !body.findAll(TryStmt.class).isEmpty()) pruneUnreachableFlow();
             // Expressions are selectable source-bound AST projections, not additional executable CFG statements.
             for (Expression expression : body.findAll(Expression.class)) {
+                if (!callableExpression(expression, callable)) continue;
                 Node ancestor = expression.getParentNode().orElse(null);
                 while (ancestor != null && !astIds.containsKey(ancestor)) ancestor = ancestor.getParentNode().orElse(null);
                 node(expression, "expression", ancestor == null ? root : astIds.get(ancestor));
@@ -901,7 +1007,10 @@ public final class ProgramEngine {
                 return cursor;
             }
             if (stmt instanceof TryStmt statement) return tryFlow(statement, next, context, parent);
-            String current = node(stmt, stmt.getClass().getSimpleName(), parent);
+            // A local class declaration is one atomic, read-only step; its own methods get separate graphs.
+            String current = stmt instanceof LocalClassDeclarationStmt local
+                    ? node(stmt, "LocalClassDeclarationStmt", parent, "class " + local.getClassDeclaration().getNameAsString() + " { … }")
+                    : node(stmt, stmt.getClass().getSimpleName(), parent);
             if (stmt instanceof IfStmt branch) {
                 String yes = flow(branch.getThenStmt(), next, context, current);
                 String no = branch.getElseStmt().map(s -> flow(s, next, context, current)).orElse(next);
@@ -982,7 +1091,7 @@ public final class ProgramEngine {
             else {
                 edge(current, next, "normal");
                 if (stmt instanceof ExpressionStmt expression) mayThrow(current, expression.getExpression(), context);
-                else if (!(stmt instanceof EmptyStmt)) possibleException(current, context, "Atomic statement evaluation may fail; runtime exception type is not inferred");
+                else if (!(stmt instanceof EmptyStmt) && !(stmt instanceof LocalClassDeclarationStmt)) possibleException(current, context, "Atomic statement evaluation may fail; runtime exception type is not inferred");
             }
             return current;
         }

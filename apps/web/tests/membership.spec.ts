@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import {
   test,
   expect,
@@ -122,7 +123,7 @@ async function fixture(page: Page, text = source) {
       await page.request.get(base + "/revisions/" + original.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   return { id, base, original, analysis };
 }
 async function done(request: APIRequestContext, base: string, id: string) {

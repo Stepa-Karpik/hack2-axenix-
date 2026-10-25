@@ -27,6 +27,7 @@ public class Workspace {
   final JdbcTemplate db;
   final TransactionTemplate tx;
   final ObjectMapper json = JsonMapper.builder().build();
+  final ImmutableResourceCache immutableAnalyses = new ImmutableResourceCache(64L*1024*1024,32);
 
   Workspace(JdbcTemplate db, PlatformTransactionManager manager) {
     this.db = db;
@@ -437,14 +438,21 @@ public class Workspace {
   }
 
   Map<String, Object> resource(String p, String id, String kind) {
+    UUID projectId=uuid(p),resourceId=uuid(id);
+    // Never publish a transaction's uncommitted snapshot into the shared process cache.
+    boolean immutable=kind.equals("analysis")&&!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive();
+    var key=new ImmutableResourceCache.Key(projectId,resourceId);
+    if(immutable) {var cached=immutableAnalyses.get(key);if(cached!=null)return cached;}
     var rows =
         db.queryForList(
             "SELECT data::text FROM resources WHERE project_id=? AND id=? AND kind=?",
-            uuid(p),
-            uuid(id),
+            projectId,
+            resourceId,
             kind);
     if (rows.isEmpty()) throw missing();
-    return decode(rows.getFirst().get("data").toString());
+    String encoded=rows.getFirst().get("data").toString();
+    var decoded=decode(encoded);
+    return immutable?immutableAnalyses.put(key,decoded,encoded.length()):decoded;
   }
 
   void updateResource(String p, String id, String kind, Object value) {
@@ -462,23 +470,23 @@ public class Workspace {
   }
 
   Map<String, Object> analysis(String p, String r, String a) {
-    revision(p, r);
+    if(!Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM revisions WHERE project_id=? AND id=?)",Boolean.class,uuid(p),uuid(r))))throw missing();
     Map<String, Object> result;
     if (a != null) result = resource(p, a, "analysis");
     else {
       var rows =
           db.queryForList(
-              "SELECT data::text FROM resources WHERE project_id=? AND kind='analysis' AND"
+              "SELECT id::text FROM resources WHERE project_id=? AND kind='analysis' AND"
                   + " data->>'revisionId'=? AND data->>'analyzerVersion'=? AND"
                   + " data->>'sourceMapVersion'=? AND data->>'symbolEnvironmentHash'=?"
-                  + " ORDER BY created_at DESC,id DESC LIMIT 1",
+                  + " ORDER BY created_at DESC,resources.id DESC LIMIT 1",
               uuid(p),
               r,
               dev.javablueprints.engine.ProgramEngine.VERSION,
               dev.javablueprints.engine.ProgramEngine.SOURCE_MAP_VERSION,
               dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash());
       if (rows.isEmpty()) throw new ApiError(404, "ANALYSIS_NOT_READY", "No analysis for revision");
-      result = decode(rows.getFirst().get("data").toString());
+      result = resource(p,rows.getFirst().get("id").toString(),"analysis");
     }
     if (!r.equals(result.get("revisionId")))
       throw new ApiError(409, "ANALYSIS_CONFLICT", "Analysis belongs to another revision");

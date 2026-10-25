@@ -5,7 +5,7 @@ const cache = new Map<string, ReturnType<typeof computeRoutePlan>>();
 
 export default function useFlowRoutes(scene: RouteScene) {
   // Selection, editor typing and camera changes do not invalidate geometry.
-  const key = JSON.stringify(scene);
+  const key = useMemo(() => JSON.stringify(scene), [scene]);
   const stableScene = useMemo(() => scene, [key]);
   const background = stableScene.boxes.length > 100;
   const cached = cache.get(key);

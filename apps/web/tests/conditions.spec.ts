@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { assertRoutes, panToNode } from "./flowAssertions";
@@ -47,7 +48,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   for (const name of ["andTest", "orTest", "mixedTest", "loopTest"]) {
     await page
       .locator(".method-item")

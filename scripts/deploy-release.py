@@ -19,6 +19,9 @@ ROOT = Path('/opt/java-blueprints')
 SOCKET = Path(f'/run/user/{os.getuid()}/docker.sock')
 ENV_FILE = ROOT / 'shared/.env'
 MAX_BYTES = 1024 * 1024 * 1024
+TRANSFER_TOTAL_SECONDS = 1080
+TRANSFER_IDLE_SECONDS = 120
+TRANSFER_REPORT_SECONDS = 30
 ORIGIN = 'https://java-blueprints.karpovprod.ru'
 
 
@@ -111,20 +114,41 @@ def health(timeout=100):
 def receive(destination):
     h = hashlib.sha256()
     size = 0
-    until = time.monotonic() + 900
+    started = last_data = last_report = time.monotonic()
+
+    def report(state, reason=None):
+        event = {'transfer': state, 'bytesReceived': size,
+                 'elapsedSeconds': round(time.monotonic() - started, 1)}
+        if reason:
+            event['reason'] = reason
+        print(json.dumps(event), file=sys.stderr, flush=True)
+
+    report('started')
     with destination.open('xb') as stream:
         while True:
-            remaining = until - time.monotonic()
-            if remaining <= 0 or not select.select([sys.stdin.buffer], [], [], min(30, remaining))[0]:
-                raise RuntimeError('Release transfer timed out')
+            now = time.monotonic()
+            total_remaining = TRANSFER_TOTAL_SECONDS - (now - started)
+            idle_remaining = TRANSFER_IDLE_SECONDS - (now - last_data)
+            if total_remaining <= 0 or idle_remaining <= 0:
+                reason = 'total' if total_remaining <= 0 else 'idle'
+                report('timeout', reason)
+                raise RuntimeError('Release transfer ' + reason + ' timeout (' + str(size) + ' bytes received)')
+            if now - last_report >= TRANSFER_REPORT_SECONDS:
+                report('progress')
+                last_report = now
+            if not select.select([sys.stdin.buffer], [], [], min(TRANSFER_REPORT_SECONDS, total_remaining, idle_remaining))[0]:
+                continue
             block = os.read(sys.stdin.fileno(), 1024 * 1024)
             if not block:
                 break
+            last_data = time.monotonic()
             size += len(block)
             if size > MAX_BYTES:
+                report('rejected', 'size_limit')
                 raise RuntimeError('Release transfer exceeds limit')
             h.update(block)
             stream.write(block)
+    report('complete')
     return h.hexdigest()
 
 

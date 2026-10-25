@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { publishProject } from "./flowAssertions";
 import { chooseOption } from "./selectControl";
 import { test, expect, type Page } from "@playwright/test";
@@ -54,7 +55,7 @@ async function fixture(page: Page) {
       await page.request.get(base + "/revisions/" + revision.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   return { id, base, revision, panel, analysis };
 }
 

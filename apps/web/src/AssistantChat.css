@@ -420,3 +420,17 @@
   padding: 0;
   margin: 8px 0 0;
 }
+
+.assistant-source-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--theme-muted);
+  padding: 9px 12px 0;
+}
+.assistant-source-consent input { flex: 0 0 auto; width: 14px; margin-top: 1px; }
+.assistant-action pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }

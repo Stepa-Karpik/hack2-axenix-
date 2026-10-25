@@ -114,7 +114,6 @@ class ClassDecompositionTest {
     }
 
     @Test void rejectsDeclarationMetadataAndUnknownControlFlow() {
-        refuses("int total(int n) { return n; }","concrete static");
         refuses("@Deprecated static int total(int n) { return n; }","unannotated");
         refuses("static synchronized int total(int n) { return n; }","synchronization");
         refuses("static <T> int total(int n) { return n; }","generics");
@@ -124,6 +123,78 @@ class ClassDecompositionTest {
         assertThrows(EngineException.class,() -> rewrite(generic,"TotalsPart"));
         var inherited = input("Main.java","class Main extends Number { static int total(int n) { return n; } }\n","total",Map.of());
         assertThrows(EngineException.class,() -> rewrite(inherited,"TotalsPart"));
+    }
+
+    @Test void retainsInstanceDispatchAndVisibilityWhileMovingOnlyClosedComputation() {
+        String source="class Main { private int state=7; public final long total(long n, int shift) { long result=n << shift; return result + 1L; } int keep(){return state;} }";
+        var in=input("Main.java",source,"total",Map.of());
+        var result=rewrite(in,"LongTotals");
+        assertTrue(result.files().get("Main.java").contains("public final long total(long n, int shift) { return LongTotals.total(n, shift); }"));
+        assertTrue(result.files().get("Main.java").contains("private int state=7;"));
+        assertTrue(result.files().get("LongTotals.java").contains("static long total(long n, int shift) { long result=n << shift; return result + 1L; }"));
+        var candidate=engine.inspect(new SourceBundle("candidate",result.files()));
+        assertEquals("valid",candidate.parseStatus());
+        var delegate=candidate.semantics().references().stream().filter(r->r.kind().equals("call")&&r.name().equals("total")).findFirst().orElseThrow();
+        assertEquals("exact",delegate.resolution());
+        assertTrue(candidate.semantics().symbols().stream().anyMatch(s->delegate.targetIds().contains(s.id())&&s.qualifiedName().equals("LongTotals.total")));
+        refuses("int state; int total(int n) { return state+n; }","state dependency");
+        refuses("int total(int n) { return this.hashCode()+n; }","MethodCallExpr");
+    }
+
+    @Test void supportsEveryPrimitiveSignatureCastsAndVoidEarlyReturns() {
+        for(String declaration:java.util.List.of(
+                "static byte total(byte value) { return (byte)(value+1); }",
+                "static short total(short value) { return (short)(value+1); }",
+                "static char total(char value) { return (char)(value+1); }",
+                "static float total(float value) { return value+1.25f; }",
+                "double total(double value) { return value+1.25d; }",
+                "void total(int value) { if(value<0)return; int next=value+1; }")) {
+            var in=input("Main.java","class Main { "+declaration+" }","total",Map.of());
+            var result=rewrite(in,"PrimitivePart");
+            assertEquals("valid",engine.inspect(new SourceBundle("candidate",result.files())).parseStatus(),declaration);
+            assertTrue(result.files().get("PrimitivePart.java").contains("static "));
+            if(declaration.startsWith("void"))assertTrue(result.files().get("Main.java").contains("{ PrimitivePart.total(value); }"));
+        }
+        refuses("static int total(int value) { return (Integer)value; }","primitive casts");
+    }
+
+    @Test void extractsTransitivePrivateStaticResponsibilityAndRetainsAllOriginalEntryPoints() {
+        String source="package finance; class Main { int state=9; public long total(int quantity, long price) { return subtotal(quantity,price) + fee(quantity); }"
+                +" private static long subtotal(int quantity,long price) { return clamp(quantity)*price; }"
+                +" private static int clamp(int quantity) { return quantity<0 ? 0 : quantity; }"
+                +" private static long fee(int quantity) { return clamp(quantity)>3 ? 2L : 0L; }"
+                +" int unrelated() { return state; } }";
+        var in=input("finance/Main.java",source,"total",Map.of());
+        var result=rewrite(in,"Pricing");
+        assertEquals(5,result.changes().size());
+        String original=result.files().get("finance/Main.java"), utility=result.files().get("finance/Pricing.java");
+        assertTrue(original.contains("public long total(int quantity, long price) { return finance.Pricing.total(quantity, price); }"));
+        assertTrue(original.contains("private static long subtotal(int quantity,long price) { return finance.Pricing.subtotal(quantity, price); }"));
+        assertTrue(original.contains("int unrelated() { return state; }"));
+        assertEquals(1,utility.split("static int clamp",-1).length-1);
+        assertTrue(utility.contains("return subtotal(quantity,price) + fee(quantity)"));
+        var candidate=engine.inspect(new SourceBundle("candidate",result.files()));
+        assertEquals("valid",candidate.parseStatus());
+        for(var reference:candidate.semantics().references()) if(reference.kind().equals("call")) {
+            assertEquals("exact",reference.resolution(),reference.toString());
+            assertTrue(candidate.semantics().symbols().stream().anyMatch(symbol->reference.targetIds().contains(symbol.id())
+                    && symbol.qualifiedName().startsWith("finance.Pricing.")),reference.toString());
+        }
+    }
+
+    @Test void refusesUnsafeOrCyclicTransitiveDependenciesWithoutPartialChanges() {
+        refuses("static int total(int n) { return helper(n); } static int helper(int n){return n;}","private static");
+        refuses("int total(int n) { return helper(n); } private int helper(int n){return n;}","private static");
+        refuses("static int state; static int total(int n) { return helper(n); } private static int helper(int n){return state+n;}","state dependency");
+        refuses("static int total(int n) { return helper(n); } private static int helper(int n){return total(n);}","Recursive");
+        refuses("static int total(int n) { return helper(n); } private static synchronized int helper(int n){return n;}","synchronization");
+        refuses("static int total(int n) { return helper(n); } private static int helper(int n){return Math.abs(n);}","MethodCallExpr");
+    }
+
+    @Test void refusesObjectInstanceSignatureThatCannotBecomeAStaticUtilityMethod() {
+        var in=input("Main.java","class Main { public int hashCode(){return 7;} }","hashCode",Map.of());
+        var error=assertThrows(EngineException.class,()->rewrite(in,"HashPart"));
+        assertTrue(error.getMessage().contains("Object method"));
     }
 
     @Test void rejectsNamesPathCollisionsAndPackageQualifierShadowing() {

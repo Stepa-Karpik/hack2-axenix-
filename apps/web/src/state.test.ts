@@ -347,6 +347,55 @@ test("shortcut and loop lanes bypass every node column", async () => {
   );
 });
 
+test("long jumps past wide sibling columns route around every card", async () => {
+  const { planFlowRoutes } = await import("./flowRouting.ts");
+  const { segmentHitsBox } = await import("./flowLayout.ts");
+  // A break leaves row 0 and lands after 12 rows of three wide columns: more
+  // blockers than the bounded grid search accepts, so only an outer lane works.
+  const boxes = [{ id: "src", x: 300, y: 0, width: 264, height: 74 }];
+  for (let row = 1; row <= 12; row++)
+    for (const [column, x] of [0, 300, 600].entries())
+      boxes.push({ id: `r${row}c${column}`, x, y: row * 128, width: 264, height: 74 });
+  boxes.push({ id: "dst", x: 300, y: 13 * 128, width: 264, height: 74 });
+  const { routes } = planFlowRoutes(boxes, [
+    { id: "jump", source: "src", target: "dst", kind: "break" },
+  ]);
+  const route = routes.get("jump");
+  assert.equal(route.complete, true);
+  const crossed = boxes.filter(
+    (box) =>
+      !["src", "dst"].includes(box.id) &&
+      route.points
+        .slice(1)
+        .some((point, i) => segmentHitsBox(route.points[i], point, box)),
+  );
+  assert.deepEqual(crossed, []);
+});
+
+test("a dropped card is nudged off the card it would cover", async () => {
+  const { clearDropOffset } = await import("./flowLayout.ts");
+  const others = [
+    { id: "a", x: 0, y: 0, width: 264, height: 84 },
+    { id: "b", x: 0, y: 128, width: 264, height: 84 },
+  ];
+  assert.deepEqual(
+    clearDropOffset([{ id: "m", x: 600, y: 0, width: 264, height: 84 }], others),
+    { x: 0, y: 0 },
+  );
+  const moved = [{ id: "m", x: 40, y: 20, width: 264, height: 84 }];
+  const offset = clearDropOffset(moved, others);
+  assert.ok(offset.x || offset.y);
+  const placed = { ...moved[0], x: 40 + offset.x, y: 20 + offset.y };
+  for (const b of others)
+    assert.ok(
+      placed.x >= b.x + b.width ||
+        placed.x + placed.width <= b.x ||
+        placed.y >= b.y + b.height ||
+        placed.y + placed.height <= b.y,
+    );
+  assert.ok(Math.hypot(offset.x, offset.y) < 400);
+});
+
 test("dragged departure and approach obstacles are bypassed within router budget", async () => {
   const { routeOrthogonal, segmentHitsBox } = await import("./flowLayout.ts");
   for (const obstacleY of [80, 250]) {

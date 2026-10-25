@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import {
@@ -100,7 +101,7 @@ async function analysis(
         );
         if (!response.ok()) return false;
         result = (await response.json()).data;
-        return result?.analyzerVersion === "engine-0.13.1";
+        return result?.analyzerVersion === ENGINE_VERSION;
       },
       { timeout: 30000 },
     )

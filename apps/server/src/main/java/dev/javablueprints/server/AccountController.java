@@ -200,7 +200,22 @@ class AccountController {
 
   @PostMapping("/friend-requests")
   Object invite(@RequestBody Map<String, Object> b, HttpServletRequest r) {
-    String actor = a.require(r), recipient = a.byUsername(str(b, "username"));
+    return inviteActor(a.require(r), str(b, "username"));
+  }
+
+  Object inviteActor(String actor, String username) {
+    return w.tx.execute(tx -> {
+      lockAccounts(actor,a.byUsername(username));
+      return inviteLocked(actor,username);
+    });
+  }
+
+  void lockAccounts(String actor,String other) {
+    w.db.queryForList("SELECT id FROM accounts WHERE id IN (?,?) ORDER BY id FOR UPDATE",uuid(actor),uuid(other));
+  }
+
+  Object inviteLocked(String actor, String username) {
+    String recipient = a.byUsername(username);
     a.throttle("friend-request", actor, 30);
     if (actor.equals(recipient)) throw new ApiError(400, "INVALID_REQUEST", "Cannot add yourself");
     if (friends(actor, recipient)) throw new ApiError(409, "ALREADY_FRIENDS", "Already friends");
@@ -233,7 +248,19 @@ class AccountController {
 
   @PostMapping("/friend-requests/{id}/{action}")
   Object respond(@PathVariable String id, @PathVariable String action, HttpServletRequest r) {
-    String actor = a.require(r);
+    return respondActor(a.require(r), id, action);
+  }
+
+  Object respondActor(String actor, String id, String action) {
+    return w.tx.execute(tx -> {
+      var rows=w.db.queryForList("SELECT sender_id::text,recipient_id::text FROM friend_requests WHERE id=?",uuid(id));
+      if(rows.isEmpty()) throw missing();
+      lockAccounts(rows.getFirst().get("sender_id").toString(),rows.getFirst().get("recipient_id").toString());
+      return respondLocked(actor,id,action);
+    });
+  }
+
+  Object respondLocked(String actor, String id, String action) {
     w.tx.executeWithoutResult(
         tx -> {
           var rows =
@@ -262,7 +289,17 @@ class AccountController {
 
   @DeleteMapping("/friends/{userId}")
   Object removeFriend(@PathVariable String userId, HttpServletRequest r) {
-    String actor = a.require(r);
+    return removeFriendActor(a.require(r), userId);
+  }
+
+  Object removeFriendActor(String actor, String userId) {
+    return w.tx.execute(tx -> {
+      lockAccounts(actor,userId);
+      return removeFriendLocked(actor,userId);
+    });
+  }
+
+  Object removeFriendLocked(String actor, String userId) {
     w.db.update(
         "DELETE FROM friendships WHERE first_id=least(?::uuid,?::uuid) AND"
             + " second_id=greatest(?::uuid,?::uuid)",
@@ -274,7 +311,10 @@ class AccountController {
   }
 
   void owner(String project, HttpServletRequest r) {
-    String actor = a.require(r);
+    ownerActor(project, a.require(r));
+  }
+
+  void ownerActor(String project, String actor) {
     if (!Objects.equals(
         w.db.queryForObject(
             "SELECT owner_id::text FROM projects WHERE id=?", String.class, uuid(project)),
@@ -323,10 +363,23 @@ class AccountController {
   @PostMapping("/projects/{project}/members")
   Object member(
       @PathVariable String project, @RequestBody Map<String, Object> b, HttpServletRequest r) {
-    owner(project, r);
-    String actor = a.require(r), member = a.byUsername(str(b, "username")), role = str(b, "role");
+    return memberActor(project, a.require(r), str(b, "username"), str(b, "role"));
+  }
+
+  Object memberActor(String project, String actor, String username, String role) {
+    return w.tx.execute(tx -> {
+      w.db.queryForList("SELECT id FROM projects WHERE id=? FOR UPDATE",uuid(project));
+      return memberLocked(project,actor,username,role);
+    });
+  }
+
+  Object memberLocked(String project, String actor, String username, String role) {
+    ownerActor(project, actor);
+    String member = a.byUsername(username);
+    if (actor.equals(member)) throw new ApiError(400,"INVALID_REQUEST","Owner role cannot be changed");
     if (!Set.of("editor", "viewer").contains(role))
       throw new ApiError(400, "INVALID_REQUEST", "Role must be editor or viewer");
+    w.db.queryForList("SELECT first_id FROM friendships WHERE first_id=least(?::uuid,?::uuid) AND second_id=greatest(?::uuid,?::uuid) FOR UPDATE",actor,member,actor,member);
     if (!friends(actor, member))
       throw new ApiError(409, "FRIEND_REQUIRED", "Add this user as a friend before inviting them");
     w.db.update(
@@ -335,17 +388,31 @@ class AccountController {
         uuid(project),
         uuid(member),
         role);
+    w.db.update("UPDATE projects SET updated_at=now() WHERE id=?",uuid(project));
     return ok(map("user", a.user(member, false), "role", role));
   }
 
   @DeleteMapping("/projects/{project}/members/{userId}")
   Object removeMember(
       @PathVariable String project, @PathVariable String userId, HttpServletRequest r) {
-    owner(project, r);
+    return removeMemberActor(project, a.require(r), userId);
+  }
+
+  Object removeMemberActor(String project, String actor, String userId) {
+    return w.tx.execute(tx -> {
+      w.db.queryForList("SELECT id FROM projects WHERE id=? FOR UPDATE",uuid(project));
+      return removeMemberLocked(project,actor,userId);
+    });
+  }
+
+  Object removeMemberLocked(String project, String actor, String userId) {
+    ownerActor(project, actor);
+    if (actor.equals(userId)) throw new ApiError(400,"INVALID_REQUEST","Owner role cannot be removed");
     w.db.update(
         "DELETE FROM project_members WHERE project_id=? AND account_id=?",
         uuid(project),
         uuid(userId));
+    w.db.update("UPDATE projects SET updated_at=now() WHERE id=?",uuid(project));
     return ok(map("removed", true));
   }
 }

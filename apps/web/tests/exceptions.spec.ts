@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { readFileSync } from "node:fs";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
@@ -63,7 +64,7 @@ async function fixture(request: APIRequestContext, text = source) {
       await request.get(base + "/revisions/" + original.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   return { base, projectId, original, analysis };
 }
 function methodNodes(graph: any, name: string) {

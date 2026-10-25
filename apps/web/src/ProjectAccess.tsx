@@ -29,9 +29,15 @@ export default function ProjectAccess({
     [loading, setLoading] = useState(owner),
     [error, setError] = useState(""),
     [copied, setCopied] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const lock = useRef(false),
     close = useRef<HTMLButtonElement>(null);
   const base = projectPath(project.id);
+  useEffect(() => {
+    const changed = () => setRefreshVersion((value) => value + 1);
+    window.addEventListener("java-blueprints:assistant-server-changed", changed);
+    return () => window.removeEventListener("java-blueprints:assistant-server-changed", changed);
+  }, []);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     close.current?.focus();
@@ -59,7 +65,7 @@ export default function ProjectAccess({
     return () => {
       active = false;
     };
-  }, [base, owner]);
+  }, [base, owner, refreshVersion]);
   async function mutate(path: string, method: string, body?: unknown) {
     if (lock.current) return;
     lock.current = true;

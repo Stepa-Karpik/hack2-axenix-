@@ -12,7 +12,7 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
-/** Closed primitive static helpers only; original declarations remain forwarding wrappers. */
+/** Closed dependency-free primitive helpers; original declarations remain forwarding wrappers. */
 final class ClassDecomposition {
     private ClassDecomposition() {}
 
@@ -30,24 +30,12 @@ final class ClassDecomposition {
         if (!(target instanceof BlockStmt body)
                 || !(body.getParentNode().orElse(null) instanceof MethodDeclaration method)
                 || !"entry".equals(selected.kind()))
-            throw unsupported("Select the entry of a concrete static method");
+            throw unsupported("Select the entry of a concrete method");
         if (!(method.getParentNode().orElse(null) instanceof ClassOrInterfaceDeclaration owner)
                 || !(owner.getParentNode().orElse(null) instanceof CompilationUnit unit)
                 || owner.isInterface() || !owner.getExtendedTypes().isEmpty()
                 || !owner.getImplementedTypes().isEmpty() || !owner.getTypeParameters().isEmpty())
             throw unsupported("Utility extraction requires a top-level ordinary class without inheritance or generic owner parameters");
-        if (!method.isStatic() || method.isAbstract() || method.isNative() || method.isSynchronized()
-                || !method.getAnnotations().isEmpty() || !method.getTypeParameters().isEmpty()
-                || !method.getThrownExceptions().isEmpty() || method.getReceiverParameter().isPresent()
-                || !primitive(method.getTypeAsString()))
-            throw unsupported("Only unannotated concrete static int/boolean helpers without generics, throws or synchronization are supported");
-        for (Parameter parameter : method.getParameters()) {
-            if (parameter.isVarArgs() || !parameter.getAnnotations().isEmpty()
-                    || !primitive(parameter.getTypeAsString()))
-                throw unsupported("Parameters must be explicit int/boolean values without annotations or varargs");
-        }
-        if (method.findAll(com.github.javaparser.ast.expr.AnnotationExpr.class).size() != 0)
-            throw unsupported("Annotated declarations and types cannot be relocated");
         SourceRange bodyRange = range.apply(body);
         if (!Objects.equals(bodyRange, selected.sourceRange()))
             throw new EngineException("ANALYSIS_CONFLICT", "Selected entry does not bind to the exact method body");
@@ -55,13 +43,7 @@ final class ClassDecomposition {
         String source = bundle.files().get(originalPath);
         if (source == null || bodyRange.startOffset() < 0 || bodyRange.endOffset() > source.length())
             throw new EngineException("ANALYSIS_CONFLICT", "Method source is unavailable");
-        if (analysis.graph().nodes().stream().anyMatch(n -> n.methodId().equals(selected.methodId()) && n.kind().equals("opaque")))
-            throw unsupported("Opaque or budget-limited methods cannot be decomposed");
-        if (body.findAll(Node.class).size() > 4096)
-            throw unsupported("Utility extraction is limited to4096 AST nodes");
-        checkStatements(body);
-        checkExpressions(body);
-        checkBindings(analysis, body, bodyRange, range);
+        List<MethodDeclaration> responsibility = responsibility(method, owner, analysis, range);
 
         String directory = originalPath.contains("/") ? originalPath.substring(0, originalPath.lastIndexOf('/') + 1) : "";
         String newPath = directory + className + ".java";
@@ -84,27 +66,100 @@ final class ClassDecomposition {
         // processing. Decline instead of silently changing the package annotation environment.
         if (unit.getPackageDeclaration().filter(p -> !p.getAnnotations().isEmpty()).isPresent())
             throw unsupported("Annotated packages are outside utility extraction scope");
-        String parameters = String.join(", ", method.getParameters().stream()
-                .map(p -> p.getTypeAsString() + " " + p.getNameAsString()).toList());
-        String arguments = String.join(", ", method.getParameters().stream().map(Parameter::getNameAsString).toList());
-        String before = source.substring(bodyRange.startOffset(), bodyRange.endOffset());
-        String wrapper = "{ return " + qualifier + "." + method.getNameAsString() + "(" + arguments + "); }";
+        var changes = new ArrayList<TextChange>();
+        var relocated = new StringBuilder();
+        for (MethodDeclaration member : responsibility) {
+            SourceRange at = range.apply(member.getBody().orElseThrow());
+            String before = source.substring(at.startOffset(), at.endOffset());
+            String parameters = String.join(", ", member.getParameters().stream()
+                    .map(p -> p.getTypeAsString() + " " + p.getNameAsString()).toList());
+            String arguments = String.join(", ", member.getParameters().stream().map(Parameter::getNameAsString).toList());
+            String wrapper = "{ " + (member.getType().isVoidType() ? "" : "return ") + qualifier + "." + member.getNameAsString() + "(" + arguments + "); }";
+            changes.add(new TextChange(originalPath, at.startOffset(), at.endOffset(), before, wrapper));
+            relocated.append("    static ").append(member.getTypeAsString()).append(" ").append(member.getNameAsString())
+                    .append("(").append(parameters).append(") ").append(before).append("\n");
+        }
         String added = (packageName.isEmpty() ? "" : "package " + packageName + ";\n\n")
                 + "final class " + className + " {\n"
                 + "    private " + className + "() {}\n"
-                + "    static " + method.getTypeAsString() + " " + method.getNameAsString()
-                + "(" + parameters + ") " + before + "\n}\n";
+                + relocated + "}\n";
         Map<String, String> files = new TreeMap<>(bundle.files());
-        files.put(originalPath, source.substring(0, bodyRange.startOffset()) + wrapper + source.substring(bodyRange.endOffset()));
+        var rewritten = new StringBuilder(source);
+        changes.stream().sorted(Comparator.comparingInt(TextChange::startOffset).reversed())
+                .forEach(change -> rewritten.replace(change.startOffset(), change.endOffset(), change.after()));
+        files.put(originalPath, rewritten.toString());
         files.put(newPath, added);
         try { new SourceBundle(bundle.revisionId(), files); }
         catch (IllegalArgumentException failure) { throw unsupported("Utility candidate exceeds source bundle limits: " + failure.getMessage()); }
-        return new Result(files, List.of(
-                new TextChange(originalPath, bodyRange.startOffset(), bodyRange.endOffset(), before, wrapper),
-                new TextChange(newPath, 0, 0, "", added)), newPath, className, method.getNameAsString());
+        changes.add(new TextChange(newPath, 0, 0, "", added));
+        return new Result(files, changes, newPath, className, method.getNameAsString());
     }
 
-    private static boolean primitive(String type) { return type.equals("int") || type.equals("boolean"); }
+    /** Only exact unqualified calls to private static siblings join the responsibility. */
+    private static List<MethodDeclaration> responsibility(MethodDeclaration selected, ClassOrInterfaceDeclaration owner,
+                                                          Analysis analysis, Function<Node, SourceRange> range) {
+        Map<String, MethodDeclaration> members = new HashMap<>();
+        for (MethodDeclaration member : owner.getMethods()) {
+            SourceRange name = range.apply(member.getName());
+            analysis.semantics().symbols().stream().filter(symbol -> !symbol.external() && symbol.kind().equals("method")
+                    && Objects.equals(symbol.sourceRange(), name)).forEach(symbol -> members.put(symbol.id(), member));
+        }
+        var result = new ArrayList<MethodDeclaration>();
+        collect(selected, selected, analysis, range, members, result, Collections.newSetFromMap(new IdentityHashMap<>()));
+        return result;
+    }
+
+    private static void collect(MethodDeclaration method, MethodDeclaration selected, Analysis analysis,
+                                Function<Node, SourceRange> range, Map<String, MethodDeclaration> members,
+                                List<MethodDeclaration> result, Set<MethodDeclaration> active) {
+        if (active.contains(method)) throw unsupported("Recursive MethodCallExpr dependencies cannot be decomposed");
+        if (result.contains(method)) return;
+        if (result.size() >= 16) throw unsupported("Responsibility extraction is limited to16 methods");
+        if (method != selected && (!method.isPrivate() || !method.isStatic()))
+            throw unsupported("MethodCallExpr dependencies must be private static helpers in the same class");
+        if (method.getParameters().isEmpty() && Set.of("hashCode", "finalize").contains(method.getNameAsString()))
+            throw unsupported("This method signature conflicts with an inherited Object method in the utility class");
+        if (method.isAbstract() || method.isNative() || method.isSynchronized() || method.getBody().isEmpty()
+                || !method.getAnnotations().isEmpty() || !method.getTypeParameters().isEmpty()
+                || !method.getThrownExceptions().isEmpty() || method.getReceiverParameter().isPresent()
+                || !supportsReturnType(method.getTypeAsString()))
+            throw unsupported("Only unannotated concrete primitive/void helpers without generics, throws or synchronization are supported");
+        for (Parameter parameter : method.getParameters())
+            if (parameter.isVarArgs() || !parameter.getAnnotations().isEmpty() || !primitive(parameter.getTypeAsString()))
+                throw unsupported("Parameters must be explicit primitive values without annotations or varargs");
+        if (!method.findAll(AnnotationExpr.class).isEmpty()) throw unsupported("Annotated declarations and types cannot be relocated");
+        BlockStmt body = method.getBody().orElseThrow();
+        SourceRange bodyRange = range.apply(body);
+        if (analysis.graph().nodes().stream().anyMatch(node -> node.kind().equals("opaque")
+                && node.sourceRange() != null && node.sourceRange().filePath().equals(bodyRange.filePath())
+                && node.sourceRange().startOffset() >= bodyRange.startOffset() && node.sourceRange().endOffset() <= bodyRange.endOffset()))
+            throw unsupported("Opaque or budget-limited methods cannot be decomposed");
+        int nodes = body.findAll(Node.class).size();
+        for (MethodDeclaration prior : result) nodes += prior.getBody().orElseThrow().findAll(Node.class).size();
+        if (nodes > 4096) throw unsupported("Responsibility extraction is limited to4096 AST nodes");
+        checkStatements(body);
+        checkExpressions(body);
+        checkBindings(analysis, body, bodyRange, range);
+        result.add(method);
+        active.add(method);
+        for (MethodCallExpr call : body.findAll(MethodCallExpr.class)) {
+            SourceRange use = range.apply(call);
+            var references = analysis.semantics().references().stream().filter(reference -> reference.kind().equals("call")
+                    && Objects.equals(reference.sourceRange(), use)).toList();
+            if (call.getScope().isPresent() || references.size() != 1 || !references.getFirst().resolution().equals("exact")
+                    || references.getFirst().targetIds().size() != 1)
+                throw unsupported("MethodCallExpr requires one exact unqualified same-class helper binding");
+            MethodDeclaration dependency = members.get(references.getFirst().targetIds().getFirst());
+            if (dependency == null) throw unsupported("External MethodCallExpr dependencies cannot be decomposed");
+            collect(dependency, selected, analysis, range, members, result, active);
+        }
+        active.remove(method);
+    }
+
+    static boolean supportsReturnType(String type) { return type.equals("void") || primitive(type); }
+    private static boolean primitive(String type) {
+        return Set.of("boolean", "byte", "short", "char", "int", "long", "float", "double").contains(type);
+    }
 
     private static void checkStatements(BlockStmt body) {
         for (Statement statement : body.findAll(Statement.class)) {
@@ -116,21 +171,25 @@ final class ClassDecomposition {
             if (statement instanceof BreakStmt breakJump && breakJump.getLabel().isPresent()
                     || statement instanceof ContinueStmt continueJump && continueJump.getLabel().isPresent())
                 throw unsupported("Labelled control transfers cannot be relocated");
-            if (statement instanceof ReturnStmt returned && returned.getExpression().isEmpty())
-                throw unsupported("Utility extraction requires an int/boolean return value");
         }
         for (VariableDeclarator variable : body.findAll(VariableDeclarator.class))
             if (!primitive(variable.getTypeAsString()))
-                throw unsupported("Local variables must have explicit int/boolean types");
+                throw unsupported("Local variables must have explicit primitive types");
     }
 
     private static void checkExpressions(BlockStmt body) {
         for (Expression expression : body.findAll(Expression.class)) {
             if (!(expression instanceof IntegerLiteralExpr || expression instanceof BooleanLiteralExpr
+                    || expression instanceof LongLiteralExpr || expression instanceof DoubleLiteralExpr
+                    || expression instanceof CharLiteralExpr || expression instanceof CastExpr || expression instanceof MethodCallExpr
                     || expression instanceof NameExpr || expression instanceof EnclosedExpr || expression instanceof UnaryExpr
                     || expression instanceof BinaryExpr || expression instanceof AssignExpr
                     || expression instanceof VariableDeclarationExpr || expression instanceof ConditionalExpr))
                 throw unsupported("Expression has a call, state, type or exceptional dependency outside primitive utility scope: " + expression.getClass().getSimpleName());
+            if (expression instanceof CastExpr cast && !cast.getType().isPrimitiveType())
+                throw unsupported("Only primitive casts can be relocated");
+            if (expression instanceof MethodCallExpr call && call.getScope().isPresent())
+                throw unsupported("Qualified MethodCallExpr dependencies cannot be relocated");
             if (expression instanceof BinaryExpr binary
                     && (binary.getOperator() == BinaryExpr.Operator.DIVIDE || binary.getOperator() == BinaryExpr.Operator.REMAINDER)
                     && !nonzeroLiteral(binary.getRight()))

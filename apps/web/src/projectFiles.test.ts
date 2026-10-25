@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  nestedMethodOwner,
   addPath,
   movePath,
   directoryPaths,
@@ -202,4 +203,14 @@ test("model IDs retain undo identity through folder rename without crossing proj
     ],
     "project-a/models/1",
   );
+});
+
+test("nested method owners distinguish anonymous and local class methods", () => {
+  assert.equal(nestedMethodOwner("Main.main"), null);
+  assert.equal(nestedMethodOwner("p.Main.Inner.add"), null);
+  assert.equal(
+    nestedMethodOwner("Main.main().new Comparator<Integer>(){}#2.compare"),
+    "main() · new Comparator<Integer>() #2",
+  );
+  assert.equal(nestedMethodOwner("p.Main.main().Local.twice"), "main() · Local");
 });

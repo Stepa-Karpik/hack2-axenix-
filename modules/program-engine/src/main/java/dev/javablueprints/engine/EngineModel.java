@@ -73,9 +73,64 @@ public final class EngineModel {
             this(id, source, target, kind, label, completionContext, null, null);
         }
     }
+    /** Noncallable source projection. Edges only express AST containment, never execution order. */
+    public record InitializerNode(String id, String revisionId, String analysisId, String contextId,
+                                  String kind, String label, SourceRange sourceRange, String astBinding,
+                                  String parentId, String executionRole, List<String> editableFields,
+                                  Map<String, SourceRange> editableFieldRanges, List<String> allowedOperations) {
+        public InitializerNode {
+            editableFields = List.copyOf(editableFields);
+            editableFieldRanges = Map.copyOf(editableFieldRanges);
+            allowedOperations = List.copyOf(allowedOperations);
+        }
+    }
+    public record InitializerContext(String id, String kind, String ownerTypeDeclarationId,
+                                     String fieldDeclarationId, String fieldSymbolId, String label,
+                                     SourceRange sourceRange, SourceRange declarationRange,
+                                     boolean effectiveStatic, boolean effectiveFinal, int memberIndex,
+                                     Integer declaratorIndex, int streamIndex, String constantStatus,
+                                     String projectionKind, String coverage, String reason,
+                                     List<InitializerNode> nodes, List<Edge> edges) {
+        public InitializerContext { nodes = List.copyOf(nodes); edges = List.copyOf(edges); }
+    }
+    /**
+     * One step of JLS 12.4/12.5 initialization in source order. kind: field_initializer,
+     * static_initializer_block, instance_initializer_block (contextId set), this_call,
+     * super_call, implicit_super_call, constructor_body.
+     */
+    public record InitializationStep(String kind, String label, String contextId, String methodId, SourceRange sourceRange) {}
+    /** One constructor's path: an explicit this(...) delegates and skips instance initializers here. */
+    public record ConstructorInitialization(String methodId, String label, boolean implicitDefault,
+                                            String delegation, List<InitializationStep> steps) {
+        public ConstructorInitialization { steps = List.copyOf(steps); }
+    }
+    /**
+     * Declared lifecycle order of one class. Static phase runs once on first active use;
+     * superclass phases and runtime triggers (class loading order, exceptions) are not modeled.
+     */
+    public record InitializationOrder(String typeDeclarationId, String typeName,
+                                      List<InitializationStep> staticPhase,
+                                      List<ConstructorInitialization> constructors, String coverage, String reason) {
+        public InitializationOrder { staticPhase = List.copyOf(staticPhase); constructors = List.copyOf(constructors); }
+    }
     public record Graph(String revisionId, String analysisId, String sourceMapVersion,
-                        List<Method> methods, List<GraphNode> nodes, List<Edge> edges) {
-        public Graph { methods = List.copyOf(methods); nodes = List.copyOf(nodes); edges = List.copyOf(edges); }
+                        List<Method> methods, List<GraphNode> nodes, List<Edge> edges,
+                        List<InitializerContext> initializerContexts,
+                        List<InitializationOrder> initializationOrders) {
+        public Graph {
+            methods = List.copyOf(methods); nodes = List.copyOf(nodes); edges = List.copyOf(edges);
+            initializerContexts = initializerContexts == null ? List.of() : List.copyOf(initializerContexts);
+            initializationOrders = initializationOrders == null ? List.of() : List.copyOf(initializationOrders);
+        }
+        public Graph(String revisionId, String analysisId, String sourceMapVersion,
+                     List<Method> methods, List<GraphNode> nodes, List<Edge> edges,
+                     List<InitializerContext> initializerContexts) {
+            this(revisionId, analysisId, sourceMapVersion, methods, nodes, edges, initializerContexts, List.of());
+        }
+        public Graph(String revisionId, String analysisId, String sourceMapVersion,
+                     List<Method> methods, List<GraphNode> nodes, List<Edge> edges) {
+            this(revisionId, analysisId, sourceMapVersion, methods, nodes, edges, List.of(), List.of());
+        }
     }
     public record Analysis(String id, String revisionId, String bundleHash, String analyzerVersion,
                            String parserVersion, String languageLevel, String parseStatus,
@@ -153,17 +208,29 @@ public final class EngineModel {
     /** targetIds select compile-time declarations; runtimeTargetIds never imply a closed dispatch world. */
     public record Reference(String id, String kind, String name, SourceRange sourceRange,
                             String enclosingCallableId, String resolution, List<String> targetIds,
-                            String resolvedType, String dispatch, List<String> runtimeTargetIds, String reason) {
+                            String resolvedType, String dispatch, List<String> runtimeTargetIds, String reason,
+                            String enclosingInitializerContextId) {
         public Reference {
             targetIds = targetIds == null ? List.of() : List.copyOf(targetIds);
             runtimeTargetIds = runtimeTargetIds == null ? List.of() : List.copyOf(runtimeTargetIds);
         }
+        public Reference(String id, String kind, String name, SourceRange sourceRange,
+                         String enclosingCallableId, String resolution, List<String> targetIds,
+                         String resolvedType, String dispatch, List<String> runtimeTargetIds, String reason) {
+            this(id, kind, name, sourceRange, enclosingCallableId, resolution, targetIds,
+                    resolvedType, dispatch, runtimeTargetIds, reason, null);
+        }
     }
     /** Typed operation payloads; no untyped AST or arbitrary graph mutation crosses this boundary. */
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
-                              String operation, EditPayload payload, String intent) {}
+                              String operation, EditPayload payload, String intent, String initializerContextId) {
+        public EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
+                           String operation, EditPayload payload, String intent) {
+            this(baseRevisionId, analysisId, methodId, nodeId, operation, payload, intent, null);
+        }
+    }
     public sealed interface EditPayload permits ReplaceExpression, ReplaceStatement, InsertStatement, DeleteStatement,
-            MoveStatement, WrapStatement, AddElse, RemoveElse, OptimizeMembership, ExtractMethod, DecomposeClass, RenameLocal {}
+            MoveStatement, WrapStatement, AddElse, RemoveElse, OptimizeMembership, OptimizeStringBuilder, ExtractMethod, DecomposeClass, RenameLocal {}
     public record ReplaceExpression(String field, String expression) implements EditPayload {}
     public record ReplaceStatement(String source) implements EditPayload {}
     public record InsertStatement(String position, String source) implements EditPayload {}
@@ -173,6 +240,7 @@ public final class EngineModel {
     public record AddElse(String source) implements EditPayload {}
     public record RemoveElse() implements EditPayload {}
     public record OptimizeMembership() implements EditPayload {}
+    public record OptimizeStringBuilder() implements EditPayload {}
     public record ExtractMethod(String methodName, String endNodeId) implements EditPayload {}
     public record DecomposeClass(String className) implements EditPayload {}
     public record RenameLocal(String newName) implements EditPayload {}

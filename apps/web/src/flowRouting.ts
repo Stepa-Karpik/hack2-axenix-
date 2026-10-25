@@ -5,6 +5,7 @@ import {
   branchLabelPosition,
 } from "./flowLayout.ts";
 import type { RouteBox, RoutePoint } from "./flowLayout.ts";
+import { RouteCrowdingIndex } from "./flowCrowding.ts";
 
 export const BRANCH_BADGE = { width: 44, height: 26 };
 type Link = { id: string; source: string; target: string; kind: string };
@@ -16,31 +17,6 @@ const length = (points: RoutePoint[]) =>
         sum + Math.abs(p.x - points[i].x) + Math.abs(p.y - points[i].y),
       0,
     );
-function crowding(points: RoutePoint[], previous: RoutePoint[][]) {
-  let score = 0;
-  for (let i = 1; i < points.length; i++)
-    for (const other of previous)
-      for (let j = 1; j < other.length; j++) {
-        const a = points[i - 1],
-          b = points[i],
-          c = other[j - 1],
-          d = other[j];
-        if (a.x === b.x && c.x === d.x && Math.abs(a.x - c.x) < 10)
-          score += Math.max(
-            0,
-            Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y)) -
-              Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y)),
-          );
-        if (a.y === b.y && c.y === d.y && Math.abs(a.y - c.y) < 10)
-          score += Math.max(
-            0,
-            Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x)) -
-              Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)),
-          );
-      }
-  return score;
-}
-
 /** Plan the actual rendered polylines together; never move source nodes or rewrite edges. */
 export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
   const byId = new Map(boxes.map((box) => [box.id, box]));
@@ -72,7 +48,7 @@ export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
       label?: RouteBox;
     }
   >();
-  const prior: RoutePoint[][] = [];
+  const crowdingIndex = new RouteCrowdingIndex();
   const ordered = [...edges].sort((a, b) => {
     const span = (e: Link) =>
       Math.abs((byId.get(e.source)?.y ?? 0) - (byId.get(e.target)?.y ?? 0));
@@ -91,6 +67,19 @@ export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
       end = routePort(target, ports.targetSide);
     const left = Math.min(source.x, target.x) - 30,
       right = Math.max(source.x + source.width, target.x + target.width) + 30;
+    // Long jumps (break/continue/exception exits) span many rows; lanes beside
+    // only the endpoints still cut through sibling columns. Outer lanes clear
+    // every box in the vertical span, so the search never falls back to a
+    // straight line through cards.
+    const top = Math.min(start.y, end.y),
+      bottom = Math.max(start.y, end.y);
+    let outerLeft = left,
+      outerRight = right;
+    for (const box of obstacles)
+      if (box.y < bottom && box.y + box.height > top) {
+        outerLeft = Math.min(outerLeft, box.x - 30);
+        outerRight = Math.max(outerRight, box.x + box.width + 30);
+      }
     const lanes = [
       (start.x + end.x) / 2,
       left,
@@ -99,6 +88,9 @@ export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
       right + 16,
       left - 32,
       right + 32,
+      ...(outerLeft < left || outerRight > right
+        ? [outerLeft, outerRight, outerLeft - 16, outerRight + 16, outerLeft - 32, outerRight + 32]
+        : []),
     ];
     const direct = routeOrthogonal(
       start,
@@ -111,8 +103,9 @@ export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
       ports.targetSide,
       true,
     );
+    const directCrowding = crowdingIndex.score(direct.points);
     const candidates =
-      direct.complete && crowding(direct.points, prior) === 0
+      direct.complete && directCrowding === 0
         ? [direct]
         : [
             direct,
@@ -130,19 +123,24 @@ export function planFlowRoutes(boxes: RouteBox[], edges: Link[]) {
               ),
             ),
           ];
-    candidates.sort(
+    const scored = candidates.map((route) => ({
+      route,
+      score:
+        length(route.points) +
+        (route === direct
+          ? directCrowding
+          : crowdingIndex.score(route.points)) *
+          8 +
+        route.points.length * 5,
+    }));
+    scored.sort(
       (a, b) =>
-        Number(b.complete) - Number(a.complete) ||
-        length(a.points) +
-          crowding(a.points, prior) * 8 +
-          a.points.length * 5 -
-          (length(b.points) +
-            crowding(b.points, prior) * 8 +
-            b.points.length * 5),
+        Number(b.route.complete) - Number(a.route.complete) ||
+        a.score - b.score,
     );
-    const chosen = candidates[0];
+    const chosen = scored[0].route;
     routes.set(edge.id, { ...chosen, ...ports, label: labels.get(edge.id) });
-    prior.push(chosen.points);
+    crowdingIndex.add(chosen.points);
   }
   return { routes, obstacles };
 }

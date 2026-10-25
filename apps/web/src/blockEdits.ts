@@ -99,6 +99,7 @@ export function blockEditPayload(
     case "delete_statement":
     case "remove_else":
     case "optimize_membership":
+    case "optimize_string_builder":
       return {};
     case "replace_expression": {
       const field = node.editableFields[0];

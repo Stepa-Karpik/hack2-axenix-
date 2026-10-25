@@ -1,4 +1,10 @@
 import AssistantHost from "./AssistantHost";
+import {
+  InitializerList,
+  InitializerCanvas,
+  InitializerInspector,
+} from "./InitializerView";
+import type { InitializerContext, InitializerNode } from "./types";
 import { registerAssistantWorkspace } from "./assistantBridge";
 import type { AssistantWorkspace } from "./assistantBridge";
 import { searchProject } from "./searchIndex";
@@ -36,6 +42,7 @@ import TestProgressView from "./TestProgressView";
 import CodeInsights from "./CodeInsights";
 import useFileRuns from "./useFileRuns";
 import TestCasesEditor from "./TestCasesEditor";
+import MethodTests from "./MethodTests";
 import {
   CompileErrorHelp,
   SourceFilenameIssues,
@@ -43,6 +50,7 @@ import {
 } from "./RunSourceCheck";
 import { parseCases } from "./testCases";
 import { readPrepared, writePrepared, clearPrepared } from "./preparedProposal";
+import { executeWorkspaceAction } from "./assistantWorkspaceActions";
 import { useProjectList } from "./useProjectList";
 import "./projectList.css";
 import { testDuration, testReason } from "./testProgress";
@@ -99,7 +107,7 @@ import {
   validMethodName,
   validClassName,
 } from "./methodExtraction";
-import CodeEditor, { disposeEditorModels } from "./CodeEditor";
+import CodeEditor, { disposeEditorModels } from "./DeferredCodeEditor";
 import ExecutionResources from "./ExecutionResources";
 import ProjectArchives from "./ProjectArchives";
 import ProjectExplorer, { FileGlyph } from "./ProjectExplorer";
@@ -128,6 +136,13 @@ import { sampleSource } from "./sample";
 function message(e: unknown) {
   return e instanceof Error ? e.message : "Не удалось выполнить действие";
 }
+// Behaviour-preserving rewrites offered by analysis opportunities (OPT-* rules).
+const optimizationOperations = [
+  "optimize_membership",
+  "optimize_string_builder",
+];
+const optimizationOf = (n?: { allowedOperations?: string[] } | null) =>
+  optimizationOperations.find((op) => n?.allowedOperations?.includes(op));
 const short = (id?: string | null) => id?.slice(0, 8) ?? "—";
 const labelStatus = (s: string) =>
   (
@@ -861,6 +876,7 @@ function Workbench({
   const [importSelected, setImportSelected] = useState<string[]>([]);
   const folderInput = useRef<HTMLInputElement>(null);
   const [importChooser, setImportChooser] = useState(false);
+  const [methodTestsOpen, setMethodTestsOpen] = useState(false);
   const [createCommand, setCreateCommand] = useState<{
     kind: "file" | "folder";
     id: number;
@@ -887,6 +903,48 @@ function Workbench({
     return () => query.removeEventListener("change", update);
   }, []);
   const [requestedMethodId, setMethodId] = useState(initialView.methodId ?? "");
+  const graphSourceHistory = useRef<{
+    head: string | null;
+    past: { before: FileSnapshot; after: FileSnapshot }[];
+    future: { before: FileSnapshot; after: FileSnapshot }[];
+  }>({ head: null, past: [], future: [] });
+  const graphSourceHistoryBusy = useRef(false);
+  const graphSourceHistoryHandler = useRef<
+    (command: "undo" | "redo") => Promise<void>
+  >(async () => {});
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const command = (event as CustomEvent).detail?.command;
+      if (command === "clear_redo") graphSourceHistory.current.future = [];
+      if (command === "undo" || command === "redo")
+        void graphSourceHistoryHandler.current(command);
+    };
+    window.addEventListener("java-blueprints:graph-source-history", listener);
+    return () =>
+      window.removeEventListener(
+        "java-blueprints:graph-source-history",
+        listener,
+      );
+  }, []);
+  const [initializerId, setInitializerId] = useState("");
+  const [initializerNodeId, setInitializerNodeId] = useState("");
+  const initializerContexts =
+    graph?.initializerContexts?.filter(
+      (context) => context.sourceRange.filePath === file,
+    ) ?? [];
+  const initializerContext = initializerContexts.find(
+    (context) => context.id === initializerId,
+  );
+  // Orders of classes declared in this file (identified by their own initializers).
+  const initializationOrders =
+    graph?.initializationOrders?.filter((order) =>
+      initializerContexts.some(
+        (context) => context.ownerTypeDeclarationId === order.typeDeclarationId,
+      ),
+    ) ?? [];
+  const initializerNode =
+    initializerContext?.nodes.find((node) => node.id === initializerNodeId) ??
+    null;
   const fileMethods =
     graph?.methods.filter((m) => m.sourceRange.filePath === file) ?? [];
   const methodId =
@@ -991,6 +1049,9 @@ function Workbench({
   const [busy, setBusy] = useState(false);
   const [runnerAvailable, setRunnerAvailable] = useState<boolean | null>(null);
   const [reportId, setReportId] = useState<string | undefined>();
+  const [methodVerification, setMethodVerification] = useState<Report | null>(
+    null,
+  );
   const importInput = useRef<HTMLInputElement>(null);
   const controllers = useRef(new Set<AbortController>());
   const filesRef = useRef(files);
@@ -1302,15 +1363,22 @@ function Workbench({
   }
   useEffect(() => {
     mounted.current = true;
-    Promise.all([
-      api<Project>(base),
-      refreshHistory(),
-      api<{ runner: { available: boolean } }>("/capabilities"),
-    ])
-      .then(([p, , c]) => {
+    // History and runner capabilities must not hold the source/graph loading path.
+    void refreshHistory().catch((error) => {
+      if (mounted.current)
+        setError("Не удалось загрузить историю: " + message(error));
+    });
+    void api<{ runner: { available: boolean } }>("/capabilities")
+      .then((capability) => {
+        if (mounted.current) setRunnerAvailable(capability.runner.available);
+      })
+      .catch(() => {
+        if (mounted.current) setRunnerAvailable(false);
+      });
+    api<Project>(base)
+      .then((p) => {
         if (!mounted.current) return;
         setProject(p);
-        setRunnerAvailable(c.runner.available);
         if (p.headRevisionId) void openRevision(p.headRevisionId, true);
         else {
           setStatus("Добавьте исходники");
@@ -1573,6 +1641,8 @@ function Workbench({
     }
   }
   function pickNode(n: GraphNode) {
+    setInitializerId("");
+    setInitializerNodeId("");
     if (stale || busy || saving || loadingRevision) return;
     setInspectorFocus((value) => value + 1);
     setSelected(n);
@@ -1606,7 +1676,14 @@ function Workbench({
     const next = { ...filesRef.current, [file]: text };
     filesRef.current = next;
     setFiles(next);
-    setStatus("Есть изменения");
+    const changed =
+      !revision ||
+      hasChanges(next, filesOf(revision)) ||
+      JSON.stringify(directoryPaths(next, directoriesRef.current)) !==
+        JSON.stringify(
+          directoryPaths(filesOf(revision), revision.directories ?? []),
+        );
+    setStatus(changed ? "Есть изменения" : "Сохранено");
     setProposal(null);
     setReferenceId(null);
     setRange(null);
@@ -1721,6 +1798,7 @@ function Workbench({
       setStatus("Сохранено");
       void refreshHistory();
       void analyze(r);
+      return r.id;
     } catch (e) {
       if (e instanceof ApiError && e.code === "REVISION_CONFLICT") {
         setConflict(true);
@@ -1925,9 +2003,9 @@ function Workbench({
       optimizationEdit &&
       optimizationEdit.serial !== handledOptimization.current &&
       optimizationEdit.nodeId === selected?.id &&
-      selected?.allowedOperations?.includes("optimize_membership")
+      optimizationOf(selected)
     ) {
-      setOperation("optimize_membership");
+      setOperation(optimizationOf(selected)!);
       setIntent("preserve_behavior");
       handledOptimization.current = optimizationEdit.serial;
     }
@@ -2012,9 +2090,17 @@ function Workbench({
           controller.signal,
         );
         if (!current()) return;
-        p = await api<Proposal>(base + "/changes/" + id, {
-          signal: controller.signal,
-        });
+        p = await api<Proposal>(
+          p.origin === "assistant_edit"
+            ? `/assistant/projects/${projectId}/code-proposals/${id}/refresh`
+            : base + "/changes/" + id,
+          {
+            ...(p.origin === "assistant_edit"
+              ? { method: "POST", body: {} }
+              : {}),
+            signal: controller.signal,
+          },
+        );
       }
       if (!current()) return;
       if (
@@ -2125,6 +2211,7 @@ function Workbench({
           payload: changePayload,
           intent: [
             "optimize_membership",
+            "optimize_string_builder",
             "extract_method",
             "decompose_class",
             "rename_local",
@@ -2155,6 +2242,116 @@ function Workbench({
       setBusy(false);
     }
   }
+  async function prepareInitializer(
+    context: InitializerContext,
+    node: InitializerNode,
+    source: string,
+  ) {
+    if (
+      !analysis ||
+      !revision ||
+      stale ||
+      readOnly ||
+      inFlight ||
+      dirty ||
+      context.id !== initializerContext?.id
+    )
+      return;
+    setBusy(true);
+    setError("");
+    const epoch = ++proposalEpoch.current,
+      opened = openGeneration.current;
+    try {
+      const candidate = await api<Proposal>(base + "/changes", {
+        method: "POST",
+        body: {
+          baseRevisionId: revision.id,
+          analysisId: analysis.id,
+          initializerContextId: context.id,
+          nodeId: node.id,
+          operation: "replace_expression",
+          payload: { field: "expression", source },
+          intent: "semantic_edit",
+        },
+      });
+      if (
+        !mounted.current ||
+        epoch !== proposalEpoch.current ||
+        opened !== openGeneration.current
+      )
+        return;
+      writePrepared(projectId, candidate.id);
+      restoredProposal.current = candidate.id;
+      setProposal(candidate);
+      setDock("changes");
+      await track({ id: candidate.jobId, status: "queued", type: "change" });
+      const ready = await api<Proposal>(base + "/changes/" + candidate.id);
+      if (
+        mounted.current &&
+        epoch === proposalEpoch.current &&
+        opened === openGeneration.current
+      ) {
+        setProposal(ready);
+        void refreshHistory();
+      }
+    } catch (error) {
+      setError(message(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+  graphSourceHistoryHandler.current = async (command) => {
+    if (
+      graphSourceHistoryBusy.current ||
+      inFlight ||
+      dirty ||
+      readOnly ||
+      conflict ||
+      !revision
+    )
+      return;
+    const history = graphSourceHistory.current;
+    if (history.head !== revision.id) {
+      history.past = [];
+      history.future = [];
+      history.head = revision.id;
+      setStatus("Нет действий схемы для отмены в текущей версии.");
+      return;
+    }
+    const entry = (command === "undo" ? history.past : history.future).at(-1);
+    if (!entry) {
+      setStatus(
+        command === "undo"
+          ? "Нет действий схемы для отмены."
+          : "Нет отменённых действий схемы.",
+      );
+      return;
+    }
+    graphSourceHistoryBusy.current = true;
+    try {
+      const next = await persistSnapshot(
+        command === "undo" ? entry.before : entry.after,
+      );
+      if (!next) return;
+      history.head = next;
+      if (command === "undo") {
+        history.past.pop();
+        history.future.push(entry);
+      } else {
+        history.future.pop();
+        history.past.push(entry);
+      }
+      setStatus(
+        command === "undo"
+          ? "Действие схемы отменено новой сохранённой версией."
+          : "Действие схемы повторено новой сохранённой версией.",
+      );
+    } catch (error) {
+      setError(message(error));
+    } finally {
+      graphSourceHistoryBusy.current = false;
+    }
+  };
   async function apply() {
     if (
       !proposal ||
@@ -2174,6 +2371,17 @@ function Workbench({
       return;
     setBusy(true);
     try {
+      const before = {
+        files: { ...filesRef.current },
+        directories: [...directoriesRef.current],
+      };
+      const candidate = await api<Revision>(
+        base + "/revisions/" + proposal.candidateRevisionId,
+      );
+      const after = {
+        files: filesOf(candidate),
+        directories: candidate.directories ?? [],
+      };
       const p = await api<Project>(base + "/head", {
         method: "POST",
         head: project.headRevisionId,
@@ -2182,10 +2390,19 @@ function Workbench({
           proposalId: proposal.id,
           expectedHeadRevisionId: project.headRevisionId,
           ...(proposal.intent === "preserve_behavior"
-            ? { verificationReportId: reportId }
+            ? { verificationReportId: matchingMethodReport?.id ?? reportId }
             : {}),
         },
       });
+      const previous = graphSourceHistory.current;
+      graphSourceHistory.current = {
+        head: p.headRevisionId,
+        past: [
+          ...(previous.head === proposal.baseRevisionId ? previous.past : []),
+          { before, after },
+        ].slice(-20),
+        future: [],
+      };
       setProject(p);
       clearPrepared(projectId, proposal.id);
       setProposal({ ...proposal, status: "applied" });
@@ -2309,11 +2526,22 @@ function Workbench({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   const report = job?.result?.report;
+  const matchingMethodReport =
+    proposal &&
+    methodVerification?.id &&
+    methodVerification.mode === "method" &&
+    methodVerification.outcome === "matched_on_tests" &&
+    methodVerification.coverageComplete &&
+    methodVerification.baseRevisionId === proposal.baseRevisionId &&
+    methodVerification.candidateRevisionId === proposal.candidateRevisionId
+      ? methodVerification
+      : null;
   const exactMatched =
     !!proposal &&
-    report?.outcome === "matched_on_tests" &&
-    report.baseRevisionId === proposal.baseRevisionId &&
-    report.candidateRevisionId === proposal.candidateRevisionId;
+    (!!matchingMethodReport ||
+      (report?.outcome === "matched_on_tests" &&
+        report.baseRevisionId === proposal.baseRevisionId &&
+        report.candidateRevisionId === proposal.candidateRevisionId));
   const method = graph?.methods.find((m) => m.id === methodId);
   const expressions =
     graph?.nodes.filter((n) => n.methodId === methodId && !!editRange(n)) ?? [];
@@ -2343,9 +2571,14 @@ function Workbench({
           message: "Открыт другой проект. Запросите действие снова.",
         };
       if (
-        ["run_tests", "run_program", "workspace_action", "optimize"].includes(
-          command.type,
-        ) &&
+        [
+          "run_tests",
+          "run_program",
+          "workspace_action",
+          "optimize",
+          "code_edit",
+          "layout_action",
+        ].includes(command.type) &&
         ((command.args.revisionId && command.args.revisionId !== revision.id) ||
           (command.args.filePath && command.args.filePath !== file) ||
           (command.args.methodId && command.args.methodId !== methodId))
@@ -2355,6 +2588,12 @@ function Workbench({
           message:
             "Выбранный файл, метод или версия изменились. Запросите действие снова.",
         };
+      if (command.type === "layout_action") {
+        window.dispatchEvent(
+          new CustomEvent("java-blueprints:assistant-minimize"),
+        );
+        return executeWorkspaceAction(workspace, command.args);
+      }
       if (command.type === "show_panel") {
         const aliases: Record<string, string> = {
           files: "project",
@@ -2377,10 +2616,16 @@ function Workbench({
             "project",
             "changes",
             "history",
+            "palette",
+            "navigation",
           ].includes(panel)
         )
           return { ok: false, message: "Неизвестная панель." };
-        await workspace.reveal(panel as "code");
+        const opened = await executeWorkspaceAction(workspace, {
+          operation: "open",
+          panel,
+        });
+        if (!opened.ok) return opened;
         if (name === "optimization")
           window.dispatchEvent(
             new CustomEvent("java-blueprints:assistant-analysis-tab", {
@@ -2423,6 +2668,73 @@ function Workbench({
           ok: true,
           message: `Найдено ${results.length}. Открыто: ${hit.title} · ${hit.file}.`,
         };
+      }
+      if (command.type === "code_edit") {
+        if (
+          accessReadOnly ||
+          dirty ||
+          inFlight ||
+          conflict ||
+          command.args.baseRevisionId !== revision.id
+        )
+          return {
+            ok: false,
+            message:
+              "Сохраните текущий файл и дождитесь завершения операции. Предложение относится только к указанной сохранённой версии.",
+          };
+        const proposalId = String(command.args.proposalId ?? ""),
+          jobId = String(command.args.jobId ?? "");
+        if (
+          !/^[a-f0-9-]{36}$/i.test(proposalId) ||
+          !/^[a-f0-9-]{36}$/i.test(jobId)
+        )
+          return { ok: false, message: "Нет корректного предложения правки." };
+        setBusy(true);
+        const epoch = ++proposalEpoch.current,
+          opened = openGeneration.current;
+        try {
+          const candidate = await api<Proposal>(
+            base + "/changes/" + proposalId,
+          );
+          if (
+            candidate.baseRevisionId !== revision.id ||
+            candidate.jobId !== jobId
+          )
+            return { ok: false, message: "Привязка кандидата изменилась." };
+          writePrepared(projectId, candidate.id);
+          restoredProposal.current = candidate.id;
+          setProposal(candidate);
+          setDock("changes");
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:assistant-minimize"),
+          );
+          await track({ id: jobId, status: "queued", type: "compile" });
+          const ready = await api<Proposal>(
+            `/assistant/projects/${projectId}/code-proposals/${proposalId}/refresh`,
+            { method: "POST", body: {} },
+          );
+          if (
+            !mounted.current ||
+            epoch !== proposalEpoch.current ||
+            opened !== openGeneration.current
+          )
+            return {
+              ok: false,
+              message:
+                "Контекст изменился. Кандидат остался в истории; исходник не заменён.",
+            };
+          setProposal(ready);
+          void refreshHistory();
+          return {
+            ok: ready.status === "ready",
+            message:
+              ready.status === "ready"
+                ? "Правка подготовлена отдельным кандидатом и скомпилирована. Открыта разница; исходник не изменён. Проверьте на тестах перед применением."
+                : "Кандидат не прошёл компиляцию. Исходный код не изменён; ошибка показана в изменениях.",
+          };
+        } finally {
+          if (mounted.current) setBusy(false);
+        }
       }
       if (command.type === "workspace_action") {
         const action = String(command.args.action);
@@ -2555,9 +2867,7 @@ function Workbench({
           (op) => op.methodId === methodId,
         );
         const node = graph?.nodes.find(
-          (n) =>
-            n.id === opportunity?.nodeId &&
-            n.allowedOperations?.includes("optimize_membership"),
+          (n) => n.id === opportunity?.nodeId && !!optimizationOf(n),
         );
         if (!node || !analysis) {
           await workspace.reveal("analysis");
@@ -2582,7 +2892,7 @@ function Workbench({
               analysisId: analysis.id,
               methodId: node.methodId,
               nodeId: node.id,
-              operation: "optimize_membership",
+              operation: optimizationOf(node)!,
               payload: {},
               intent: "preserve_behavior",
             },
@@ -2868,6 +3178,8 @@ function Workbench({
           disabled={inFlight || conflict || (!!file && !editorReady)}
           readOnly={readOnly}
           onOpen={(p) => {
+            setInitializerId("");
+            setInitializerNodeId("");
             setOverview(true);
             setMethodId(
               matchingMethod(graph?.methods ?? [], methodSelections.current[p])
@@ -2883,6 +3195,8 @@ function Workbench({
           }}
           onMethod={(m) => {
             if (stale) return;
+            setInitializerId("");
+            setInitializerNodeId("");
             setOverview(false);
             setMethodId(m.id);
             selectedMethodIdentity.current = methodIdentity(m);
@@ -2898,6 +3212,27 @@ function Workbench({
           onImport={() => setImportChooser(true)}
           onDownload={(p) => void exportRevision([p])}
           createCommand={createCommand}
+        />
+        <InitializerList
+          contexts={initializerContexts}
+          orders={initializationOrders}
+          selected={initializerId}
+          disabled={stale || analyzing || inFlight}
+          onSelect={(context) => {
+            setInitializerId(context.id);
+            setInitializerNodeId(
+              context.nodes.find((node) =>
+                node.allowedOperations.includes("replace_expression"),
+              )?.id ??
+                context.nodes[0]?.id ??
+                "",
+            );
+            setSelected(null);
+            setRange(context.sourceRange);
+            setReferenceId(null);
+            void workspace.reveal("graph");
+            void workspace.reveal("analysis");
+          }}
         />
 
         <div className="local-label" role="status" aria-live="polite">
@@ -2965,13 +3300,21 @@ function Workbench({
         <div className="editor-caption">
           <span title={file}>СХЕМА · {file.split("/").pop()}</span>
           <span>
-            {overview
-              ? "Обзор проекта"
-              : method
-                ? method.signature
-                : "Выберите метод"}
+            {initializerContext
+              ? initializerContext.label
+              : overview
+                ? "Обзор проекта"
+                : method
+                  ? method.signature
+                  : "Выберите метод"}
           </span>
-          <button onClick={() => setOverview((v) => !v)}>
+          <button
+            onClick={() => {
+              setInitializerId("");
+              setInitializerNodeId("");
+              setOverview((v) => !v);
+            }}
+          >
             {overview ? "Выбранный метод" : "Все методы"}
           </button>
           {graph && (
@@ -2988,7 +3331,19 @@ function Workbench({
               : "Схема относится к предыдущей сохранённой версии; обновление ещё не завершено."}
           </p>
         )}
-        {graph && (overview || methodId) ? (
+        {initializerContext ? (
+          <InitializerCanvas
+            key={initializerContext.id}
+            scope={projectId + ":" + (revision?.id ?? "")}
+            context={initializerContext}
+            selected={initializerNodeId}
+            onSelect={(node) => {
+              setInitializerNodeId(node.id);
+              setRange(node.sourceRange);
+              void workspace.reveal("analysis");
+            }}
+          />
+        ) : graph && (overview || methodId) ? (
           <FlowCanvas
             graph={graph}
             semantics={
@@ -3302,512 +3657,547 @@ function Workbench({
             диагностике анализа.
           </div>
         )}
-        <CodeInsights
-          analysis={analysis}
-          sourceText={files[file]}
-          file={file}
-          methodId={methodId}
-          focusKey={inspectorFocus}
-          optimizationEnabled={!inFlight && !readOnly && !stale}
-          onOptimize={(nodeId) => {
-            if (inFlight || readOnly || stale) return;
-            const node = graph?.nodes.find(
-              (item) =>
-                item.id === nodeId &&
-                item.allowedOperations?.includes("optimize_membership"),
-            );
-            if (!node) return;
-            setMethodId(node.methodId);
-            pickNode(node);
-            setOptimizationEdit((previous) => ({
-              nodeId,
-              serial: (previous?.serial ?? 0) + 1,
-            }));
-          }}
-          current={
-            !!analysis &&
-            analysis.revisionId === revision?.id &&
-            !dirty &&
-            !loadingRevision
-          }
-          onNavigate={(target, targetMethod) => {
-            if (
-              !analysis ||
-              analysis.revisionId !== revision?.id ||
-              dirty ||
-              loadingRevision
-            )
-              return;
-            setRange({ ...target, diagnosticRevisionId: analysis.revisionId });
-            setFile(target.filePath);
-            setSelected(null);
-            const enclosing =
-              targetMethod ??
-              graph?.methods.find(
-                (m) =>
-                  m.sourceRange.filePath === target.filePath &&
-                  m.sourceRange.startOffset <= target.startOffset &&
-                  target.endOffset <= m.sourceRange.endOffset,
-              )?.id;
-            if (enclosing) setMethodId(enclosing);
-            setMode("split");
-          }}
-        >
-          {!selected && (
-            <div className="analysis-summary">
-              <strong>
-                <Check size={21} />
-                {stale
-                  ? "Есть изменения"
-                  : analysis?.parseStatus === "valid"
-                    ? "Синтаксис проверен"
-                    : "Проверка исходника"}
-              </strong>
-              <dl>
-                <dt>Узлы</dt>
-                <dd>{methodExecutionNodes.length || "—"}</dd>
-                <dt>Связи</dt>
-                <dd>
-                  {graph?.edges.filter(
-                    (e) =>
-                      methodNodeIds.has(e.source) &&
-                      methodNodeIds.has(e.target),
-                  ).length ?? "—"}
-                </dd>
-              </dl>
-            </div>
-          )}
-          {selected ? (
-            <>
-              <div
-                className={
-                  "inspector-selection" +
-                  (isIterationProtocol(selected) ? " iteration-protocol" : "")
-                }
-              >
-                <span className="eyebrow">
-                  {selected.executionRole === "ast_projection"
-                    ? "Исходник"
-                    : kindName(selected.kind)}
-                </span>
-                {!isIterationProtocol(selected) && (
-                  <h2>{nodeCaption(selected).split("\n")[0].slice(0, 120)}</h2>
-                )}
-                <span className="quiet small">
-                  {selected.sourceRange
-                    ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
-                    : "Служебный узел"}
-                </span>
+        {initializerContext ? (
+          <InitializerInspector
+            context={initializerContext}
+            node={initializerNode}
+            source={files[file] ?? ""}
+            disabled={stale || readOnly || inFlight || dirty}
+            onNavigate={(target) => {
+              setRange(target);
+              void workspace.reveal("code");
+            }}
+            onPrepare={prepareInitializer}
+          />
+        ) : (
+          <CodeInsights
+            analysis={analysis}
+            sourceText={files[file]}
+            file={file}
+            methodId={methodId}
+            focusKey={inspectorFocus}
+            optimizationEnabled={!inFlight && !readOnly && !stale}
+            onOptimize={(nodeId) => {
+              if (inFlight || readOnly || stale) return;
+              const node = graph?.nodes.find(
+                (item) => item.id === nodeId && !!optimizationOf(item),
+              );
+              if (!node) return;
+              setMethodId(node.methodId);
+              pickNode(node);
+              setOptimizationEdit((previous) => ({
+                nodeId,
+                serial: (previous?.serial ?? 0) + 1,
+              }));
+            }}
+            current={
+              !!analysis &&
+              analysis.revisionId === revision?.id &&
+              !dirty &&
+              !loadingRevision
+            }
+            onNavigate={(target, targetMethod) => {
+              if (
+                !analysis ||
+                analysis.revisionId !== revision?.id ||
+                dirty ||
+                loadingRevision
+              )
+                return;
+              setRange({
+                ...target,
+                diagnosticRevisionId: analysis.revisionId,
+              });
+              setFile(target.filePath);
+              setSelected(null);
+              const enclosing =
+                targetMethod ??
+                graph?.methods.find(
+                  (m) =>
+                    m.sourceRange.filePath === target.filePath &&
+                    m.sourceRange.startOffset <= target.startOffset &&
+                    target.endOffset <= m.sourceRange.endOffset,
+                )?.id;
+              if (enclosing) setMethodId(enclosing);
+              setMode("split");
+            }}
+          >
+            {!selected && (
+              <div className="analysis-summary">
+                <strong>
+                  <Check size={21} />
+                  {stale
+                    ? "Есть изменения"
+                    : analysis?.parseStatus === "valid"
+                      ? "Синтаксис проверен"
+                      : "Проверка исходника"}
+                </strong>
+                <dl>
+                  <dt>Узлы</dt>
+                  <dd>{methodExecutionNodes.length || "—"}</dd>
+                  <dt>Связи</dt>
+                  <dd>
+                    {graph?.edges.filter(
+                      (e) =>
+                        methodNodeIds.has(e.source) &&
+                        methodNodeIds.has(e.target),
+                    ).length ?? "—"}
+                  </dd>
+                </dl>
               </div>
-              {selected.sourceRange && (
-                <button
-                  className="wide subtle"
-                  onClick={() => {
-                    setRange(selected.sourceRange);
-                    setMode("split");
-                  }}
+            )}
+            {selected ? (
+              <>
+                <div
+                  className={
+                    "inspector-selection" +
+                    (isIterationProtocol(selected) ? " iteration-protocol" : "")
+                  }
                 >
-                  Перейти к коду <Icon name="external" size={14} />
-                </button>
-              )}
-              {operations.length > 0 ? (
-                <div className="expression-form">
-                  <label htmlFor="node-operation">Действие</label>
-                  <Select
-                    id="node-operation"
-                    value={operation}
-                    disabled={inFlight || stale || readOnly}
-                    onChange={(e) => {
-                      setOperation(e.target.value);
-                      if (e.target.value === "insert_statement")
-                        previewInsertion(selected.id);
-                      else setInsertionPreview(null);
-                      if (
-                        [
-                          "optimize_membership",
-                          "extract_method",
-                          "decompose_class",
-                          "rename_local",
-                        ].includes(e.target.value)
-                      )
-                        setIntent("preserve_behavior");
+                  <span className="eyebrow">
+                    {selected.executionRole === "ast_projection"
+                      ? "Исходник"
+                      : kindName(selected.kind)}
+                  </span>
+                  {!isIterationProtocol(selected) && (
+                    <h2>
+                      {nodeCaption(selected).split("\n")[0].slice(0, 120)}
+                    </h2>
+                  )}
+                  <span className="quiet small">
+                    {selected.sourceRange
+                      ? `${selected.sourceRange.filePath} · строка ${selected.sourceRange.startLine}`
+                      : "Служебный узел"}
+                  </span>
+                </div>
+                {selected.sourceRange && (
+                  <button
+                    className="wide subtle"
+                    onClick={() => {
+                      setRange(selected.sourceRange);
+                      setMode("split");
                     }}
                   >
-                    {operations.map((op) => (
-                      <option key={op} value={op}>
-                        {operationLabels[op]}
-                      </option>
-                    ))}
-                  </Select>
-                  {operation === "replace_expression" &&
-                    editRange(selected) && (
+                    Перейти к коду <Icon name="external" size={14} />
+                  </button>
+                )}
+                {operations.length > 0 ? (
+                  <div className="expression-form">
+                    <label htmlFor="node-operation">Действие</label>
+                    <Select
+                      id="node-operation"
+                      value={operation}
+                      disabled={inFlight || stale || readOnly}
+                      onChange={(e) => {
+                        setOperation(e.target.value);
+                        if (e.target.value === "insert_statement")
+                          previewInsertion(selected.id);
+                        else setInsertionPreview(null);
+                        if (
+                          [
+                            "optimize_membership",
+                            "optimize_string_builder",
+                            "extract_method",
+                            "decompose_class",
+                            "rename_local",
+                          ].includes(e.target.value)
+                        )
+                          setIntent("preserve_behavior");
+                      }}
+                    >
+                      {operations.map((op) => (
+                        <option key={op} value={op}>
+                          {operationLabels[op]}
+                        </option>
+                      ))}
+                    </Select>
+                    {operation === "replace_expression" &&
+                      editRange(selected) && (
+                        <>
+                          <label htmlFor="expression">
+                            {selected.editableFields[0] === "condition"
+                              ? "Условие"
+                              : "Выражение"}
+                          </label>
+                          <textarea
+                            id="expression"
+                            value={expression}
+                            onChange={(e) => setExpression(e.target.value)}
+                            rows={5}
+                            spellCheck={false}
+                            disabled={inFlight || stale || readOnly}
+                          />
+                        </>
+                      )}
+                    {operation === "replace_statement" && (
                       <>
-                        <label htmlFor="expression">
-                          {selected.editableFields[0] === "condition"
-                            ? "Условие"
-                            : "Выражение"}
-                        </label>
+                        <label htmlFor="statement-source">Код блока</label>
                         <textarea
-                          id="expression"
-                          value={expression}
-                          onChange={(e) => setExpression(e.target.value)}
-                          rows={5}
-                          spellCheck={false}
+                          id="statement-source"
+                          rows={6}
+                          value={statement}
                           disabled={inFlight || stale || readOnly}
+                          onChange={(e) => setStatement(e.target.value)}
+                          spellCheck={false}
                         />
                       </>
                     )}
-                  {operation === "replace_statement" && (
-                    <>
-                      <label htmlFor="statement-source">Код блока</label>
-                      <textarea
-                        id="statement-source"
-                        rows={6}
-                        value={statement}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setStatement(e.target.value)}
-                        spellCheck={false}
-                      />
-                    </>
-                  )}
-                  {operation === "insert_statement" && (
-                    <>
-                      <label htmlFor="insert-position">Позиция</label>
-                      <Select
-                        id="insert-position"
-                        value={position}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => {
-                          previewInsertion(selected.id);
-                          setPosition(e.target.value);
-                        }}
-                      >
-                        {positions.map((p) => (
-                          <option key={p} value={p}>
-                            {(
-                              {
-                                before: "Перед узлом",
-                                after: "После узла",
-                                body_start: "В начале метода",
-                                body_end: "В конце метода",
-                              } as Record<string, string>
-                            )[p] ?? p}
-                          </option>
-                        ))}
-                      </Select>
-                      <label htmlFor="statement-template">Шаблон</label>
-                      <Select
-                        id="statement-template"
-                        value={template}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => {
-                          previewInsertion(selected.id);
-                          setTemplate(e.target.value);
-                          setStatement(statementTemplates[e.target.value]);
-                        }}
-                      >
-                        <option value="statement">Оператор</option>
-                        <option value="condition">Условие</option>
-                        <option value="loop">Цикл</option>
-                      </Select>
-                      <label htmlFor="statement-source">Java оператор</label>
-                      <textarea
-                        id="statement-source"
-                        value={statement}
-                        rows={6}
-                        spellCheck={false}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => {
-                          previewInsertion(selected.id);
-                          setStatement(e.target.value);
-                        }}
-                      />
-                    </>
-                  )}
-                  {operation === "delete_statement" && (
-                    <p className="small quiet">Удаление выбранного оператора</p>
-                  )}
-                  {operation === "move_statement" && (
-                    <>
-                      <label htmlFor="move-target">
-                        Относительно оператора
-                      </label>
-                      <Select
-                        id="move-target"
-                        value={targetNodeId}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => {
-                          setTargetNodeId(e.target.value);
-                          const next = targets.find(
-                            (n) => n.id === e.target.value,
-                          );
-                          setMovePosition(
-                            selected && next && graph
-                              ? (movePositions(selected, next, graph)[0] ?? "")
-                              : "",
-                          );
-                        }}
-                      >
-                        <option value="">Выберите оператор</option>
-                        {targets.map((n) => (
-                          <option key={n.id} value={n.id}>
-                            {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
-                          </option>
-                        ))}
-                      </Select>
-                      <label htmlFor="move-position">Позиция перемещения</label>
-                      <Select
-                        id="move-position"
-                        value={movePosition}
-                        disabled={inFlight || stale || readOnly || !target}
-                        onChange={(e) => setMovePosition(e.target.value)}
-                      >
-                        {!moveOptions.length && (
-                          <option value="">Нет доступной позиции</option>
+                    {operation === "insert_statement" && (
+                      <>
+                        <label htmlFor="insert-position">Позиция</label>
+                        <Select
+                          id="insert-position"
+                          value={position}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => {
+                            previewInsertion(selected.id);
+                            setPosition(e.target.value);
+                          }}
+                        >
+                          {positions.map((p) => (
+                            <option key={p} value={p}>
+                              {(
+                                {
+                                  before: "Перед узлом",
+                                  after: "После узла",
+                                  body_start: "В начале метода",
+                                  body_end: "В конце метода",
+                                } as Record<string, string>
+                              )[p] ?? p}
+                            </option>
+                          ))}
+                        </Select>
+                        <label htmlFor="statement-template">Шаблон</label>
+                        <Select
+                          id="statement-template"
+                          value={template}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => {
+                            previewInsertion(selected.id);
+                            setTemplate(e.target.value);
+                            setStatement(statementTemplates[e.target.value]);
+                          }}
+                        >
+                          <option value="statement">Оператор</option>
+                          <option value="condition">Условие</option>
+                          <option value="loop">Цикл</option>
+                        </Select>
+                        <label htmlFor="statement-source">Java оператор</label>
+                        <textarea
+                          id="statement-source"
+                          value={statement}
+                          rows={6}
+                          spellCheck={false}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => {
+                            previewInsertion(selected.id);
+                            setStatement(e.target.value);
+                          }}
+                        />
+                      </>
+                    )}
+                    {operation === "delete_statement" && (
+                      <p className="small quiet">
+                        Удаление выбранного оператора
+                      </p>
+                    )}
+                    {operation === "move_statement" && (
+                      <>
+                        <label htmlFor="move-target">
+                          Относительно оператора
+                        </label>
+                        <Select
+                          id="move-target"
+                          value={targetNodeId}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => {
+                            setTargetNodeId(e.target.value);
+                            const next = targets.find(
+                              (n) => n.id === e.target.value,
+                            );
+                            setMovePosition(
+                              selected && next && graph
+                                ? (movePositions(selected, next, graph)[0] ??
+                                    "")
+                                : "",
+                            );
+                          }}
+                        >
+                          <option value="">Выберите оператор</option>
+                          {targets.map((n) => (
+                            <option key={n.id} value={n.id}>
+                              {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
+                            </option>
+                          ))}
+                        </Select>
+                        <label htmlFor="move-position">
+                          Позиция перемещения
+                        </label>
+                        <Select
+                          id="move-position"
+                          value={movePosition}
+                          disabled={inFlight || stale || readOnly || !target}
+                          onChange={(e) => setMovePosition(e.target.value)}
+                        >
+                          {!moveOptions.length && (
+                            <option value="">Нет доступной позиции</option>
+                          )}
+                          {moveOptions.map((p) => (
+                            <option key={p} value={p}>
+                              {p === "before"
+                                ? "Перед оператором"
+                                : "После оператора"}
+                            </option>
+                          ))}
+                        </Select>
+                        {!targets.length && (
+                          <p className="small quiet">
+                            В этом блоке нет доступных операторов для
+                            перемещения.
+                          </p>
                         )}
-                        {moveOptions.map((p) => (
-                          <option key={p} value={p}>
-                            {p === "before"
-                              ? "Перед оператором"
-                              : "После оператора"}
-                          </option>
-                        ))}
-                      </Select>
-                      {!targets.length && (
+                      </>
+                    )}
+                    {(operation === "wrap_if" ||
+                      operation === "wrap_while") && (
+                      <>
+                        <label htmlFor="wrap-condition">Условие</label>
+                        <textarea
+                          id="wrap-condition"
+                          value={wrapCondition}
+                          rows={3}
+                          spellCheck={false}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => setWrapCondition(e.target.value)}
+                        />
+                      </>
+                    )}
+                    {operation === "add_else" && (
+                      <>
+                        <label htmlFor="else-source">Тело ветки else</label>
+                        <textarea
+                          id="else-source"
+                          value={elseSource}
+                          rows={6}
+                          spellCheck={false}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => setElseSource(e.target.value)}
+                        />
+                      </>
+                    )}
+                    {operation === "remove_else" && (
+                      <p className="small quiet">
+                        Удалить все операторы ветки else
+                      </p>
+                    )}
+                    {operation === "rename_local" && (
+                      <>
+                        <label htmlFor="renamed-local-name">
+                          Новое имя переменной
+                        </label>
+                        <input
+                          id="renamed-local-name"
+                          value={renamedLocalName}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) => setRenamedLocalName(e.target.value)}
+                        />
                         <p className="small quiet">
-                          В этом блоке нет доступных операторов для перемещения.
+                          Изменяются только ссылки на выбранное объявление. На
+                          входе метода с одним параметром переименовывается этот
+                          параметр. Коллизии и неоднозначные ссылки отклоняются;
+                          применение требует тестов.
                         </p>
-                      )}
-                    </>
-                  )}
-                  {(operation === "wrap_if" || operation === "wrap_while") && (
-                    <>
-                      <label htmlFor="wrap-condition">Условие</label>
-                      <textarea
-                        id="wrap-condition"
-                        value={wrapCondition}
-                        rows={3}
-                        spellCheck={false}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setWrapCondition(e.target.value)}
-                      />
-                    </>
-                  )}
-                  {operation === "add_else" && (
-                    <>
-                      <label htmlFor="else-source">Тело ветки else</label>
-                      <textarea
-                        id="else-source"
-                        value={elseSource}
-                        rows={6}
-                        spellCheck={false}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setElseSource(e.target.value)}
-                      />
-                    </>
-                  )}
-                  {operation === "remove_else" && (
-                    <p className="small quiet">
-                      Удалить все операторы ветки else
-                    </p>
-                  )}
-                  {operation === "rename_local" && (
-                    <>
-                      <label htmlFor="renamed-local-name">
-                        Новое имя переменной
-                      </label>
-                      <input
-                        id="renamed-local-name"
-                        value={renamedLocalName}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setRenamedLocalName(e.target.value)}
-                      />
-                      <p className="small quiet">
-                        Изменяются только ссылки на выбранное объявление. На
-                        входе метода с одним параметром переименовывается этот
-                        параметр. Коллизии и неоднозначные ссылки отклоняются;
-                        применение требует тестов.
-                      </p>
-                    </>
-                  )}
-                  {operation === "decompose_class" && (
-                    <>
-                      <label htmlFor="extracted-class-name">
-                        Имя нового класса
-                      </label>
-                      <input
-                        id="extracted-class-name"
-                        value={extractedClassName}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setExtractedClassName(e.target.value)}
-                      />
-                      {!validClassName(extractedClassName) && (
-                        <p className="small quiet" role="status">
-                          Имя класса: до 80 латинских букв, цифр, $ или _,
-                          начиная с буквы, $ или _.
+                      </>
+                    )}
+                    {operation === "decompose_class" && (
+                      <>
+                        <label htmlFor="extracted-class-name">
+                          Имя нового класса
+                        </label>
+                        <input
+                          id="extracted-class-name"
+                          value={extractedClassName}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) =>
+                            setExtractedClassName(e.target.value)
+                          }
+                        />
+                        {!validClassName(extractedClassName) && (
+                          <p className="small quiet" role="status">
+                            Имя класса: до 80 латинских букв, цифр, $ или _,
+                            начиная с буквы, $ или _.
+                          </p>
+                        )}
+                        <p className="small quiet">
+                          Тело статического метода переносится в отдельный
+                          класс. Исходный метод сохраняет вызовы через обёртку.
+                          Применение требует компиляции и совпадения тестов.
                         </p>
-                      )}
-                      <p className="small quiet">
-                        Тело статического метода переносится в отдельный класс.
-                        Исходный метод сохраняет вызовы через обёртку.
-                        Применение требует компиляции и совпадения тестов.
-                      </p>
-                    </>
-                  )}
-                  {operation === "extract_method" && (
-                    <>
-                      <p className="small quiet">
-                        Начало: строка {selected.sourceRange?.startLine}.
-                        Параметры и результат определяются по исходнику.
-                      </p>
-                      <label htmlFor="extracted-method-name">
-                        Имя нового метода
-                      </label>
-                      <input
-                        id="extracted-method-name"
-                        value={extractedMethodName}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setExtractedMethodName(e.target.value)}
-                      />
-                      <label htmlFor="extraction-end">Последний оператор</label>
-                      <Select
-                        id="extraction-end"
-                        value={extractionEndNodeId}
-                        disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setExtractionEndNodeId(e.target.value)}
+                      </>
+                    )}
+                    {operation === "extract_method" && (
+                      <>
+                        <p className="small quiet">
+                          Начало: строка {selected.sourceRange?.startLine}.
+                          Параметры и результат определяются по исходнику.
+                        </p>
+                        <label htmlFor="extracted-method-name">
+                          Имя нового метода
+                        </label>
+                        <input
+                          id="extracted-method-name"
+                          value={extractedMethodName}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) =>
+                            setExtractedMethodName(e.target.value)
+                          }
+                        />
+                        <label htmlFor="extraction-end">
+                          Последний оператор
+                        </label>
+                        <Select
+                          id="extraction-end"
+                          value={extractionEndNodeId}
+                          disabled={inFlight || stale || readOnly}
+                          onChange={(e) =>
+                            setExtractionEndNodeId(e.target.value)
+                          }
+                        >
+                          {extractionEnds.map((n) => (
+                            <option key={n.id} value={n.id}>
+                              Строка {n.sourceRange?.startLine}:{" "}
+                              {n.label.slice(0, 90)}
+                            </option>
+                          ))}
+                        </Select>
+                        {!validMethodName(extractedMethodName) && (
+                          <p className="small quiet" role="status">
+                            Укажите допустимое имя Java-метода.
+                          </p>
+                        )}
+                        <p className="small quiet">
+                          Применение доступно после компиляции и совпадения
+                          результатов обязательных тестов.
+                        </p>
+                      </>
+                    )}
+                    {optimizationOperations.includes(operation) && (
+                      <div
+                        className="optimization-assumptions"
+                        aria-label="Условия оптимизации"
                       >
-                        {extractionEnds.map((n) => (
-                          <option key={n.id} value={n.id}>
-                            Строка {n.sourceRange?.startLine}:{" "}
-                            {n.label.slice(0, 90)}
-                          </option>
-                        ))}
-                      </Select>
-                      {!validMethodName(extractedMethodName) && (
-                        <p className="small quiet" role="status">
-                          Укажите допустимое имя Java-метода.
-                        </p>
-                      )}
-                      <p className="small quiet">
-                        Применение доступно после компиляции и совпадения
-                        результатов обязательных тестов.
-                      </p>
-                    </>
-                  )}
-                  {operation === "optimize_membership" && (
-                    <div
-                      className="optimization-assumptions"
-                      aria-label="Условия оптимизации"
+                        {analysis?.optimizations
+                          ?.find((op) => op.nodeId === selected.id)
+                          ?.assumptions.map((assumption, index) => (
+                            <p key={index}>{assumption}</p>
+                          ))}
+                      </div>
+                    )}
+                    <label htmlFor="change-intent">Цель изменения</label>
+                    <Select
+                      id="change-intent"
+                      value={
+                        [
+                          "optimize_membership",
+                          "optimize_string_builder",
+                          "extract_method",
+                          "decompose_class",
+                          "rename_local",
+                        ].includes(operation)
+                          ? "preserve_behavior"
+                          : intent
+                      }
+                      disabled={
+                        inFlight ||
+                        stale ||
+                        readOnly ||
+                        [
+                          "optimize_membership",
+                          "optimize_string_builder",
+                          "extract_method",
+                          "decompose_class",
+                          "rename_local",
+                        ].includes(operation)
+                      }
+                      onChange={(e) => setIntent(e.target.value)}
                     >
-                      {analysis?.optimizations
-                        ?.find((op) => op.nodeId === selected.id)
-                        ?.assumptions.map((assumption, index) => (
-                          <p key={index}>{assumption}</p>
-                        ))}
-                    </div>
-                  )}
-                  <label htmlFor="change-intent">Цель изменения</label>
-                  <Select
-                    id="change-intent"
-                    value={
-                      [
-                        "optimize_membership",
-                        "extract_method",
-                        "decompose_class",
-                        "rename_local",
-                      ].includes(operation)
-                        ? "preserve_behavior"
-                        : intent
-                    }
-                    disabled={
-                      inFlight ||
-                      stale ||
-                      readOnly ||
-                      [
-                        "optimize_membership",
-                        "extract_method",
-                        "decompose_class",
-                        "rename_local",
-                      ].includes(operation)
-                    }
-                    onChange={(e) => setIntent(e.target.value)}
-                  >
-                    <option value="semantic_edit">Изменить логику</option>
-                    <option value="preserve_behavior">
-                      Сохранить поведение
-                    </option>
-                  </Select>
-                  <button
-                    className="primary wide"
-                    disabled={
-                      inFlight ||
-                      stale ||
-                      readOnly ||
-                      !operations.includes(operation) ||
-                      !changePayload
-                    }
-                    onClick={() => void prepare()}
-                  >
-                    {busy ? "Проверка…" : "Подготовить изменение"}
-                  </button>
-                  {stale && (
-                    <p className="small quiet">
-                      Сначала сохраните и исправьте исходник.
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <p className="inspector-note">Нет доступных действий</p>
-              )}
-            </>
-          ) : (
-            <div
-              className={
-                "inspector-placeholder " +
-                (activeReference ? "symbol-selected" : "")
-              }
-            >
-              <span>
-                <Icon name="workflow" size={27} />
-              </span>
-              <p>Выберите узел</p>
-            </div>
-          )}
+                      <option value="semantic_edit">Изменить логику</option>
+                      <option value="preserve_behavior">
+                        Сохранить поведение
+                      </option>
+                    </Select>
+                    <button
+                      className="primary wide"
+                      disabled={
+                        inFlight ||
+                        stale ||
+                        readOnly ||
+                        !operations.includes(operation) ||
+                        !changePayload
+                      }
+                      onClick={() => void prepare()}
+                    >
+                      {busy ? "Проверка…" : "Подготовить изменение"}
+                    </button>
+                    {stale && (
+                      <p className="small quiet">
+                        Сначала сохраните и исправьте исходник.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="inspector-note">Нет доступных действий</p>
+                )}
+              </>
+            ) : (
+              <div
+                className={
+                  "inspector-placeholder " +
+                  (activeReference ? "symbol-selected" : "")
+                }
+              >
+                <span>
+                  <Icon name="workflow" size={27} />
+                </span>
+                <p>Выберите узел</p>
+              </div>
+            )}
 
-          {symbolPanel}
-          <div className="inspector-section">
-            <div className="panel-caption">
-              ВЫРАЖЕНИЯ <span>{expressions.length}</span>
-            </div>
-            <div className="expression-list">
-              {expressions.map((n) => (
-                <button
-                  key={n.id}
-                  className={selected?.id === n.id ? "active" : ""}
-                  onClick={() => pickNode(n)}
-                  disabled={stale}
-                >
-                  <span>{n.sourceRange?.startLine}</span>
-                  <code>{n.label.split("\n")[0].slice(0, 85)}</code>
-                </button>
-              ))}
-            </div>
-          </div>
-          {graph && (
-            <details className="node-access">
-              <summary>Все узлы метода</summary>
-              {graph.nodes
-                .filter((n) => n.methodId === methodId)
-                .map((n) => (
-                  <button key={n.id} onClick={() => pickNode(n)}>
-                    {isIterationProtocol(n)
-                      ? nodeCaption(n)
-                      : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
+            {symbolPanel}
+            <div className="inspector-section">
+              <div className="panel-caption">
+                ВЫРАЖЕНИЯ <span>{expressions.length}</span>
+              </div>
+              <div className="expression-list">
+                {expressions.map((n) => (
+                  <button
+                    key={n.id}
+                    className={selected?.id === n.id ? "active" : ""}
+                    onClick={() => pickNode(n)}
+                    disabled={stale}
+                  >
+                    <span>{n.sourceRange?.startLine}</span>
+                    <code>{n.label.split("\n")[0].slice(0, 85)}</code>
                   </button>
                 ))}
-            </details>
-          )}
-        </CodeInsights>
+              </div>
+            </div>
+            {graph && (
+              <details className="node-access">
+                <summary>Все узлы метода</summary>
+                {graph.nodes
+                  .filter((n) => n.methodId === methodId)
+                  .map((n) => (
+                    <button key={n.id} onClick={() => pickNode(n)}>
+                      {isIterationProtocol(n)
+                        ? nodeCaption(n)
+                        : `${kindName(n.kind)} · ${nodeCaption(n).slice(0, 55)}`}
+                    </button>
+                  ))}
+              </details>
+            )}
+          </CodeInsights>
+        )}
       </aside>
     ),
     console: (
@@ -3891,6 +4281,13 @@ function Workbench({
         data-assistant-job-id={testJob?.id}
         data-assistant-job-status={testJob?.status}
       >
+        <button
+          className="subtle"
+          disabled={accessReadOnly || dirty || !revision || analyzing || busy}
+          onClick={() => setMethodTestsOpen(true)}
+        >
+          Тестировать метод
+        </button>
         {resultContext("compare", testJob)}
         {rerunButton(testJob)}
         {testJob?.type === "compare" &&
@@ -4014,6 +4411,13 @@ function Workbench({
                 Отклонить
               </button>
             </div>
+            {matchingMethodReport && (
+              <p className="notice" role="status">
+                Проверен метод {matchingMethodReport.methodTarget?.methodName}{" "}
+                на заданных входах. Отчёт относится к этим двум версиям;
+                остальные методы и вся программа этой проверкой не охвачены.
+              </p>
+            )}
             {proposal.decomposition && (
               <div className="diff" aria-label="Новый класс">
                 <code>{proposal.decomposition.filePath}</code>
@@ -4344,7 +4748,9 @@ function Workbench({
               </div>
               <h1>{file.split("/").pop() || "JavaBlueprints"}</h1>
               <p>
-                {method?.signature ?? "Выберите метод"}
+                {initializerContext?.label ??
+                  method?.signature ??
+                  "Выберите метод"}
                 {graph && (
                   <small className="canvas-version" title={graph.revisionId}>
                     {" "}
@@ -4517,6 +4923,17 @@ function Workbench({
                 >
                   Результаты тестов
                 </button>
+                <button
+                  disabled={
+                    accessReadOnly || !revision || dirty || busy || analyzing
+                  }
+                  onClick={(e) => {
+                    setMethodTestsOpen(true);
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  Тестировать метод
+                </button>
               </div>
             </details>
           </div>
@@ -4541,6 +4958,46 @@ function Workbench({
         {...({ webkitdirectory: "" } as Record<string, string>)}
         onChange={(e) => void importFiles(e.target.files)}
       />
+      {methodTestsOpen && revision && (
+        <div
+          className="modal-backdrop"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setMethodTestsOpen(false);
+            }
+          }}
+        >
+          <section
+            className="modal method-tests-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="method-tests-title"
+          >
+            <div className="modal-heading">
+              <h2 id="method-tests-title">Тесты отдельного метода</h2>
+              <button
+                aria-label="Закрыть тесты метода"
+                onClick={() => setMethodTestsOpen(false)}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+            <MethodTests
+              projectId={projectId}
+              revisionId={revision.id}
+              selectedMethod={method}
+              onReport={(result: Report) => setMethodVerification(result)}
+              candidateRevisionId={
+                proposal?.status === "ready" &&
+                proposal.baseRevisionId === revision.id
+                  ? proposal.candidateRevisionId
+                  : undefined
+              }
+            />
+          </section>
+        </div>
+      )}
       {(importChooser || importPreview || githubImport) && (
         <div className="modal-backdrop">
           <section

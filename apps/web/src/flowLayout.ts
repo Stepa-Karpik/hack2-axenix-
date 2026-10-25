@@ -55,19 +55,34 @@ export function placeManualFlow(
   }
   const overlaps = (a: { x: number; y: number }, b: { x: number; y: number }) =>
     a.x < b.x + 288 && a.x + 288 > b.x && a.y < b.y + 108 && a.y + 108 > b.y;
+  const occupied = new Map<string, { x: number; y: number }[]>();
+  const addPosition = (position: { x: number; y: number }) => {
+    const key = `${Math.floor(position.x / 288)}:${Math.floor(position.y / 128)}`;
+    const cell = occupied.get(key);
+    if (cell) cell.push(position);
+    else occupied.set(key, [position]);
+  };
+  for (const position of placed.values()) addPosition(position);
+  const blocked = (position: { x: number; y: number }) => {
+    const x = Math.floor(position.x / 288),
+      y = Math.floor(position.y / 128);
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (const other of occupied.get(`${x + dx}:${y + dy}`) ?? [])
+          if (overlaps(position, other)) return true;
+    return false;
+  };
   let shift = 0;
   for (const [rank, members] of [...rows].sort(([a], [b]) => a - b)) {
     let y = rank + shift;
-    while (
-      members.some(([, position]) =>
-        [...placed.values()].some((other) =>
-          overlaps({ x: position.x, y }, other),
-        ),
-      )
-    )
+    while (members.some(([, position]) => blocked({ x: position.x, y })))
       y += 128;
     shift = y - rank;
-    for (const [id, position] of members) placed.set(id, { x: position.x, y });
+    for (const [id, position] of members) {
+      const final = { x: position.x, y };
+      placed.set(id, final);
+      addPosition(final);
+    }
   }
   return placed;
 }
@@ -522,6 +537,48 @@ export type RouteBox = {
   width: number;
   height: number;
 };
+/**
+ * Offset that moves dropped cards (kept together) to the nearest spot where
+ * they no longer cover another card. A card stacked on another hides it and
+ * its connections; returns {0,0} when the drop is already clear.
+ */
+export function clearDropOffset(
+  moved: RouteBox[],
+  others: RouteBox[],
+  gap = 16,
+  step = 24,
+  radius = 40,
+) {
+  const hits = (dx: number, dy: number) =>
+    moved.some((a) =>
+      others.some(
+        (b) =>
+          a.x + dx < b.x + b.width + gap &&
+          a.x + dx + a.width + gap > b.x &&
+          a.y + dy < b.y + b.height + gap &&
+          a.y + dy + a.height + gap > b.y,
+      ),
+    );
+  if (!moved.length || !hits(0, 0)) return { x: 0, y: 0 };
+  let best: { x: number; y: number } | null = null;
+  for (let ring = 1; ring <= radius; ring++) {
+    for (let i = -ring; i <= ring; i++)
+      for (const [dx, dy] of [
+        [i * step, -ring * step],
+        [i * step, ring * step],
+        [-ring * step, i * step],
+        [ring * step, i * step],
+      ])
+        if (
+          !hits(dx, dy) &&
+          (!best || Math.hypot(dx, dy) < Math.hypot(best.x, best.y))
+        )
+          best = { x: dx, y: dy };
+    // Any later ring is farther than the best candidate of this ring.
+    if (best && Math.hypot(best.x, best.y) <= ring * step) break;
+  }
+  return best ?? { x: 0, y: 0 };
+}
 export function segmentHitsBox(a: RoutePoint, b: RoutePoint, box: RouteBox) {
   return a.x === b.x
     ? a.x > box.x + 0.5 &&
@@ -724,36 +781,39 @@ const loopKinds = new Set([
 // must not imply membership that the engine did not provide.
 export function loopAreas(all: GraphNode[], boxes: RouteBox[]): LoopArea[] {
   const byId = new Map(all.map((node) => [node.id, node]));
-  const belongs = (id: string, loopId: string) => {
+  const areas: LoopArea[] = [];
+  const membersByLoop = new Map<string, RouteBox[]>();
+  for (const box of boxes) {
+    let node = byId.get(box.id);
     const visited = new Set<string>();
-    let node = byId.get(id);
     while (node && !visited.has(node.id)) {
-      if (node.id === loopId) return true;
       visited.add(node.id);
+      if (loopKinds.has(node.kind)) {
+        const members = membersByLoop.get(node.id);
+        if (members) members.push(box);
+        else membersByLoop.set(node.id, [box]);
+      }
       node = node.parentId ? byId.get(node.parentId) : undefined;
     }
-    return false;
-  };
-  const areas: LoopArea[] = [];
+  }
   for (const loop of all.filter((node) => loopKinds.has(node.kind))) {
-    const members = boxes.filter(
+    const members = (membersByLoop.get(loop.id) ?? []).filter(
       (box) =>
-        belongs(box.id, loop.id) &&
         !(
           byId.get(box.id)?.parentId === loop.id &&
           ["foreach_source", "for_init"].includes(byId.get(box.id)?.kind ?? "")
-        ) &&
-        !(loop.kind === "ForEachStmt" && box.id === loop.id),
+        ) && !(loop.kind === "ForEachStmt" && box.id === loop.id),
     );
     if (members.length < 2) continue;
     const x = Math.min(...members.map((box) => box.x)) - 24;
     const y = Math.min(...members.map((box) => box.y)) - 36;
     const right = Math.max(...members.map((box) => box.x + box.width)) + 24;
     const bottom = Math.max(...members.map((box) => box.y + box.height)) + 24;
+    const memberIds = new Set(members.map((box) => box.id));
     if (
       boxes.some(
         (box) =>
-          !members.includes(box) &&
+          !memberIds.has(box.id) &&
           box.x < right &&
           box.x + box.width > x &&
           box.y < bottom &&

@@ -124,7 +124,7 @@ public final class RunnerController implements AutoCloseable {
             retainedBytes+=result.stdout().length()+result.stderr().length();
             ExecutionOutcome outcome=entry.cancelled.get() || stale(s)?ExecutionOutcome.cancelled:result.outcome();
             if(s.executionSpec().phase()==Phase.compile && outcome==ExecutionOutcome.exited && artifactId==null) outcome=ExecutionOutcome.sandbox_error;
-            entry.result=new Observation(s.projectId(),s.jobId(),s.attemptId(),s.executionId(),s.specHash(),s.executionSpec().phase(),"terminal",outcome,result.exit(),result.stdout(),result.stderr(),result.truncated(),artifactId,result.cleanupPending(),result.metrics());
+            entry.result=new Observation(s.projectId(),s.jobId(),s.attemptId(),s.executionId(),s.specHash(),s.executionSpec().phase(),"terminal",outcome,result.exit(),result.stdout(),result.stderr(),result.truncated(),artifactId,result.cleanupPending(),result.metrics(),result.methodResult());
         }
     }
     private synchronized boolean stale(Submit s){Attempt a=attempts.get(s.jobId()); return a==null || a.fence()!=s.fencingToken() || !a.attempt().equals(s.attemptId()) || a.expiry().get().isBefore(Instant.now());}
@@ -137,6 +137,7 @@ public final class RunnerController implements AutoCloseable {
         Instant lease=Instant.parse(s.leaseExpiresAt());if(!lease.isAfter(Instant.now())||lease.isAfter(Instant.now().plusSeconds(120)))throw new IllegalArgumentException("Lease");
         Spec spec=s.executionSpec();if(!PROFILE.equals(spec.profileId())||!spec.hash().equals(s.specHash()))throw new IllegalArgumentException("Spec integrity/profile");
         spec.stdin().decode(1024*1024);
+        if(spec.methodHarness() && (spec.phase()!=Phase.runtime || spec.interactive() || !"__JbMethodHarness".equals(spec.mainClass())))throw new IllegalArgumentException("Method harness runtime contract");
         if(spec.interactive() && (spec.phase()!=Phase.runtime || !"single".equals(spec.caseId()) || spec.observationIndex()!=1)) throw new IllegalArgumentException("Interactive single run only");
         if(spec.phase()==Phase.compile){if(spec.sources().isEmpty()||spec.sources().size()>100)throw new Limit();long size=0;for(var e:spec.sources().entrySet()){path(e.getKey());if(!e.getKey().endsWith(".java"))throw new IllegalArgumentException("Source extension");byte[] bytes=e.getValue().decode(1024*1024);size+=bytes.length;try{StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes));}catch(CharacterCodingException ex){throw new IllegalArgumentException("UTF8");}}if(size>1024*1024)throw new Limit();}
         else if(spec.phase()==Phase.runtime){id(spec.compileArtifactId());id(spec.caseId());if(!spec.sources().isEmpty()||spec.observationIndex()<1||spec.observationIndex()>3||spec.mainClass()==null||spec.mainClass().length()>240||!spec.mainClass().matches("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*"))throw new IllegalArgumentException("Runtime arguments");arguments(spec.args());}else throw new IllegalArgumentException("Phase");

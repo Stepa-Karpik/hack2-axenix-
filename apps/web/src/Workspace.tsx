@@ -177,6 +177,7 @@ export function useWorkspace(projectId: string) {
             : "Расположение проекта сохранено"
           : "Не удалось сохранить расположение: хранилище браузера недоступно",
       );
+      return ok;
     },
     restoreLayout: () =>
       animate(() => {

@@ -62,6 +62,8 @@ The project list searches all stored names and loads older projects in pages. Se
 
 ## Workspace
 
+On the canvas, **Ctrl+Z** undoes a block or group move and **Ctrl+Shift+Z** redoes it, including with a Russian keyboard layout. Applied graph edits can also be undone and redone by restoring source as a new revision while preserving history. Inside the code editor, the shortcuts operate on its own text history.
+
 The graph is a permanent canvas beneath translucent panels. OLED is the default appearance, with a pure black canvas and flat near-black surfaces with backdrop blur. Other presets apply their background consistently to the canvas, pages and header; light presets use light surfaces. The compact bottom dock has its own reserved row and never overlaps the tiled windows.
 
 - Drag a panel by its six-dot handle. Nearby windows animate into the preview arrangement before you release the pointer. Drop in the center to swap windows, or near an edge to split the area. Press **Escape** to cancel. The handle also opens a keyboard-accessible move menu.
@@ -90,6 +92,10 @@ Java compilation checks the complete source bundle. A compiler error in another 
 
 Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
 
+Long jumps (`break`, loop exits, exceptions) take an outer lane around card columns instead of crossing cards. A card dropped onto another card moves to the nearest free spot; dragging starts after 5 px, so a click never nudges a card. Methods of local and anonymous classes get their own graphs with context in the method list (for example `main() · new Comparator<Integer>() #1`); a local class declaration inside a method is one read-only step, and the method's other steps stay editable.
+
+Large graphs use viewport virtualization and a lightweight overview renderer. Every logical node and edge remains represented; detailed cards return when zooming in. Transition colors, conservative dashed edges, selection and manual positions retain their meaning. The code editor loads separately from login/profile pages, and opening a project does not wait for revision history.
+
 ## Files and folders
 
 The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Enter a new file or folder name and press **Enter** or click elsewhere to create it; **Escape** cancels. Its icon follows the filename extension. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors. A mismatched public Java type offers an explicit filename correction.
@@ -103,6 +109,8 @@ Import previews support strict UTF-8 text and ZIP archives, with selection befor
 Non-Java text files can be edited and exported. Only `.java` files are analyzed and passed to the isolated Java runner. A project containing only text files or folders can be saved without scheduling a Java analysis or execution.
 
 ## Exception flow
+
+The project panel separately exposes field initializers, static blocks and instance blocks. These views project source structure and exact expression ranges; dashed links represent containment rather than class initialization order. Supported expressions can be edited through a detached candidate and compilation. These contexts are not presented as methods, and unsupported nested constructs remain preserved for inspection. **Execution order** lists the declared order for every class in the file: the static phase (once, on first use) and each constructor path — `this(...)` delegates initialization to another constructor, otherwise `super(...)`, then instance initializers in source order, then the constructor body. Superclass initialization, class-loading triggers and exceptions are not modelled.
 
 Ordinary `try`, ordered `catch` clauses, multi-catch and `finally` are shown as executable control flow. Handler tests match the pending exception in source order. A throw from a handler or cleanup bypasses the sibling catches of that same `try`.
 
@@ -137,6 +145,16 @@ The Tests panel shows compilation stages, the active case, completed and matched
 Progress records the exact source revisions and suite version. Reloading reconnects to the same job; hiding its panel keeps verification running. Stopping retains completed case verdicts and partial observation counts, while remaining cases are marked unrun. An interrupted comparison does not publish a verification report that could authorize applying a change.
 
 Per-case time includes all six executions and their container setup. Total time also includes compilation. The worker has a ten-minute overall job budget in addition to individual execution limits; an unfinished suite remains inconclusive. Progress is persisted under the current job attempt and lease. A restart can retain recorded progress, but cannot resume the interrupted executions.
+
+### Testing one method
+
+Open **Tests → Test method**, choose the exact overload and provide JSON cases with `arguments` and `expectedReturn` or `expectedException`. Mutable arrays can specify `expectedArgumentsAfter`; `expectedStdout` and `expectedStderr` are checked separately. The isolated Java 21 runner invokes the method directly; no `main` is required. Example for `public static int increment(int n) { return n + 1; }`:
+
+```json
+[{"id":"positive","arguments":[4],"expectedReturn":5}]
+```
+
+The bounded adapter supports accessible static methods and fresh instances with an accessible no-argument constructor, including package-private methods through a generated same-package bridge. Typed inputs include primitives, wrappers, String, arrays, supported JDK collections, Optional and Scanner. Use decimal strings for long values beyond JavaScript's exact integer range. An instance method is available when its class is not abstract and has a public no-argument constructor: every input gets a fresh object, the object's fields are not compared after the call, and a throwing constructor yields an incomplete (never passing) result. Generic methods and arbitrary object arguments are unavailable, with reasons shown in the target list. Returns, post-call arrays and bounded exception cause/suppressed trees are observed through a separate runner channel. Missing/incomplete observations never pass. Each input runs three times per version. Testing the current version checks supplied expectations; candidate comparison covers the selected method and inputs, not whole-program equivalence.
 
 ## Code insights
 
@@ -189,7 +207,7 @@ Upload a PNG or JPEG of at most **2 MiB** in profile settings, or remove it to r
 
 ## Membership index
 
-For eligible repeated `ArrayList<String>.contains` searches, Analysis → Recommendations offers a membership-index change. It retains the original list and inserts one local `HashSet<String>` before the selected loop. Only the proven membership receivers inside that loop change; query evaluation, output order and list construction stay in place.
+For eligible repeated `contains` searches on a local standard `ArrayList` or `LinkedList`, including a `List` declaration, Analysis → Recommendations offers a `HashSet` index before the selected loop. Proven `String`, `Integer`, `Long`, `Boolean` and `Character` keys are supported. The original list remains; only proven membership receivers change. Queries, including supported effectful calls, retain their original evaluation positions and counts. Mutated or escaped lists and unknown key types are excluded.
 
 The initial rule accepts a fresh standard JDK list declared directly in the method body, populated only by standalone literal-string or null additions before a direct loop. Every use must have an exact local binding. Aliases, escaping references, reassignment, later mutation, other list operations, unknown query types, closures and unsupported control-flow regions make the rule unavailable. Queries are string/null literals or simple bound string locals/parameters. Analysis examines at most 64 loop candidates.
 
@@ -207,6 +225,10 @@ Extraction moves at most 256 statements from one block into a private method in 
 
 For a closed static computation, select its entry and choose **Move method to class**. The original method remains as a wrapper while its body moves to a new fieldless class in the same package. The initial rule accepts explicit `int`/`boolean` parameters, locals and results with supported branches and loops. Calls, fields, arrays, inheritance, generics and unknown dependencies make the rule unavailable. Review both files and compare behavior before applying; this is a bounded decomposition tool.
 
+### String accumulation in loops
+
+`OPT-STRBUILD-001` replaces repeated concatenation into a closed local String with StringBuilder. It requires known operand types, no other accumulator reads inside the loop, and no handlers or captures that observe partial values. Operand evaluation order and source line numbers are retained. Candidates require compilation and recorded comparisons before application; resource equivalence and a speedup on every input are not guaranteed.
+
 ## Project archives
 
 **Project menu → File → Download project archive** saves a versioned `.jbp.json` archive containing source history, original import bytes, directory trees, historical analyses, layouts, suites and completed reports, with SHA-256 integrity checks. **Open project archive** validates it and creates a separate project with fresh revision IDs. Existing projects are never replaced.
@@ -214,6 +236,10 @@ For a closed static computation, select its entry and choose **Move method to cl
 Imported reports and layouts remain historical evidence in the import receipt. They do not become current verification or editable graph bindings. The head receives a fresh analysis; run a fresh comparison before applying further preserving changes. Source ZIP export remains available for ordinary Java tools. Archives are bounded to 64 revisions and 32 MiB, with explicit evidence/layout limits; over-limit archives are rejected rather than truncated. Credential-like paths are rejected, but source text and recorded inputs can contain sensitive information, so review an archive before sharing it.
 
 ## Assistant
+
+The assistant can carry out confirmed friendship and project-access actions and manage workspace panels: open, hide, swap, resize, maximize, save and restore layouts. For example: **“Swap code and console”**, **“Set the code panel width to 35%”** and **“Save the window layout”**. The graph remains a permanent canvas. Role changes require typing the exact Russian **«да»** and remain subject to server authorization.
+
+Code-edit proposals require explicitly enabling saved-source sharing in chat. Only the selected method or a small saved file is shared, up to 12,000 characters. An edit creates a separate candidate, compiles it in an isolated container and opens a diff. Applying remains an explicit action; preserving behavior additionally requires a successful version comparison.
 
 The message button at the bottom right opens a conversation with account-scoped history, compact/expanded modes and conversation deletion. **Explain** replies in chat; **Show** locates the requested panel, tab and content with a short highlight sequence. Full execution walkthroughs require an explicit request.
 
@@ -454,6 +480,6 @@ Enhanced `for` uses a normal iteration abstraction for arrays and `Iterable`: a 
 
 The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution covers a bounded subset of source classes/interfaces, fields, parameters, local variables, methods, constructors and platform JDK references. It uses only the in-memory source bundle and the platform classloader; application dependencies and filesystem classpaths are not searched. Local/anonymous classes, lambdas, unsupported type domains and unresolved dependencies can produce partial results. Overload inference is bounded. General access-control, alias, escape, effect and dominance analysis is not provided; the membership rule performs its own closed local checks. Analysis budgets can reject oversized or deeply nested ASTs while retaining the source.
 
-Asymptotic complexity remains unknown. Renaming, extraction and class decomposition cover the explicit bounded rules above. General whole-project renaming, arbitrary dependency migration, optimization beyond the membership rule and method harnesses remain outside this scope. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
+Asymptotic complexity remains unknown. Renaming, extraction and class decomposition cover the explicit bounded rules above. General whole-project renaming, arbitrary dependency migration, optimization beyond the documented rules and arbitrary object method harnesses remain outside this scope. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
 
 The default development deployment remains bound to localhost. The explicit hosted mode requires a canonical HTTPS origin and Secure cookies, disables the legacy guest workspace and anonymous project creation, and retains permission-filtered public reads. Account sessions and project permissions remain enforced on every project operation. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.

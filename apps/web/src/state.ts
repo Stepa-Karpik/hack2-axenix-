@@ -96,6 +96,7 @@ export const operationLabels: Record<string, string> = {
   add_else: "Добавить ветку else",
   remove_else: "Удалить ветку else",
   optimize_membership: "Индексировать поиск в цикле",
+  optimize_string_builder: "Собирать строку в StringBuilder",
   extract_method: "Извлечь метод",
   decompose_class: "Вынести метод в класс",
   rename_local: "Переименовать локальную переменную",

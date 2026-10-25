@@ -72,6 +72,9 @@ public final class RunnerClient {
         return compare(projectId,jobId,attemptId,fence,baseline,candidate,mainClass,cases,cancelled,ComparisonObserver.NONE);
     }
     public Comparison compare(String projectId,String jobId,String attemptId,long fence,Map<String,String> baseline,Map<String,String> candidate,String mainClass,List<TestCase> cases,BooleanSupplier cancelled,ComparisonObserver observer) throws InterruptedException {
+        return compare(projectId,jobId,attemptId,fence,baseline,candidate,mainClass,cases,cancelled,observer,false);
+    }
+    public Comparison compare(String projectId,String jobId,String attemptId,long fence,Map<String,String> baseline,Map<String,String> candidate,String mainClass,List<TestCase> cases,BooleanSupplier cancelled,ComparisonObserver observer,boolean methodMode) throws InterruptedException {
         Objects.requireNonNull(observer);
         if(cases.isEmpty() || cases.size()>100) throw new IllegalArgumentException("Suite must contain 1..100 cases");
         Observation bc = null, cc = null;
@@ -96,30 +99,34 @@ public final class RunnerClient {
                 currentCase=c.id();var b=new ArrayList<Observation>(); var d=new ArrayList<Observation>();partialBase=b;partialCandidate=d;
                 observer.caseStarted(c.id());
                 for(int i=1;i<=3;i++) {
-                    b.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(bc.compileArtifactId(),mainClass,c,i),cancelled));
+                    b.add(execute(projectId,jobId,attemptId,fence,comparisonSpec(bc.compileArtifactId(),mainClass,c,i,methodMode),cancelled));
                     observer.observed(c.id(),ComparisonObserver.Side.base,i,b.getLast());
                     if(cancelled.getAsBoolean()) break;
-                    d.add(execute(projectId,jobId,attemptId,fence,runtimeSpec(cc.compileArtifactId(),mainClass,c,i),cancelled));
+                    d.add(execute(projectId,jobId,attemptId,fence,comparisonSpec(cc.compileArtifactId(),mainClass,c,i,methodMode),cancelled));
                     observer.observed(c.id(),ComparisonObserver.Side.candidate,i,d.getLast());
                     if(cancelled.getAsBoolean()) break;
                 }
                 var raw=new TestResult(c.id(),List.copyOf(b),List.copyOf(d),false);
                 results.add(raw);
-                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc).tests().getFirst());
+                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc,methodMode).tests().getFirst());
                 currentCase=null;
                 if(cancelled.getAsBoolean()) break;
             }
-            return Comparator.compare(cases,results,bc,cc);
+            return Comparator.compare(cases,results,bc,cc,methodMode);
         } catch(IOException e) {
             if(currentCase!=null) {
                 var raw=new TestResult(currentCase,partialBase,partialCandidate,false);results.add(raw);
                 String failedCase=currentCase;
                 var c=cases.stream().filter(test->test.id().equals(failedCase)).findFirst().orElseThrow();
-                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc).tests().getFirst());
+                observer.caseFinished(Comparator.compare(List.of(c),List.of(raw),bc,cc,methodMode).tests().getFirst());
             }
             if(results.isEmpty())return new Comparison(ComparisonOutcome.unavailable,"runner_unavailable",false,3,0,0,0,cases.size(),List.of(),bc,cc);
-            return Comparator.compare(cases,results,bc,cc);
+            return Comparator.compare(cases,results,bc,cc,methodMode);
         }
+    }
+    private static Spec comparisonSpec(String artifact,String main,TestCase c,int index,boolean methodMode) {
+        var spec=runtimeSpec(artifact,main,c,index);
+        return methodMode?new Spec(spec.profileId(),spec.phase(),spec.sources(),spec.compileArtifactId(),spec.mainClass(),spec.args(),spec.stdin(),spec.caseId(),spec.observationIndex(),false,true):spec;
     }
     private static Comparison unavailable(int count) { return new Comparison(ComparisonOutcome.unavailable,"runner_unavailable",false,3,0,0,0,count,List.of(),null,null); }
     private <T> T request(String method,String path,Object body,Map<String,String> headers,Class<T> type) throws IOException,InterruptedException {

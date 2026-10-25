@@ -18,6 +18,82 @@ import {
 } from "./workspaceLayout.ts";
 import { tileGeometry, tileDrop } from "./tileGeometry.ts";
 import { readWorkspaceSnapshot, writeWorkspaceSnapshot, savedWorkspaceKey } from "./workspacePreferences.ts";
+import { executeWorkspaceAction, swapWorkspacePanels, resizeWorkspacePanel } from "./assistantWorkspaceActions.ts";
+
+function assistantFixtureLayout() {
+  return {version:1,hidden:[],root:{type:"split",id:"root",axis:"horizontal",ratio:0.5,
+    first:{type:"group",id:"code",tabs:["code"],active:"code"},
+    second:{type:"split",id:"right",axis:"vertical",ratio:0.5,
+      first:{type:"group",id:"graph",tabs:["graph"],active:"graph"},
+      second:{type:"group",id:"console",tabs:panelIds.filter(p=>p!=="code"&&p!=="graph"),active:"console"}}}};
+}
+function assistantController() {
+  const c={layout:assistantFixtureLayout(),navigationDocked:false,collapsedNavigation:false,maximized:null,saved:null,
+    animateLayout:async(update)=>{c.layout=update(c.layout);},
+    reveal:async(panel)=>{c.layout=revealPanel(c.layout,panel);},hide:async(panel)=>{c.layout=hidePanel(c.layout,panel);},
+    maximize:async(panel)=>{c.maximized=panel;},preset:async(preset)=>{c.layout=defaultLayout(preset);c.maximized=null;},
+    toggleNavigationDock:()=>{c.navigationDocked=!c.navigationDocked;c.layout=revealPanel(c.layout,"navigation");},
+    toggleNavigation:()=>{c.collapsedNavigation=!c.collapsedNavigation;},
+    saveLayout:(asDefault)=>{c.saved=asDefault?"default":"project";return true;},
+    restoreLayout:async()=>{c.layout=defaultLayout("review");},
+  };return c;
+}
+
+test("assistant swaps exact named panels without mutating graph or losing tabs",()=>{
+  const layout=assistantFixtureLayout(),before=JSON.stringify(layout);
+  const next=swapWorkspacePanels(layout,"code","console");
+  assert.equal(next.result.ok,true);
+  assert.equal(groups(next.layout.root).find(g=>g.id==="code").active,"console");
+  assert.equal(groups(next.layout.root).find(g=>g.id==="console").active,"code");
+  assert.equal(groups(next.layout.root).find(g=>g.id==="graph").active,"graph");
+  assert.deepEqual(groups(next.layout.root).flatMap(g=>g.tabs).sort(),[...panelIds].sort());
+  assert.equal(JSON.stringify(layout),before);
+  assert.equal(swapWorkspacePanels(layout,"graph","code").result.ok,false);
+  assert.equal(swapWorkspacePanels(layout,"tests","console").result.ok,false);
+  assert.equal(swapWorkspacePanels(hidePanel(layout,"code"),"code","console").result.ok,false);
+});
+
+test("assistant resizes nearest matching split with bounded relative panel percentages",()=>{
+  const layout=assistantFixtureLayout();
+  assert.equal(resizeWorkspacePanel(layout,"code","width",35).layout.root.ratio,0.35);
+  assert.equal(resizeWorkspacePanel(layout,"console","height",25).layout.root.second.ratio,0.75);
+  assert.equal(resizeWorkspacePanel(layout,"code","height",25).result.ok,false);
+  for(const percent of [0,14,86,100,NaN,25.5])assert.equal(resizeWorkspacePanel(layout,"code","width",percent).result.ok,false);
+  assert.equal(resizeWorkspacePanel(layout,"graph","width",40).result.ok,false);
+  assert.equal(resizeWorkspacePanel(layout,"navigation","height",40).result.ok,false);
+});
+
+test("assistant window receipts reflect real hiding, revealing, maximize, reset and persistence failures",async()=>{
+  const c=assistantController();
+  assert.equal((await executeWorkspaceAction(c,{operation:"hide",panel:"code"})).ok,true);
+  assert.equal(visiblePanels(c.layout).includes("code"),false);
+  const position=groups(c.layout.root).find(g=>g.tabs.includes("code")).id;
+  await executeWorkspaceAction(c,{operation:"open",panel:"code"});
+  assert.equal(groups(c.layout.root).find(g=>g.tabs.includes("code")).id,position);
+  await executeWorkspaceAction(c,{operation:"toggle",panel:"tests"});
+  assert.equal(groups(c.layout.root).find(g=>g.id==="console").active,"tests");
+  await executeWorkspaceAction(c,{operation:"maximize",panel:"code"});assert.equal(c.maximized,"code");
+  await executeWorkspaceAction(c,{operation:"unmaximize"});assert.equal(c.maximized,null);
+  await executeWorkspaceAction(c,{operation:"save_default"});assert.equal(c.saved,"default");
+  c.saveLayout=()=>false;
+  assert.equal((await executeWorkspaceAction(c,{operation:"save"})).ok,false);
+  const before=JSON.stringify(c.layout);
+  assert.equal((await executeWorkspaceAction(c,{operation:"shell",panel:"code"})).ok,false);
+  assert.equal((await executeWorkspaceAction(c,{operation:"hide",panel:"graph"})).ok,false);
+  assert.equal(JSON.stringify(c.layout),before);
+  await executeWorkspaceAction(c,{operation:"reset"});assert.deepEqual(c.layout,defaultLayout());
+});
+
+test("assistant navigation operations change the actual pinned rail and hidden layout state",async()=>{
+  const c=assistantController();c.navigationDocked=true;c.collapsedNavigation=true;
+  assert.equal((await executeWorkspaceAction(c,{operation:"open",panel:"navigation"})).ok,true);
+  assert.equal(c.collapsedNavigation,false);
+  await executeWorkspaceAction(c,{operation:"hide",panel:"navigation"});
+  assert.equal(c.navigationDocked,false);assert.equal(visiblePanels(c.layout).includes("navigation"),false);
+  await executeWorkspaceAction(c,{operation:"dock_navigation"});assert.equal(c.navigationDocked,true);
+  await executeWorkspaceAction(c,{operation:"undock_navigation"});assert.equal(c.navigationDocked,false);
+  await executeWorkspaceAction(c,{operation:"collapse_navigation"});assert.equal(c.collapsedNavigation,true);
+});
 
 test("explicit layout snapshots separate project and default, validate storage and preserve window state", () => {
   const previous = globalThis.localStorage;

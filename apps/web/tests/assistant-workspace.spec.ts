@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { mount } from "./polishFixtures";
+import { defaultLayout, groups, visiblePanels } from "../src/workspaceLayout";
 const source = process.env.JB_THEME_FIXTURE_PATH;
 const sample = () =>
   JSON.parse(readFileSync(source!, "utf8").replace(/^\uFEFF/, ""));
@@ -90,6 +91,8 @@ async function assistant(
         ? "Показать"
         : type === "workspace_action"
           ? "Выполнить"
+          : type === "layout_action"
+            ? "Изменить окна"
           : type === "optimize"
             ? "Оптимизировать"
             : type === "run_program"
@@ -546,3 +549,58 @@ test("interrupted locator reports failure rather than claiming it showed the tar
   await expect.poll(() => outcomes[0]?.ok).toBe(false);
   expect(outcomes[0].message).toContain("Не удалось показать");
 });
+
+for (const args of [
+  {operation:"open",panel:"tests"}, {operation:"hide",panel:"code"},
+  {operation:"toggle",panel:"code"}, {operation:"maximize",panel:"code"},
+  {operation:"unmaximize"}, {operation:"swap",panel:"code",targetPanel:"console"},
+  {operation:"resize",panel:"code",axis:"width",percent:35},
+  {operation:"save"}, {operation:"save_default"}, {operation:"restore"},
+  {operation:"reset"}, {operation:"preset",preset:"review"},
+  {operation:"dock_navigation"}, {operation:"undock_navigation"},
+  {operation:"collapse_navigation"}, {operation:"expand_navigation"},
+  {operation:"hide",panel:"graph"},
+]) {
+  test(`confirmed layout command ${JSON.stringify(args)} changes real workspace and reports result`,async({page})=>{
+    const data=sample(),pid=data.project.id;
+    const layout=defaultLayout();
+    await page.addInitScript(({pid,layout,operation})=>{
+      localStorage.setItem("java-blueprints:workspace:v2:"+pid,JSON.stringify(layout));
+      localStorage.setItem("java-blueprints:window-state:"+pid,JSON.stringify({
+        focused:"code",maximized:operation==="unmaximize"?"code":null,
+        navigationDocked:operation==="undock_navigation",collapsedNavigation:operation==="expand_navigation",
+      }));
+    },{pid,layout,operation:args.operation});
+    const {project,writes}=await mount(page,data);
+    const stored=()=>page.evaluate(id=>JSON.parse(localStorage.getItem("java-blueprints:workspace:v2:"+id)!),pid);
+    const before=await stored();
+    const {chat,outcomes}=await assistant(page,project,"layout_action",args,"confirm","Измени окна");
+    expect(outcomes).toHaveLength(0);
+    expect(await stored()).toEqual(before);
+    await chat.getByRole("button",{name:"Изменить окна",exact:true}).click();
+    await expect.poll(()=>outcomes.length).toBe(1);
+    const protectedCanvas=args.operation==="hide"&&args.panel==="graph";
+    expect(outcomes[0].ok).toBe(!protectedCanvas);
+    const after=await stored();
+    if(args.operation==="open")expect(visiblePanels(after)).toContain("tests");
+    if(args.operation==="hide"&&!protectedCanvas || args.operation==="toggle")expect(visiblePanels(after)).not.toContain("code");
+    if(args.operation==="swap") {
+      expect(groups(after.root).find(g=>g.id==="code")?.tabs).toContain("console");
+      expect(groups(after.root).find(g=>g.id==="output")?.tabs).toContain("code");
+    }
+    if(args.operation==="resize")expect(after).not.toEqual(before);
+    if(args.operation==="save"||args.operation==="save_default") {
+      const key="java-blueprints:workspace-saved:v1:"+(args.operation==="save"?pid:"default");
+      expect(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)!),key)).toMatchObject({version:1,layout:after});
+    }
+    const state=await page.evaluate(id=>JSON.parse(localStorage.getItem("java-blueprints:window-state:"+id)!),pid);
+    if(args.operation==="maximize")expect(state.maximized).toBe("code");
+    if(args.operation==="unmaximize")expect(state.maximized).toBeNull();
+    if(args.operation==="dock_navigation")expect(state.navigationDocked).toBe(true);
+    if(args.operation==="undock_navigation")expect(state.navigationDocked).toBe(false);
+    if(args.operation==="collapse_navigation")expect(state.collapsedNavigation).toBe(true);
+    if(args.operation==="expand_navigation")expect(state.collapsedNavigation).toBe(false);
+    if(protectedCanvas)expect(after).toEqual(before);
+    expect(writes).toEqual([]);
+  });
+}

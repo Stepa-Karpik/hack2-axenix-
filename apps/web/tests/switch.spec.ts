@@ -1,3 +1,4 @@
+import { ENGINE_VERSION } from "./engineVersion";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { assertRoutes, panToNode as panTo } from "./flowAssertions";
@@ -76,7 +77,7 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
+  expect(analysis.analyzerVersion).toBe(ENGINE_VERSION);
   const graph = analysis.graph;
   const method = (name: string) =>
     graph.methods.find((method: any) =>

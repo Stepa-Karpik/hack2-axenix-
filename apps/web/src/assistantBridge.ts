@@ -57,6 +57,8 @@ export async function executeAssistantCommand(
       "run_program",
       "workspace_action",
       "optimize",
+      "code_edit",
+      "layout_action",
     ].includes(command.type)
   )
     return {

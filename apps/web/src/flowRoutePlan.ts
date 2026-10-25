@@ -1,6 +1,7 @@
 import { planFlowRoutes } from "./flowRouting.ts";
 import { roundedRoute } from "./flowLayout.ts";
 import type { RouteBox } from "./flowLayout.ts";
+import { routeNeighborhoodIndex } from "./flowScene.ts";
 
 export type RouteScene = {
   boxes: (RouteBox & { methodId?: string })[];
@@ -30,15 +31,11 @@ export function computeRoutePlan(scene: RouteScene) {
       ? R & { path: string }
       : never
   >();
+  const neighborhood = routeNeighborhoodIndex(scene.boxes);
   for (const [methodId, own] of groups) {
     // Include neighboring methods as obstacles without planning their edges twice.
-    const nearby = scene.boxes.filter(
-      (box) =>
-        box.methodId === methodId ||
-        own.some(
-          (o) => Math.abs(o.x - box.x) < 500 && Math.abs(o.y - box.y) < 250,
-        ),
-    );
+    // Every own-method box must remain an obstacle even when disconnected/far away.
+    const nearby = groups.size === 1 ? [...scene.boxes] : neighborhood(own);
     if (scene.ghost && scene.ghost.methodId === methodId)
       nearby.push(scene.ghost);
     const plan = planFlowRoutes(nearby, edgesByMethod.get(methodId) ?? []);

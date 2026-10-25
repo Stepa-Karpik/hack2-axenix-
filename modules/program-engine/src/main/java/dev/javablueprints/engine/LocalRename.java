@@ -19,7 +19,14 @@ final class LocalRename {
                 && callable.getParameters().size() == 1) return callable.getParameter(0);
         return null;
     }
-    static boolean eligible(Node target) { return declaration(target) != null; }
+    static boolean eligible(Node target) {
+        Node declaration = declaration(target);
+        if (declaration == null) return false;
+        // Mirror the nested-domain refusal in rewrite(): never advertise an operation that must fail.
+        var callable = declaration.findAncestor(CallableDeclaration.class).orElse(null);
+        return callable == null || callable.findAll(LambdaExpr.class).isEmpty() && callable.findAll(LocalClassDeclarationStmt.class).isEmpty()
+                && callable.findAll(ObjectCreationExpr.class).stream().noneMatch(o -> o.getAnonymousClassBody().isPresent());
+    }
     static Rewrite rewrite(SourceBundle bundle, Analysis analysis, GraphNode selected, Node target,
                            Function<Node,SourceRange> ranges, String newName) {
         if (newName == null || newName.length()>100 || !SourceVersion.isIdentifier(newName) || SourceVersion.isKeyword(newName)

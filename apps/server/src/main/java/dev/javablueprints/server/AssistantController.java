@@ -28,6 +28,11 @@ class AssistantController {
         map("configured", assistant.provider.configured(), "model", assistant.provider.model));
   }
 
+  @PostMapping("/projects/{project}/code-proposals/{proposal}/refresh")
+  Object refreshCodeProposal(@PathVariable String project,@PathVariable String proposal,HttpServletRequest r) {
+    return ok(new AssistantCodeProposals(assistant.w).refresh(accounts.require(r),project,proposal));
+  }
+
   @GetMapping("/conversations")
   Object list(HttpServletRequest r) {
     return ok(assistant.list(accounts.require(r)));

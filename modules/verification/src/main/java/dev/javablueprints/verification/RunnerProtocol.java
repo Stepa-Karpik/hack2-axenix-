@@ -29,9 +29,12 @@ public final class RunnerProtocol {
         }
     }
     public record Spec(String profileId, Phase phase, Map<String, Bytes> sources, String compileArtifactId,
-                       String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex, boolean interactive) {
+                       String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex, boolean interactive, boolean methodHarness) {
+        public Spec(String profileId, Phase phase, Map<String, Bytes> sources, String compileArtifactId, String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex, boolean interactive) {
+            this(profileId,phase,sources,compileArtifactId,mainClass,args,stdin,caseId,observationIndex,interactive,false);
+        }
         public Spec(String profileId, Phase phase, Map<String, Bytes> sources, String compileArtifactId, String mainClass, List<String> args, Bytes stdin, String caseId, int observationIndex) {
-            this(profileId, phase, sources, compileArtifactId, mainClass, args, stdin, caseId, observationIndex, false);
+            this(profileId, phase, sources, compileArtifactId, mainClass, args, stdin, caseId, observationIndex, false, false);
         }
         public Spec { sources = sources == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(sources)); args = args == null ? List.of() : List.copyOf(args); }
         public String hash() { try { return RunnerProtocol.hash(JSON.writeValueAsBytes(List.of(PROFILE_HASH,this))); } catch (Exception e) { throw new IllegalArgumentException(e); } }
@@ -49,14 +52,20 @@ public final class RunnerProtocol {
     }
     public record Observation(String projectId, String jobId, String attemptId, String executionId, String specHash,
                               Phase phase, String status, ExecutionOutcome outcome, Integer exitCode, Bytes stdout,
-                              Bytes stderr, boolean truncated, String compileArtifactId, boolean cleanupPending, ExecutionMetrics metrics) {
+                              Bytes stderr, boolean truncated, String compileArtifactId, boolean cleanupPending, ExecutionMetrics metrics, Bytes methodResult) {
+        public Observation(String projectId,String jobId,String attemptId,String executionId,String specHash,Phase phase,String status,ExecutionOutcome outcome,Integer exitCode,Bytes stdout,Bytes stderr,boolean truncated,String compileArtifactId,boolean cleanupPending,ExecutionMetrics metrics) {
+            this(projectId,jobId,attemptId,executionId,specHash,phase,status,outcome,exitCode,stdout,stderr,truncated,compileArtifactId,cleanupPending,metrics,null);
+        }
         public Observation(String projectId,String jobId,String attemptId,String executionId,String specHash,
                            Phase phase,String status,ExecutionOutcome outcome,Integer exitCode,Bytes stdout,
                            Bytes stderr,boolean truncated,String compileArtifactId,boolean cleanupPending) {
-            this(projectId,jobId,attemptId,executionId,specHash,phase,status,outcome,exitCode,stdout,stderr,truncated,compileArtifactId,cleanupPending,null);
+            this(projectId,jobId,attemptId,executionId,specHash,phase,status,outcome,exitCode,stdout,stderr,truncated,compileArtifactId,cleanupPending,null,null);
         }
     }
-    public record TestCase(String id, String stdin, List<String> args, Integer expectedExitCode, String expectedStdout, String expectedStderr) {
+    public record TestCase(String id, String stdin, List<String> args, Integer expectedExitCode, String expectedStdout, String expectedStderr, String expectedMethodResult) {
+        public TestCase(String id,String stdin,List<String> args,Integer expectedExitCode,String expectedStdout,String expectedStderr) {
+            this(id,stdin,args,expectedExitCode,expectedStdout,expectedStderr,null);
+        }
         public TestCase { args = args == null ? List.of() : List.copyOf(args); }
     }
     public record TestResult(String caseId, List<Observation> baseExecutions, List<Observation> candidateExecutions, boolean matched,

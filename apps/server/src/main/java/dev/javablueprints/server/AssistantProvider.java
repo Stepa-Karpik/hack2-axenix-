@@ -78,11 +78,29 @@ class AssistantProvider {
                 + " run_program аналогично повторяет обычный запуск или открывает параметры. workspace_action выполняет"
                 + " create_file/create_folder (открывает форму имени), import (форма импорта), run_settings/test_settings"
                 + " (параметры), save_code (сохранить код проекта), save_layout/base_layout/restore_layout, stop (остановка)."
-                + " Для остальных действий можно открыть нужный раздел/форму через guide; не обещай прямого выполнения"
-                + " операции, если инструмента нет. Пароли, загрузка фото, OAuth-разрешение и окончательное применение"
+                + " Для остальных действий можно открыть нужный раздел/форму через guide; не обещай прямого выполнения операции, если инструмента нет."
+                + " Для прямого управления окнами есть layout_action: operation open/hide/toggle/maximize + panel; unmaximize/reset/save/save_default/restore без panel;"
+                + " swap + panel,targetPanel; resize + panel,axis(width|height),percent(целое15..85); preset + preset(default|code|review)."
+                + " dock_navigation/undock_navigation/collapse_navigation/expand_navigation управляют панелью JavaBlueprints."
+                + " Панели: project=Проект/Файлы, palette=Блоки, graph=Схема(постоянный холст), code=Код Java, analysis=Анализ, console=Консоль,"
+                + " tests=Тесты, changes=Изменения, history=История, navigation=JavaBlueprints. Не подменяй прямое изменение окон инструкцией guide."
+                + " Размер — доля ближайшей разделённой области, не масштаб текста/кода. Если процент/ось не указаны, уточни. Постоянную Схему нельзя скрывать или менять местами."
+                + " Пароли, загрузка фото, OAuth-разрешение и окончательное применение"
                 + " изменений требуют ввода/действия пользователя в соответствующей форме. Никогда не проси секреты в чате."
                 + " Предложение команды ещё не результат: после подтверждения приложение её выполнит и вернёт статус."
                 + " Не отвечай 'сам запустить не могу' для доступных optimize/run_tests/run_program."
+                + " Прямые действия друзей: friend_request(username), friend_accept(requestId), friend_decline(requestId), friend_remove(username)."
+                + " Используй точные requestId из incomingFriendRequests и username; если данных нет, уточни, не угадывай."
+                + " project_role(projectId,username,role) выдаёт/меняет viewer/editor или удаляет доступ role=remove; только владелец, требуется точное да."
+                + " Для явной просьбы изменить код предложи code_edit: только выбранный файл, точный baseRevisionId из revisionId,"
+                + " UTF-16 startOffset/endOffset и expectedText, строго соответствующие selectedSource. Диапазон selectedSource начинается с sourceStartOffset"
+                + " и заканчивается sourceEndOffset; offsets правки абсолютные в файле, прибавляй sourceStartOffset к индексам фрагмента. replacement — новый фрагмент."
+                + " Предпочитай заменить весь переданный небольшой метод: startOffset=sourceStartOffset, endOffset=sourceEndOffset,"
+                + " expectedText=selectedSource и replacement=полный исправленный метод. Так не нужно угадывать индексы внутри текста."
+                + " intent=semantic_edit по умолчанию; preserve_behavior только если пользователь просит сохранить поведение."
+                + " Это создаёт отдельный кандидат, компиляция идёт только в изолированном runner. Исходная версия не меняется."
+                + " Пользователь отдельно просматривает diff, запускает нужные тесты и применяет. Не обещай успешную компиляцию или тесты заранее."
+                + " Если selectedSource отсутствует/обрезан/секрет скрыт, сначала попроси выбрать доступный файл; не выдумывай код или диапазон."
                 + " guide сам открывает страницу, панель и нужную вкладку. Обычные вопросы всегда mode=locate;"
                 + " walkthrough только по явному запросу полного обучения. Не дублируй guide командой navigate или show_panel."
                 + " Если вопрос непонятен и нет подходящего пункта карты, уточни; не выдумывай расположение."
@@ -106,7 +124,7 @@ class AssistantProvider {
             "messages",
             messages,
             "max_tokens",
-            1800,
+            Boolean.TRUE.equals(facts.get("sourceIncluded")) ? 6000 : 1800,
             "stream",
             false,
             "tools",
@@ -160,7 +178,7 @@ class AssistantProvider {
         for (Object call : calls) {
           var function = (Map<?, ?>) ((Map<?, ?>) call).get("function");
           String args = Objects.toString(function.get("arguments"), "");
-          if (args.length() > 4096) throw unavailable();
+          if (args.length() > 32768) throw unavailable();
           try {
             actions.add(
                 AssistantActions.validate(

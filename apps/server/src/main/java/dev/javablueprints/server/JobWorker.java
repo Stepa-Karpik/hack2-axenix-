@@ -322,11 +322,12 @@ public class JobWorker {
         new EditCommand(
             base,
             analysis.id(),
-            str(in, "methodId"),
+            in.get("methodId") instanceof String method ? method : null,
             str(in, "nodeId"),
             str(in, "operation"),
             ApiController.editPayload(in),
-            str(in, "intent"));
+            str(in, "intent"),
+            in.get("initializerContextId") instanceof String context ? context : null);
     Candidate candidate = engine.propose(new SourceBundle(base, w.javaFiles(rev)), analysis, command);
     var candidateTree = new TreeMap<>(w.files(rev));
     candidateTree.putAll(candidate.files());
@@ -473,12 +474,25 @@ public class JobWorker {
   Map<String, Object> compare(String p, String j, String attempt, Map<String, Object> in)
       throws Exception {
     var suite = w.resource(p, str(in, "suiteVersionId"), "suite");
+    boolean methodMode="method".equals(suite.get("mode"));
+    String comparisonProfileHash=methodMode?MethodHarness.profileHash():PROFILE_HASH;
     var cases =
         ((List<?>) suite.get("cases"))
             .stream().map(x -> testCase((Map<String, Object>) x)).toList();
+    if(methodMode) {
+      var methodCases=new ArrayList<TestCase>();var inputs=(List<Map<String,Object>>)suite.get("cases");
+      for(int index=0;index<inputs.size();index++){var value=inputs.get(index);methodCases.add(new TestCase(str(value,"id"),"",List.of(Integer.toString(index)),0,(String)value.get("expectedStdout"),(String)value.get("expectedStderr"),value.get("expectedMethodResult")==null?null:w.encode(value.get("expectedMethodResult"))));}
+      cases=List.copyOf(methodCases);
+    }
+    var baselineSources=w.javaFiles(w.revision(p,str(in,"baseRevisionId")));
+    var candidateSources=w.javaFiles(w.revision(p,str(in,"candidateRevisionId")));
+    if(methodMode) {
+      var target=(Map<String,Object>)suite.get("target");var inputs=(List<Map<String,Object>>)suite.get("cases");
+      baselineSources=MethodHarness.prepare(baselineSources,target,inputs);candidateSources=MethodHarness.prepare(candidateSources,target,inputs);
+    }
     var progress=new TestProgress(p,attempt,(List<Map<String,Object>>)suite.get("cases"),snapshot->{
       if(!w.jobProgress(p,j,attempt,snapshot)) throw new ApiError(409,"STALE_ATTEMPT","Comparison attempt is no longer active");
-    },map("baseRevisionId",in.get("baseRevisionId"),"candidateRevisionId",in.get("candidateRevisionId"),"suiteVersionId",in.get("suiteVersionId"),"suiteVersionHash",suite.get("versionHash"),"executionProfileId",RunnerProtocol.PROFILE,"executionProfileHash",PROFILE_HASH));
+    },map("baseRevisionId",in.get("baseRevisionId"),"candidateRevisionId",in.get("candidateRevisionId"),"suiteVersionId",in.get("suiteVersionId"),"suiteVersionHash",suite.get("versionHash"),"executionProfileId",RunnerProtocol.PROFILE,"executionProfileHash",comparisonProfileHash));
     comparisonRuns.put(j,progress);
     try {
     progress.publish();
@@ -489,11 +503,11 @@ public class JobWorker {
             j,
             attempt,
             1,
-            w.javaFiles(w.revision(p, str(in, "baseRevisionId"))),
-            w.javaFiles(w.revision(p, str(in, "candidateRevisionId"))),
-            str(suite, "entryPoint"),
+            baselineSources,
+            candidateSources,
+            methodMode?MethodHarness.MAIN:str(suite, "entryPoint"),
             cases,
-            () -> cancelled(p, j),progress);
+            () -> cancelled(p, j),progress,methodMode);
     progress.finish(comparison,w.job(p,j).get("cancelRequestedAt")!=null);
     var results = new ArrayList<Map<String, Object>>();
     for (var t : comparison.tests())
@@ -536,7 +550,7 @@ public class JobWorker {
             "executionProfileId",
             "java21-v1",
             "executionProfileHash",
-            PROFILE_HASH,
+            comparisonProfileHash,
             "outcome",
             comparison.outcome().name(),
             "matched",
@@ -558,7 +572,7 @@ public class JobWorker {
                 ? List.of()
                 : Arrays.asList(comparison.reason().split(",")),
             "assumptions",
-            List.of("Exact stdout/stderr/exit under recorded Java21 profile"),
+            methodMode?List.of("Public static direct invocation; typed return and argument-array poststate; bounded exception type/message/cause/suppressed tree; exact stdout/stderr; not whole-program equivalence"):List.of("Exact stdout/stderr/exit under recorded Java21 profile"),
             "testResults",
             results,
             "testResultsRef",
@@ -566,6 +580,9 @@ public class JobWorker {
             "createdAt",
             java.time.Instant.now().toString());
     report.put("wallTimeMs",progress.snapshot().get("elapsedMs"));
+    report.put("mode",methodMode?"method":"console");
+    report.put("comparisonPolicyId",suite.get("comparisonPolicyId"));
+    if(methodMode){report.put("methodTarget",suite.get("target"));report.put("methodBinding",suite.get("methodBinding"));report.put("harnessVersion",MethodContract.VERSION);report.put("methodHarnessSourceHashes",map("base",hash(baselineSources.get(MethodHarness.MAIN+".java")),"candidate",hash(candidateSources.get(MethodHarness.MAIN+".java"))));}
     report.put("completed",progress.snapshot().get("completed"));
     if (comparison.baseCompile() != null)
       report.put("baseCompile", observation(p, comparison.baseCompile()));
@@ -612,6 +629,10 @@ public class JobWorker {
         o.cleanupPending(),
         "metrics",
         o.metrics(),
+        "methodResult",
+        o.methodResult()==null?null:MethodContract.view(o.methodResult()),
+        "methodResultRaw",
+        o.methodResult()==null?null:new String(o.methodResult().decode(MethodContract.MAX_RESULT),StandardCharsets.UTF_8),
         "specHash",
         o.specHash());
   }

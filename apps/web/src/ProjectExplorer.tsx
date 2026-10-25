@@ -13,7 +13,7 @@ import {
   Download,
   Trash2,
 } from "lucide-react";
-import { directoryPaths, languageFor } from "./projectFiles";
+import { directoryPaths, languageFor, nestedMethodOwner } from "./projectFiles";
 import type { FileSnapshot } from "./projectFiles";
 import type { Method } from "./types";
 export function FileGlyph({ path }: { path: string }) {
@@ -244,6 +244,11 @@ export default function ProjectExplorer({
                   disabled={disabled || methodsDisabled}
                   onClick={() => onMethod(m)}
                 >
+                  {nestedMethodOwner(m.fullyQualifiedName) && (
+                    <small className="method-owner" title={m.fullyQualifiedName}>
+                      {nestedMethodOwner(m.fullyQualifiedName)}
+                    </small>
+                  )}
                   {m.signature}
                 </button>
               ))}

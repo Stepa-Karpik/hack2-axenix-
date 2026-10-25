@@ -55,7 +55,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", "extract_method", "decompose_class", "rename_local"),
+            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", "optimize_string_builder", "extract_method", "decompose_class", "rename_local"),
             "symbols",
             map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
                 dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
@@ -78,7 +78,8 @@ public class ApiController {
             "limits",
             map("maxProjectBytes", 1048576, "maxProjectFiles", 100, "maxTestCases", 100),
             "unsupported",
-            List.of("method_harness", "benchmark", "llm")));
+            List.of("benchmark", "llm"),
+            "method_harness",map("status","partial","mode","method","comparisonPolicyId","method-v1","scope","public_static_primitive_string_1d_arrays","exceptionDepth",8)));
   }
 
   @GetMapping("/session")
@@ -381,9 +382,12 @@ public class ApiController {
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
     fields(
-        b, "baseRevisionId", "analysisId", "methodId", "nodeId", "operation", "payload", "intent");
+        b, "baseRevisionId", "analysisId", "methodId", "initializerContextId", "nodeId", "operation", "payload", "intent");
     editPayload(b);
-    str(b, "methodId");
+    boolean initializer = b.get("initializerContextId") instanceof String id && !id.isBlank();
+    boolean callable = b.get("methodId") instanceof String id && !id.isBlank();
+    if (initializer == callable) throw new ApiError(400,"INVALID_REQUEST","Choose exactly one method or initializer context");
+    if (initializer) str(b,"initializerContextId"); else str(b,"methodId");
     str(b, "nodeId");
     String r = str(b, "baseRevisionId");
     var analysis = w.analysis(p, r, str(b, "analysisId"));
@@ -456,9 +460,12 @@ public class ApiController {
             throw new ApiError(409, "INVALID_CHANGE", "Candidate has not compiled");
           if ("preserve_behavior".equals(proposal.get("intent"))) {
             var report = w.resource(p, str(b, "verificationReportId"), "comparison");
+            var reportSuite=w.resource(p,str(report,"suiteVersionId"),"suite");
+            String requiredProfile="method".equals(reportSuite.get("mode"))?MethodHarness.profileHash():JobWorker.PROFILE_HASH;
             if (!Boolean.TRUE.equals(report.get("coverageComplete"))
                 || !"succeeded".equals(w.job(p, str(report, "jobId")).get("status"))
-                || !JobWorker.PROFILE_HASH.equals(report.get("executionProfileHash"))
+                || !requiredProfile.equals(report.get("executionProfileHash"))
+                || !Objects.equals(reportSuite.get("versionHash"),report.get("suiteVersionHash"))
                 || !"matched_on_tests".equals(report.get("outcome"))
                 || !expected.equals(report.get("baseRevisionId"))
                 || !candidate.equals(report.get("candidateRevisionId"))
@@ -481,8 +488,9 @@ public class ApiController {
       @PathVariable String p,
       @RequestHeader(value = "Idempotency-Key", required = false) String key,
       @RequestBody Map<String, Object> b) {
-    fields(b, "mode", "entryPoint", "cases", "seed", "comparisonPolicyId", "oracleSpec", "origin");
+    fields(b, "mode", "entryPoint", "cases", "seed", "comparisonPolicyId", "oracleSpec", "origin", "revisionId", "target");
     w.project(p);
+    if("method".equals(b.get("mode")))return methodSuite(p,key,b);
     if (!"console".equals(b.get("mode")) || !"exact-v1".equals(b.get("comparisonPolicyId")))
       throw new ApiError(422, "UNSUPPORTED_CONSTRUCT", "Only console exact-v1 suite supported");
     entry(str(b, "entryPoint"));
@@ -522,6 +530,35 @@ public class ApiController {
           w.putResource(p, id, "suite", s);
           return s;
         });
+  }
+
+  @GetMapping("/projects/{p}/revisions/{r}/method-targets")
+  Object methodTargets(@PathVariable String p,@PathVariable String r) {
+    var files=w.javaFiles(w.revision(p,r));
+    try{return ok(map("revisionId",r,"targets",MethodHarness.targets(files)));}
+    catch(RuntimeException unsupported){throw new ApiError(422,"UNSUPPORTED_CONSTRUCT","Method discovery requires parse-valid bounded Java sources");}
+  }
+
+  @SuppressWarnings("unchecked")
+  Object methodSuite(String p,String key,Map<String,Object> b) {
+    if(!"method-v1".equals(b.get("comparisonPolicyId"))||b.containsKey("entryPoint"))throw new ApiError(422,"UNSUPPORTED_CONSTRUCT","method mode requires method-v1 and an exact target, not a console entry point");
+    if(!(b.get("target") instanceof Map<?,?>)||!(b.get("cases") instanceof List<?> raw)||raw.isEmpty()||raw.size()>100)throw new ApiError(400,"INVALID_REQUEST","Method suite requires target and1..100 cases");
+    var files=w.javaFiles(w.revision(p,str(b,"revisionId")));
+    var cases=new ArrayList<Map<String,Object>>();var ids=new HashSet<String>();
+    for(var item:(List<?>)b.get("cases")) {
+      if(!(item instanceof Map<?,?>))throw new ApiError(400,"INVALID_REQUEST","Invalid method case");
+      var cs=(Map<String,Object>)item;fields(cs,"id","name","arguments","expectedMethodResult","expectedStdout","expectedStderr","tags");
+      dev.javablueprints.verification.RunnerProtocol.id(str(cs,"id"));if(!ids.add(str(cs,"id")))throw new ApiError(400,"INVALID_REQUEST","Duplicate case id");
+      if(cs.get("expectedMethodResult")!=null && dev.javablueprints.verification.MethodContract.result(dev.javablueprints.verification.RunnerProtocol.Bytes.text(w.encode(cs.get("expectedMethodResult"))))==null)throw new ApiError(400,"INVALID_REQUEST","Expected method result must be a complete method-v1 object");
+      if(cs.get("expectedStdout")!=null&&!(cs.get("expectedStdout") instanceof String)||cs.get("expectedStderr")!=null&&!(cs.get("expectedStderr") instanceof String))throw new ApiError(400,"INVALID_REQUEST","Streams must be strings");
+      cases.add(cs);
+    }
+    Map<String,Object> binding;
+    try {binding=MethodHarness.validateTarget(files,(Map<String,Object>)b.get("target"));MethodHarness.prepare(files,(Map<String,Object>)b.get("target"),cases);for(var cs:cases)if(cs.get("expectedMethodResult")!=null)cs.put("expectedMethodResult",MethodHarness.normalizeExpected(binding,cs.get("expectedMethodResult")));}
+    catch(RuntimeException unsupported){throw new ApiError(422,"UNSUPPORTED_CONSTRUCT",unsupported.getMessage()==null?"Unsupported method contract":unsupported.getMessage());}
+    return mutation(p+":suite",key,b,201,()->{
+      var s=new LinkedHashMap<>(b);String suiteId=id();s.put("id",suiteId);s.put("projectId",p);s.put("versionHash",hash(w.encode(b)));s.put("createdAt",java.time.Instant.now().toString());s.put("methodBinding",binding);s.put("harnessVersion","method-v1");w.putResource(p,suiteId,"suite",s);return s;
+    });
   }
 
   @GetMapping("/projects/{p}/test-suites/{s}")
@@ -564,7 +601,16 @@ public class ApiController {
     fields(b, "baseRevisionId", "candidateRevisionId", "suiteVersionId", "profileId");
     w.javaFiles(w.revision(p, str(b, "baseRevisionId")));
     w.javaFiles(w.revision(p, str(b, "candidateRevisionId")));
-    w.resource(p, str(b, "suiteVersionId"), "suite");
+    var suite=w.resource(p, str(b, "suiteVersionId"), "suite");
+    if("method".equals(suite.get("mode"))) {
+      if(!Objects.equals(suite.get("revisionId"),b.get("baseRevisionId")))throw new ApiError(409,"ANALYSIS_CONFLICT","Method suite is bound to its exact baseline revision");
+      try {
+        var target=(Map<String,Object>)suite.get("target");
+        var base=MethodHarness.validateTarget(w.javaFiles(w.revision(p,str(b,"baseRevisionId"))),target);
+        var candidate=MethodHarness.validateTarget(w.javaFiles(w.revision(p,str(b,"candidateRevisionId"))),target);
+        if(!Objects.equals(base.get("returnType"),candidate.get("returnType")))throw new IllegalArgumentException("Method return adapter changed");
+      }catch(RuntimeException unsupported){throw new ApiError(422,"UNSUPPORTED_CONSTRUCT",unsupported.getMessage());}
+    }
     profile(b);
     worker.requireAvailable();
     return mutation(p + ":compare", key, b, 202, () -> w.enqueue(p, "compare", b));
@@ -830,6 +876,12 @@ public class ApiController {
           if (!"preserve_behavior".equals(command.get("intent")))
             throw new ApiError(400,"INVALID_REQUEST","Optimization requires preserve_behavior");
           yield new OptimizeMembership();
+        }
+        case "optimize_string_builder" -> {
+          fields(payload);
+          if (!"preserve_behavior".equals(command.get("intent")))
+            throw new ApiError(400,"INVALID_REQUEST","Optimization requires preserve_behavior");
+          yield new OptimizeStringBuilder();
         }
       case "rename_local" -> {
         fields(payload, "newName");

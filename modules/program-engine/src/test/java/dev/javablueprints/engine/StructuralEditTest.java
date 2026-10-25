@@ -30,7 +30,7 @@ class StructuralEditTest {
         GraphNode entry = node(a, "entry", null);
         assertFalse(entry.synthetic());
         assertNotNull(entry.sourceRange());
-        assertEquals(List.of("insert_statement"), entry.allowedOperations());
+        assertEquals(List.of("insert_statement", "decompose_class"), entry.allowedOperations());
         assertEquals(List.of("body_start", "body_end"), entry.insertionPositions());
         for (String position : entry.insertionPositions()) {
             Candidate c = insert(b, a, entry, position, "System.out.println(\"Привет 😀\");");

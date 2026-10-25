@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 class AssistantService {
   final Workspace w;
   final AssistantProvider provider;
+  @org.springframework.beans.factory.annotation.Autowired AccountController accountActions;
 
   AssistantService(Workspace w, AssistantProvider provider) {
     this.w = w;
@@ -189,7 +190,8 @@ class AssistantService {
         remaining -= text.length();
         bounded.addFirst(m);
       }
-      var known = AssistantActions.knownRequest(content);
+      var known = AssistantActions.knownLayoutRequest(content);
+      if(known==null)known=AssistantActions.knownRequest(content);
       var reply = known != null ? known : provider.complete(bounded, facts);
       w.tx.executeWithoutResult(
           tx -> {
@@ -245,6 +247,10 @@ class AssistantService {
                 + " unit tests",
             "sourceIncluded",
             false);
+    if(accountActions!=null) {
+      facts.put("friends",w.db.queryForList("SELECT u.username FROM friendships f JOIN accounts u ON u.id=CASE WHEN f.first_id=? THEN f.second_id ELSE f.first_id END WHERE f.first_id=? OR f.second_id=? ORDER BY u.username LIMIT 50",uuid(actor),uuid(actor),uuid(actor)));
+      facts.put("incomingFriendRequests",w.db.queryForList("SELECT f.id::text,u.username FROM friend_requests f JOIN accounts u ON u.id=f.sender_id WHERE f.recipient_id=? ORDER BY f.created_at DESC LIMIT 30",uuid(actor)));
+    }
     for (String key : List.of("route", "filePath", "methodId", "methodName")) {
       Object value = context.get(key);
       if (value instanceof String s && s.length() <= 240)
@@ -269,6 +275,39 @@ class AssistantService {
       facts.put("projectOwner", actor.equals(p.get("owner_id")));
       facts.put("visibility", p.get("visibility"));
       facts.put("projectUpdatedAt", p.get("updated_at"));
+      if(Boolean.TRUE.equals(facts.get("projectOwner")))
+        facts.put("projectMembers",w.db.queryForList("SELECT u.username,m.role FROM project_members m JOIN accounts u ON u.id=m.account_id WHERE m.project_id=? ORDER BY u.username LIMIT 50",uuid(project)));
+      if(Boolean.TRUE.equals(context.get("includeSource")) && !Boolean.TRUE.equals(context.get("dirty"))
+          && (!(context.get("revisionId") instanceof String selectedRevision) || selectedRevision.equals(p.get("head_revision_id")))
+          && p.get("head_revision_id")!=null && facts.get("filePath") instanceof String path) {
+        var rev=w.revision(project,p.get("head_revision_id").toString());
+        for(Object value:(List<?>)rev.get("files")) {
+          var f=(Map<?,?>)value;
+          if(path.equals(f.get("path")) && f.get("canonicalText") instanceof String source) {
+            int start=0,end=source.length();
+            if(facts.get("methodId") instanceof String methodId) {
+              try {
+                var analysis=w.analysis(project,p.get("head_revision_id").toString(),null);
+                var graph=analysis.get("graph") instanceof Map<?,?> g ? g : Map.of();
+                for(Object method:graph.get("methods") instanceof List<?> methods ? methods : List.of()) {
+                  var m=(Map<?,?>)method;
+                  if(methodId.equals(m.get("id")) && m.get("sourceRange") instanceof Map<?,?> range && path.equals(range.get("filePath"))
+                      && range.get("startOffset") instanceof Number a && range.get("endOffset") instanceof Number b) {
+                    start=a.intValue();end=b.intValue();break;
+                  }
+                }
+              } catch(ApiError absent) {
+                if(!absent.code.equals("ANALYSIS_NOT_READY")) throw absent;
+              }
+            }
+            if(start>=0 && end>=start && end<=source.length() && end-start<=12000) {
+              facts.put("selectedSource",AssistantProvider.redact(source.substring(start,end)));
+              facts.put("sourceStartOffset",start);facts.put("sourceEndOffset",end);
+              facts.put("sourceIncluded",true);
+            }
+          }
+        }
+      }
       facts.put(
           "recentJobs",
           w.db.queryForList(
@@ -349,6 +388,22 @@ class AssistantService {
                   ? " будет закреплён в вашем профиле."
                   : " будет откреплён от вашего профиля.");
       case "update_profile" -> "Новое описание вашего профиля: «" + p.args().get("bio") + "».";
+      case "friend_request", "friend_remove" -> p.label()+": @"+p.args().get("username")+". Подтвердите это действие.";
+      case "friend_accept", "friend_decline" -> {
+        String sender="";
+        if(accountActions!=null) {
+          var rows=w.db.queryForList("SELECT u.username FROM friend_requests f JOIN accounts u ON u.id=f.sender_id WHERE f.id=?",uuid(str(p.args(),"requestId")));
+          if(!rows.isEmpty()) sender=" от @"+rows.getFirst().get("username");
+        }
+        yield p.label()+sender+" (заявка "+p.args().get("requestId")+").";
+      }
+      case "project_role" -> "Проект "+project+": доступ @"+p.args().get("username")+" станет «"+p.args().get("role")+"». Для подтверждения введите да.";
+      case "code_edit" -> "Подготовить отдельный кандидат: "+selection+", диапазон "+p.args().get("startOffset")+"–"+p.args().get("endOffset")+". Код будет отправлен в изолированный компилятор. Исходная версия не изменится; применение — отдельно после просмотра diff и необходимых тестов.";
+      case "layout_action" -> "Проект "+project+". Операция с окнами: "+p.args().get("operation")
+          +(p.args().containsKey("panel")?"; панель "+p.args().get("panel"):"")
+          +(p.args().containsKey("targetPanel")?" ↔ "+p.args().get("targetPanel"):"")
+          +(p.args().containsKey("percent")?"; "+p.args().get("axis")+" "+p.args().get("percent")+"% ближайшей разделённой области":"")
+          +(p.args().containsKey("preset")?"; вариант "+p.args().get("preset"):"")+". Изменения применятся после подтверждения.";
       case "run_tests" ->
           "Проект "
               + project
@@ -381,6 +436,24 @@ class AssistantService {
       String actor, AssistantActions.Proposal proposal, Map<String, Object> facts) {
     var result = map();
     String type = proposal.type();
+    if(AssistantSocialActions.TYPES.contains(type)) {
+      if(accountActions==null) return null;
+      if(type.equals("project_role") && (!Boolean.TRUE.equals(facts.get("projectOwner")) || !Objects.equals(proposal.args().get("projectId"),facts.get("projectId")))) return null;
+      var snapshot=new AssistantSocialActions(accountActions).snapshot(actor,type,proposal.args());
+      if(type.equals("project_role")) {
+        snapshot.put("projectId",facts.get("projectId")); snapshot.put("revisionId",facts.get("revisionId")); snapshot.put("updatedAt",facts.get("projectUpdatedAt"));
+      }
+      return snapshot;
+    }
+    if(type.equals("code_edit")) {
+      if(!Boolean.TRUE.equals(facts.get("sourceIncluded")) || !facts.containsKey("projectId") || !Objects.equals(proposal.args().get("baseRevisionId"),facts.get("revisionId")) || !Objects.equals(proposal.args().get("filePath"),facts.get("filePath"))) return null;
+      AssistantCodeProposals.requireEditor(w,actor,str(facts,"projectId"));
+      if(AssistantActions.offset(proposal.args(),"startOffset")<((Number)facts.get("sourceStartOffset")).intValue()
+          || AssistantActions.offset(proposal.args(),"endOffset")>((Number)facts.get("sourceEndOffset")).intValue()) return null;
+      AssistantCodeProposals.replacement(w,str(facts,"projectId"),proposal.args());
+      result.put("projectId",facts.get("projectId")); result.put("revisionId",facts.get("revisionId")); result.put("updatedAt",facts.get("projectUpdatedAt"));
+      return result;
+    }
     if (type.equals("update_profile")) {
       result.put(
           "bio",
@@ -391,7 +464,7 @@ class AssistantService {
       if (!Boolean.TRUE.equals(facts.get("projectOwner"))
           || !Objects.equals(proposal.args().get("projectId"), facts.get("projectId"))) return null;
     }
-    if (Set.of("set_visibility", "pin_project", "run_tests", "run_program", "workspace_action", "optimize").contains(type)) {
+    if (Set.of("set_visibility", "pin_project", "run_tests", "run_program", "workspace_action", "optimize", "layout_action").contains(type)) {
       if (!facts.containsKey("projectId")) return null;
       result.put("projectId", facts.get("projectId"));
       result.put("revisionId", facts.get("revisionId"));
@@ -425,7 +498,7 @@ class AssistantService {
                 row.get("claimed_at") != null ? "already_claimed" : "cancelled");
           if (row.get("risk").equals("typed") && !"да".equals(body.get("confirmation")))
             throw new ApiError(
-                400, "CONFIRMATION_REQUIRED", "Введите да для изменения видимости проекта");
+                400, "CONFIRMATION_REQUIRED", "Введите да для подтверждения изменения доступа");
           String type = row.get("type").toString();
           var args = w.decode(row.get("args").toString());
           var bind = w.decode(row.get("binding").toString());
@@ -446,6 +519,11 @@ class AssistantService {
               facts(actor, map("projectId", bind.get("projectId")));
           }
           boolean server = AssistantActions.serverMutation(type);
+          if(AssistantSocialActions.TYPES.contains(type)) new AssistantSocialActions(accountActions).execute(actor,type,args,bind);
+          if(type.equals("code_edit")) {
+            var proposal=new AssistantCodeProposals(w).prepare(actor,str(bind,"projectId"),args);
+            args.put("proposalId",proposal.get("id")); args.put("jobId",proposal.get("jobId"));
+          }
           if (type.equals("set_visibility"))
             w.db.update(
                 "UPDATE projects SET visibility=?,updated_at=now() WHERE id=? AND owner_id=?",

@@ -44,6 +44,7 @@ const allowedActions = new Set([
   "set_visibility",
   "pin_project",
   "update_profile",
+  "friend_request", "friend_accept", "friend_decline", "friend_remove", "project_role", "code_edit", "layout_action",
   "explain",
 ]);
 const actionLabel = (action: AssistantAction) =>
@@ -64,6 +65,7 @@ export function AssistantChat({ accountId }: { accountId: string }) {
     useState<AssistantConversation | null>(null);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [draft, setDraft] = useState("");
+  const [includeSource, setIncludeSource] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -225,7 +227,7 @@ export function AssistantChat({ accountId }: { accountId: string }) {
     )
       return;
     if (
-      action.type === "set_visibility" &&
+      ["set_visibility", "project_role"].includes(action.type) &&
       (action.risk !== "typed" || typed !== "да")
     )
       return;
@@ -279,7 +281,7 @@ export function AssistantChat({ accountId }: { accountId: string }) {
         mounted.current &&
         outcome.ok &&
         response.action.status === "completed" &&
-        ["set_visibility", "pin_project", "update_profile"].includes(
+        ["set_visibility", "pin_project", "update_profile", "friend_request", "friend_accept", "friend_decline", "friend_remove", "project_role"].includes(
           action.type,
         )
       )
@@ -378,7 +380,7 @@ export function AssistantChat({ accountId }: { accountId: string }) {
       const reply = await assistantApi.send(
         cid,
         content,
-        getAssistantContext(),
+        { ...getAssistantContext(), includeSource },
         controller.signal,
       );
       if (controller.signal.aborted || !mounted.current) return;
@@ -672,8 +674,8 @@ export function AssistantChat({ accountId }: { accountId: string }) {
                       allowedActions.has(action.type) &&
                       ["none", "confirm", "typed"].includes(action.risk) &&
                       (action.risk !== "typed" ||
-                        action.type === "set_visibility") &&
-                      (action.type !== "set_visibility" ||
+                        ["set_visibility", "project_role"].includes(action.type)) &&
+                      (!["set_visibility", "project_role"].includes(action.type) ||
                         action.risk === "typed");
                     const done = action.status !== "pending" || state?.done;
                     if (action.type === "navigate")
@@ -716,6 +718,13 @@ export function AssistantChat({ accountId }: { accountId: string }) {
                           </p>
                         )}
                         {!safe && <span>Это действие недоступно.</span>}
+                        {action.type === "code_edit" && (
+                          <details>
+                            <summary>Предлагаемый фрагмент · {String(action.args.filePath ?? "")}</summary>
+                            <p>Было:</p><pre>{String(action.args.expectedText ?? "")}</pre>
+                            <p>Станет:</p><pre>{String(action.args.replacement ?? "")}</pre>
+                          </details>
+                        )}
                         {safe && !done && action.risk === "typed" && (
                           <label className="assistant-confirm-label">
                             {action.type === "set_visibility"
@@ -824,6 +833,11 @@ export function AssistantChat({ accountId }: { accountId: string }) {
               void send();
             }}
           >
+            <label className="assistant-source-consent">
+              <input type="checkbox" checked={includeSource} disabled={interactionBusy}
+                onChange={(event) => setIncludeSource(event.target.checked)} />
+              Передать DeepSeek сохранённый Java-файл (до 12 000 символов); для большого файла — выбранный метод. Для подготовки правки
+            </label>
             <textarea
               ref={composer}
               aria-label="Сообщение помощнику"
