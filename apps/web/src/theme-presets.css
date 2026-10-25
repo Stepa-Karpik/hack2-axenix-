@@ -58,7 +58,7 @@
   --glass-bg: var(--theme-background);
   --ink: var(--theme-text);
   --quiet: var(--theme-muted);
-  --line: var(--theme-muted);
+  --line: color-mix(in srgb, var(--theme-muted) 35%, var(--theme-surface));
   --surface: var(--theme-surface);
   --surface-hover: color-mix(
     in srgb,

@@ -1,7 +1,7 @@
 .flow-area,
 .flow-area .react-flow,
 .flow-area .react-flow__renderer {
-  background-color: #000;
+  background-color: var(--canvas-background, var(--theme-background, #f7f8f7));
 }
 .flow-area .react-flow .shortcut-label.branch-label {
   width: 44px;
@@ -11,7 +11,7 @@
   line-height: 24px;
   border-color: currentColor;
   color: var(--graph-yellow, #d5bd61);
-  background: #080807;
+  background: var(--glass-node, var(--theme-surface, #fff));
 }
 .flow-area .react-flow__node.selected .blueprint-node {
   outline: 2px solid var(--graph-violet, #ad8cdf);
@@ -172,4 +172,49 @@
 .flow-area.space-pan .react-flow__nodesselection,
 .flow-area.space-pan .react-flow__nodesselection-rect {
   pointer-events: none !important;
+}
+
+/* Semantic accents and transient graph tools must remain readable on light canvases. */
+[data-theme="light"] .flow-area {
+  --graph-blue: #3f6d8e;
+  --graph-yellow: #82650e;
+  --graph-violet: #73559c;
+  --graph-green: #3d7457;
+  --graph-teal: #377473;
+}
+[data-theme="light"] .flow-area .graph-method-frame {
+  border-color: color-mix(in srgb, var(--graph-violet) 40%, transparent);
+}
+[data-theme="light"] .flow-area .graph-method-frame.active {
+  border-color: var(--graph-violet);
+}
+[data-theme="light"] .flow-area .graph-method-frame > span,
+[data-theme="light"] .flow-area .graph-preview strong,
+[data-theme="light"] .flow-area .graph-preview-step,
+[data-theme="light"] .flow-area .graph-preview-loop {
+  color: var(--graph-violet);
+}
+[data-theme="light"] .flow-area .graph-selection-note,
+[data-theme="light"] .flow-area .graph-preview {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--theme-surface) 96%, var(--graph-violet));
+  border-color: var(--graph-violet);
+}
+[data-theme="light"] .flow-area .graph-preview-shape {
+  background: color-mix(in srgb, var(--theme-surface) 94%, var(--graph-blue));
+  color: var(--graph-blue);
+  border-color: var(--graph-blue);
+}
+[data-theme="light"] .flow-area .graph-preview-shape.condition {
+  background: color-mix(in srgb, var(--theme-surface) 94%, var(--graph-yellow));
+  color: var(--graph-yellow);
+  border-color: var(--graph-yellow);
+}
+[data-theme="light"] .flow-area .graph-preview-shape.loop {
+  background: color-mix(in srgb, var(--theme-surface) 94%, var(--graph-violet));
+  color: var(--graph-violet);
+  border-color: var(--graph-violet);
+}
+[data-theme="light"] .flow-area .graph-preview-branches {
+  color: var(--graph-yellow);
 }

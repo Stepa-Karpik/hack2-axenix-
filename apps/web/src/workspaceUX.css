@@ -1,17 +1,28 @@
-/* Shared workspace chrome stays separate from the permanent black graph canvas. */
+/* The canvas follows the appearance palette; dark appearances retain OLED black. */
+.glass-workbench {
+  --canvas-background: var(--theme-background, #f7f8f7);
+  --canvas-ink: var(--theme-text, #202621);
+  --canvas-quiet: var(--theme-muted, #56635b);
+}
+[data-theme="dark"] .glass-workbench {
+  --canvas-background: #000;
+}
 .glass-workbench.workbench {
-  background: #000;
+  background: var(--canvas-background);
 }
 .empty-pane,
 .graph-pane,
 .workspace-canvas-background {
-  background: #000 !important;
+  background: var(
+    --canvas-background,
+    var(--theme-background, #f7f8f7)
+  ) !important;
 }
 .glass-workbench .flow-area,
 .glass-workbench .flow-area .react-flow,
 .glass-workbench .flow-area .react-flow__renderer,
 .glass-workbench .flow-area .react-flow__background {
-  background-color: #000 !important;
+  background-color: var(--canvas-background) !important;
 }
 .workbench .workspace-group.glass-tile {
   border-color: color-mix(in srgb, var(--theme-text, #e4e4e7) 23%, transparent);
@@ -508,11 +519,7 @@
   font-size: 12px;
 }
 
-/* Text drawn directly on the permanent black canvas has its own foreground. */
-.glass-workbench {
-  --canvas-ink: #f0f0f0;
-  --canvas-quiet: #b8b8b8;
-}
+/* Headings and menu items use the foreground paired with the canvas palette. */
 .glass-workbench .canvas-heading h1 {
   color: var(--canvas-ink);
 }
@@ -521,10 +528,18 @@
   color: var(--canvas-quiet);
 }
 @media (min-width: 981px) {
-  .glass-workbench .global-command-menu > .workspace-menubar > .workspace-menu > summary {
+  .glass-workbench
+    .global-command-menu
+    > .workspace-menubar
+    > .workspace-menu
+    > summary {
     color: var(--canvas-ink);
   }
-  .glass-workbench .global-command-menu > .workspace-menubar > .workspace-menu > summary:focus-visible {
+  .glass-workbench
+    .global-command-menu
+    > .workspace-menubar
+    > .workspace-menu
+    > summary:focus-visible {
     outline: 2px solid var(--canvas-ink);
     outline-offset: 3px;
   }
