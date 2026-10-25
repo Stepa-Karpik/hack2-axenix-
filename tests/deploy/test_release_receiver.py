@@ -132,15 +132,24 @@ class ReleaseBindingTests(unittest.TestCase):
             def read(self, size): return self.body[:size]
             def geturl(self): return self.url
         index=b'<div id="root"></div><script src="/assets/app.js"></script><link href="/assets/app.css">'
+        landing=b'<h1 id="hero-title">JavaBlueprints</h1><script src="/landing/app.js"></script><link href="/landing/styles.css">'
         def opened(url, **_):
             path=url[len(receiver.ORIGIN):]
-            if path=='/': return Response(url,index,'text/html')
+            if path=='/': return Response(url,landing,'text/html')
+            if path=='/login': return Response(url,index,'text/html')
             if path.endswith('.js'):return Response(url,b'export{}','application/javascript')
             if path.endswith('.css'):return Response(url,b'body{}','text/css')
             data={'health':{'status':'up'},'capabilities':{'runner':{'available':True}},'session':{'capabilities':{'legacyGuestWorkspace':False}}}[path.rsplit('/',1)[1]]
             return Response(url,json.dumps({'data':data}).encode(),'application/json')
         with patch.object(receiver.urllib.request, 'urlopen', side_effect=opened):
             self.assertTrue(receiver.public_health())
+        for broken in ('/', '/login', '/landing/app.js', '/landing/styles.css', '/assets/app.js', '/assets/app.css'):
+            def broken_page(url, **kwargs):
+                if url == receiver.ORIGIN + broken:
+                    return Response(url, b'<html>Missing application</html>', 'text/html')
+                return opened(url, **kwargs)
+            with self.subTest(broken=broken), patch.object(receiver.urllib.request, 'urlopen', side_effect=broken_page):
+                self.assertFalse(receiver.public_health())
         with patch.object(receiver.urllib.request, 'urlopen', return_value=Response(receiver.ORIGIN+'/',b'<div id="root"></div>','text/html')):
             self.assertFalse(receiver.public_health())
 

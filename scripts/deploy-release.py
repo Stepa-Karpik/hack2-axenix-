@@ -60,12 +60,18 @@ def public_health():
             if not body or len(body) > limit:
                 raise RuntimeError('Invalid public response size')
             return body, response.headers.get('Content-Type', '')
-    index, content_type = read('/', 1024 * 1024)
+    landing, content_type = read('/', 1024 * 1024)
+    if 'text/html' not in content_type or b'id="hero-title"' not in landing:
+        return False
+    index, content_type = read('/login', 1024 * 1024)
     if 'text/html' not in content_type or b'id="root"' not in index:
         return False
     assets = set(re.findall(rb'(?:src|href)="(/assets/[A-Za-z0-9._-]+\.(?:js|css))"', index))
-    if not any(path.endswith(b'.js') for path in assets):
-        return False
+    landing_assets = set(re.findall(rb'(?:src|href)="(/landing/[A-Za-z0-9._/-]+\.(?:js|css))"', landing))
+    for group in (assets, landing_assets):
+        if not any(path.endswith(b'.js') for path in group) or not any(path.endswith(b'.css') for path in group):
+            return False
+    assets |= landing_assets
     for path in assets:
         _, kind = read(path.decode('ascii'), 8 * 1024 * 1024)
         if ('javascript' if path.endswith(b'.js') else 'text/css') not in kind:
