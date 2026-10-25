@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
+import { useAccount, canCreateProjects, canExportProjects } from "./Account";
 import type { Project } from "./types";
-import { layoutKey, panelIds, validateLayout } from "./workspaceLayout";
+import { layoutKey, panelIds, migrateLayout } from "./workspaceLayout";
 import type { WorkspaceLayout, PanelId } from "./workspaceLayout";
 
 const format = "java-blueprints-project-archive-v1";
@@ -23,6 +24,11 @@ export default function ProjectArchives({
   onRestored: (id: string) => void;
   onError: (message: string) => void;
 }) {
+  const { session } = useAccount();
+  const mayCreate = canCreateProjects(session),
+    mayExport = canExportProjects(session);
+  const epoch = useRef(0),
+    controller = useRef<AbortController | null>(null);
   const picker = useRef<HTMLInputElement>(null),
     dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null),
@@ -41,8 +47,32 @@ export default function ProjectArchives({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      controller.current?.abort();
     };
   }, []);
+  useEffect(() => {
+    epoch.current++;
+    controller.current?.abort();
+    dialog.current?.close();
+    setArchive(null);
+    setBusy(false);
+    setError("");
+    pending.current = {
+      createKey: crypto.randomUUID(),
+      importKey: crypto.randomUUID(),
+    };
+  }, [session?.user?.id, session?.capabilities.legacyGuestWorkspace]);
+  function operation() {
+    controller.current?.abort();
+    const abort = new AbortController(),
+      ticket = epoch.current;
+    controller.current = abort;
+    return {
+      signal: abort.signal,
+      current: () =>
+        mounted.current && ticket === epoch.current && !abort.signal.aborted,
+    };
+  }
   useEffect(() => {
     if (archive) dialog.current?.showModal();
   }, [archive]);
@@ -54,26 +84,29 @@ export default function ProjectArchives({
     trigger.current?.focus();
   }
   async function download() {
+    if (!mayExport || disabled || busy) return;
+    const { signal, current } = operation();
     setBusy(true);
     try {
       const result = await api<{ downloadUrl: string; fileName: string }>(
         `/projects/${projectId}/archives`,
-        { method: "POST", body: { workspace } },
+        { method: "POST", body: { workspace }, signal },
       );
-      if (!mounted.current) return;
+      if (!current()) return;
       const link = document.createElement("a");
       link.href = result.downloadUrl;
       link.download = result.fileName;
       link.click();
     } catch (e) {
-      if (mounted.current)
+      if (current())
         onError(e instanceof Error ? e.message : "Не удалось создать архив");
     } finally {
-      if (mounted.current) setBusy(false);
+      if (current()) setBusy(false);
     }
   }
   async function read(file?: File) {
-    if (!file) return;
+    if (!file || !mayCreate || disabled || busy) return;
+    const { current } = operation();
     setBusy(true);
     try {
       if (file.size > 32 * 1024 * 1024)
@@ -86,7 +119,7 @@ export default function ProjectArchives({
         value.format !== format
       )
         throw new Error("Выберите архив Java Blueprints (.jbp.json)");
-      if (mounted.current) {
+      if (current()) {
         pending.current = {
           createKey: crypto.randomUUID(),
           importKey: crypto.randomUUID(),
@@ -96,20 +129,27 @@ export default function ProjectArchives({
         setName("Проект из архива");
       }
     } catch (e) {
-      if (mounted.current)
+      if (current())
         onError(e instanceof Error ? e.message : "Не удалось прочитать архив");
     } finally {
-      if (mounted.current) setBusy(false);
-      if (picker.current) picker.current.value = "";
+      if (current()) {
+        setBusy(false);
+        if (picker.current) picker.current.value = "";
+      }
     }
   }
   async function restore() {
-    if (!archive || !name.trim() || busy) return;
+    if (!mayCreate || !archive || !name.trim() || busy) return;
+    const { signal, current } = operation();
     setBusy(true);
     setError("");
     try {
-      await api("/archive-previews", { method: "POST", body: { archive } });
-      if (!mounted.current) return;
+      await api("/archive-previews", {
+        method: "POST",
+        body: { archive },
+        signal,
+      });
+      if (!current()) return;
       const request = pending.current;
       if (!request.projectId) {
         request.createName ??= name.trim();
@@ -117,25 +157,28 @@ export default function ProjectArchives({
           method: "POST",
           body: { name: request.createName },
           key: request.createKey,
+          signal,
         });
         request.projectId = project.id;
       }
-      if (!mounted.current) return;
+      if (!current()) return;
       await api(`/projects/${request.projectId}/archive-imports`, {
         method: "POST",
         head: null,
         body: { archive },
         key: request.importKey,
+        signal,
       });
-      if (!mounted.current) return;
+      if (!current()) return;
       const state = (
         archive.payload as { workspace?: typeof workspace } | undefined
       )?.workspace;
-      if (state && validateLayout(state.layout))
+      const restoredLayout = state && migrateLayout(state.layout);
+      if (restoredLayout)
         try {
           localStorage.setItem(
             layoutKey(request.projectId),
-            JSON.stringify(state.layout),
+            JSON.stringify(restoredLayout),
           );
           localStorage.setItem(
             "java-blueprints:window-state:" + request.projectId,
@@ -152,25 +195,25 @@ export default function ProjectArchives({
         } catch {
           /* Browser storage may be unavailable; imported source remains valid. */
         }
-      if (mounted.current) {
+      if (current()) {
         dialog.current?.close();
         setArchive(null);
         onRestored(request.projectId);
       }
     } catch (e) {
-      if (mounted.current)
+      if (current())
         setError(
           e instanceof Error ? e.message : "Не удалось восстановить архив",
         );
     } finally {
-      if (mounted.current) setBusy(false);
+      if (current()) setBusy(false);
     }
   }
   return (
     <>
       <button
         type="button"
-        disabled={disabled || busy}
+        disabled={disabled || busy || !mayExport}
         onClick={() => void download()}
       >
         Скачать архив проекта
@@ -178,7 +221,7 @@ export default function ProjectArchives({
       <button
         type="button"
         ref={trigger}
-        disabled={disabled || busy}
+        disabled={disabled || busy || !mayCreate}
         onClick={() => picker.current?.click()}
       >
         Открыть архив проекта…
@@ -244,7 +287,7 @@ export default function ProjectArchives({
                 <button
                   type="submit"
                   className="primary"
-                  disabled={busy || !name.trim()}
+                  disabled={busy || !mayCreate || !name.trim()}
                 >
                   {busy ? "Открываем…" : "Открыть в новом проекте"}
                 </button>

@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import {
   expect,
@@ -99,7 +100,7 @@ async function analysis(
         );
         if (!response.ok()) return false;
         result = (await response.json()).data;
-        return result?.analyzerVersion === "engine-0.13.0";
+        return result?.analyzerVersion === "engine-0.13.1";
       },
       { timeout: 30000 },
     )
@@ -294,13 +295,20 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
   await layoutSaved;
   expect(semanticRequests).toEqual([]);
   expect((await head(page.request, base)).id).toBe(original.id);
-  await page
-    .getByLabel("Действие", { exact: true })
-    .selectOption("move_statement");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    "move_statement",
+  );
   const a = await analysis(page.request, base, original.id);
   const target = find(a, 'mark("B");');
-  await page.getByLabel("Относительно оператора").selectOption(target.id);
-  await page.getByLabel("Позиция перемещения").selectOption("after");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Относительно оператора" }),
+    target.id,
+  );
+  await chooseOption(
+    page.getByRole("combobox", { name: "Позиция перемещения" }),
+    "after",
+  );
   await page
     .getByRole("button", { name: "Подготовить изменение" })
     .scrollIntoViewIfNeeded();
@@ -319,7 +327,9 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
   await page
     .getByRole("button", { name: "Подготовить изменение" })
     .scrollIntoViewIfNeeded();
-  await expect(page.getByLabel("Относительно оператора")).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Относительно оператора" }),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -344,9 +354,10 @@ test("explicit move, loop wrap and else actions preserve full tree and show deta
         await panToNode(page, page.locator(".blueprint-node.IfStmt"));
         await page.locator(".blueprint-node.IfStmt").click();
       }
-      await page
-        .getByLabel("Действие", { exact: true })
-        .selectOption(action.operation);
+      await chooseOption(
+        page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+        action.operation,
+      );
       if (action.operation === "wrap_while")
         await page.getByLabel("Условие", { exact: true }).fill("count++ < 2");
       if (action.operation === "add_else")

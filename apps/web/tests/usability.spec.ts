@@ -104,7 +104,7 @@ test("inline create, complete clipboard paste, filename repair and latest file g
   await page.getByRole("button", { name: "Создать файл", exact: true }).click();
   await page.getByLabel("Путь нового файла", { exact: true }).fill("notes.py");
   await expect(page.locator(".inline-file-icon")).toContainText("Py");
-  await page.getByLabel("Поиск файлов и методов").click();
+  await page.getByRole("combobox", { name: "Поиск по проекту" }).click();
   await expect(page.locator('[data-file-path="notes.py"]')).toBeVisible();
   await page.getByRole("button", { name: "Создать файл", exact: true }).click();
   await page
@@ -203,9 +203,9 @@ test("drag inserts a real statement and double click edits Java through compiled
     .locator(".palette-statement")
     .dragTo(node, { targetPosition: { x: 80, y: 60 } });
   await expect(page.getByLabel("Java оператор", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Позиция", { exact: true })).toHaveValue(
-    "after",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Позиция", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "after");
   await page
     .getByLabel("Java оператор", { exact: true })
     .fill('System.out.println("Готово");');
@@ -267,9 +267,9 @@ test("a condition diamond opens its whole condition and accepts a real insertion
   await page
     .locator(".palette-statement")
     .dragTo(diamond, { targetPosition: { x: 80, y: 12 } });
-  await expect(page.getByLabel("Позиция", { exact: true })).toHaveValue(
-    "before",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Позиция", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "before");
   await page
     .getByLabel("Java оператор", { exact: true })
     .fill('System.out.println("before condition");');

@@ -32,7 +32,7 @@ async function fixture(page: Page) {
 }
 async function open(page: Page, id: string) {
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   await revealPanel(page, "project", "Проект");

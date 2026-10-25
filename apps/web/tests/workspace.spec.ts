@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { test, expect, type Page } from "@playwright/test";
 import { panToNode } from "./flowAssertions";
 const key = (id: string) => "java-blueprints:workspace:v2:" + id;
@@ -7,7 +8,7 @@ async function create(page: Page) {
   await page.goto("/");
   await page.getByLabel("Название проекта").fill("Workspace " + Date.now());
   await page.getByRole("button", { name: "Начать с примера" }).click();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   await expect(
@@ -117,7 +118,7 @@ test("all four edge docks and keyboard move preserve every panel slot", async ({
       { k: key(id), l: initial },
     );
     await page.reload();
-    await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+    await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
     await page.waitForTimeout(300);
     await drag(page, "code", "graph", edge);
     expect(await stored(page, id)).not.toEqual(initial);
@@ -141,10 +142,16 @@ test("all four edge docks and keyboard move preserve every panel slot", async ({
   await handle.focus();
   await page.keyboard.press("Enter");
   const popup = page.locator(".workspace-move-menu[open]");
-  await popup
-    .getByLabel("Панель назначения")
-    .selectOption({ label: "Консоль" });
-  await popup.getByLabel("Способ перемещения").selectOption("tabs");
+  await chooseOption(
+    popup.getByRole("combobox", { name: "Панель назначения" }),
+    {
+      label: "Консоль",
+    },
+  );
+  await chooseOption(
+    popup.getByRole("combobox", { name: "Способ перемещения" }),
+    "tabs",
+  );
   await popup.getByRole("button", { name: "Переместить", exact: true }).click();
   const l = await stored(page, id);
   expect(JSON.stringify(l)).toContain("code");
@@ -222,7 +229,7 @@ test("project isolation, corrupt storage recovery, narrow mode and reduced motio
   const second = await create(page);
   expect(await stored(page, second)).toEqual(initial);
   await page.goto("/projects/" + first);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   expect(await stored(page, first)).toEqual(hidden);
   await page.emulateMedia({ reducedMotion: "reduce" });
   expect(
@@ -232,10 +239,10 @@ test("project isolation, corrupt storage recovery, narrow mode and reduced motio
       .evaluate((el) => getComputedStyle(el).transitionDuration),
   ).toBe("0s");
   await page.setViewportSize({ width: 390, height: 844 });
-  const chooser = page.getByLabel("Открытая панель");
+  const chooser = page.getByRole("combobox", { name: "Открытая панель" });
   await expect(chooser).toBeVisible();
   for (const panel of ["code", "analysis", "console", "graph"]) {
-    await chooser.selectOption(panel);
+    await chooseOption(chooser, panel);
     await expect(page.locator(`[data-panel-id="${panel}"]`)).toBeVisible();
   }
   await page.screenshot({ path: test.info().outputPath("glass-narrow.png") });
@@ -243,6 +250,6 @@ test("project isolation, corrupt storage recovery, narrow mode and reduced motio
   expect((await stored(page, first)).root).toEqual(hidden.root);
   await page.evaluate((k) => localStorage.setItem(k, "{invalid"), key(first));
   await page.reload();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   expect(await stored(page, first)).toEqual(initial);
 });

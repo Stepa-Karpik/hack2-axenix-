@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import {
   test,
   expect,
@@ -38,7 +39,7 @@ async function fixture(page: Page, text = source) {
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const analysis = (
@@ -70,17 +71,20 @@ test("static method moves into a separate class with retained callers and mandat
     .locator(".method-item")
     .filter({ hasText: /^sumEven\(/ })
     .click();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await page.locator(".blueprint-node.entry").click();
   await revealPanel(page, "analysis", "Анализ");
-  await page
-    .getByLabel("Действие", { exact: true })
-    .selectOption("decompose_class");
-  await page.getByLabel("Имя нового класса").fill("EvenTotals");
-  await expect(page.getByLabel("Цель изменения")).toHaveValue(
-    "preserve_behavior",
+  await chooseOption(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    "decompose_class",
   );
-  await expect(page.getByLabel("Цель изменения")).toBeDisabled();
+  await page.getByLabel("Имя нового класса").fill("EvenTotals");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toHaveAttribute("data-value", "preserve_behavior");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toBeDisabled();
   const prepared = page.waitForResponse(
     (r) => r.url().endsWith("/changes") && r.request().method() === "POST",
   );
@@ -150,19 +154,17 @@ test("static method moves into a separate class with retained callers and mandat
     .click();
   const inputs = [-3, 0, 1, 2, 6, 7, 10],
     outputs = [0, 0, 0, 2, 12, 12, 30];
-  await page
-    .getByLabel("Входные данные · JSON cases")
-    .fill(
-      JSON.stringify(
-        inputs.map((value, index) => ({
-          id: "even-" + index,
-          argv: [String(value)],
-          stdinUtf8: "",
-          expectedExitCode: 0,
-          expectedStdout: outputs[index] + "\n",
-        })),
-      ),
-    );
+  await page.getByLabel("Входные данные · JSON cases").fill(
+    JSON.stringify(
+      inputs.map((value, index) => ({
+        id: "even-" + index,
+        argv: [String(value)],
+        stdinUtf8: "",
+        expectedExitCode: 0,
+        expectedStdout: outputs[index] + "\n",
+      })),
+    ),
+  );
   const comparisonResponse = page.waitForResponse(
     (r) => r.url().endsWith("/comparisons") && r.request().method() === "POST",
   );
@@ -259,9 +261,10 @@ test("state-dependent method reports an explicit refusal and preserves source he
     .click();
   await page.locator(".blueprint-node.entry").click();
   await revealPanel(page, "analysis", "Анализ");
-  await page
-    .getByLabel("Действие", { exact: true })
-    .selectOption("decompose_class");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    "decompose_class",
+  );
   await page.getByLabel("Имя нового класса").fill("EvenTotals");
   const prepared = page.waitForResponse(
     (r) => r.url().endsWith("/changes") && r.request().method() === "POST",

@@ -209,7 +209,7 @@ test("bounded large HTML-like output remains literal and console details and pro
   await literalOnly(page);
   await f.panel.locator(".run-input > summary").click();
   await expect(f.panel.getByLabel("Стандартный ввод отчёта")).toBeVisible();
-  await page.locator(".global-command-menu > summary").click();
+  if ((await page.locator(".global-command-menu").getAttribute("open")) === null) await page.locator(".global-command-menu > summary").click();
   await page
     .locator(".workspace-menubar summary")
     .filter({ hasText: /^Файл$/ })

@@ -1,3 +1,4 @@
+import { diagnosticText } from "./diagnostics";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, Info } from "lucide-react";
 import type { Analysis, SourceRange } from "./types";
@@ -12,6 +13,7 @@ type Tab = (typeof tabs)[number][0];
 
 export default function CodeInsights({
   analysis,
+  sourceText,
   methodId,
   file,
   focusKey,
@@ -22,6 +24,7 @@ export default function CodeInsights({
   optimizationEnabled,
 }: {
   analysis: Analysis | null;
+  sourceText?: string;
   methodId: string;
   file: string;
   focusKey: number;
@@ -125,26 +128,32 @@ export default function CodeInsights({
             </p>
           ) : (
             diagnostics.map((d) => (
-              <button
-                className="diagnostic"
-                key={d.id}
-                disabled={!current || !d.sourceRange}
-                onClick={() => d.sourceRange && onNavigate(d.sourceRange)}
-              >
-                <span className="diagnostic-symbol">
-                  {d.severity === "error" ? "!" : "△"}
-                </span>
-                <span>
-                  {d.code === "UNSUPPORTED_CONTROL_FLOW"
-                    ? "Для этого метода пока недоступны точная схема потока и правки блоками. Код сохранён."
-                    : d.message}
-                </span>
-                <code>
-                  {d.sourceRange
-                    ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
-                    : d.code}
-                </code>
-              </button>
+              <div className="diagnostic-item" key={d.id}>
+                <button
+                  className="diagnostic"
+                  key={d.id}
+                  disabled={!current || !d.sourceRange}
+                  onClick={() =>
+                    current && d.sourceRange && onNavigate(d.sourceRange)
+                  }
+                >
+                  <span className="diagnostic-symbol">
+                    {d.severity === "error" ? "!" : "△"}
+                  </span>
+                  <span>{diagnosticText(d, sourceText)}</span>
+                  <code>
+                    {d.sourceRange
+                      ? `${d.sourceRange.filePath}:${d.sourceRange.startLine}`
+                      : d.code}
+                  </code>
+                </button>
+                {diagnosticText(d, sourceText) !== d.message && (
+                  <details className="diagnostic-details">
+                    <summary>Технические подробности</summary>
+                    <pre>{d.message}</pre>
+                  </details>
+                )}
+              </div>
             ))
           )}
         </div>

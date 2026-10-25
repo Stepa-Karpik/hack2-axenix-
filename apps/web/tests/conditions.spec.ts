@@ -36,7 +36,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
     mimeType: "text/x-java-source",
     buffer: Buffer.from(source),
   });
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
@@ -47,7 +47,7 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
   for (const name of ["andTest", "orTest", "mixedTest", "loopTest"]) {
     await page
       .locator(".method-item")
@@ -89,7 +89,9 @@ test("real short-circuit graph atoms, branches, whole-condition edit and scoped 
     await expect(page.locator(".inspector-selection")).toContainText(
       "Проверка",
     );
-    await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    ).toHaveCount(0);
     await expect(
       page.locator(".monaco-editor .code-binding").first(),
     ).toBeVisible();

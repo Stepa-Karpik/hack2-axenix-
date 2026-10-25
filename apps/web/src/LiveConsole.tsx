@@ -6,11 +6,13 @@ export default function LiveConsole({
   projectId,
   jobId,
   live,
+  status = "running",
   readOnly = false,
 }: {
   projectId: string;
   jobId: string;
   live?: LiveRun | null;
+  status?: string;
   readOnly?: boolean;
 }) {
   const [text, setText] = useState("");
@@ -73,12 +75,19 @@ export default function LiveConsole({
       <div className="live-console-status">
         <span>
           {!live
-            ? "Ожидание запуска…"
+            ? status === "queued"
+              ? "В очереди запуска…"
+              : "Подготовка изолированной среды…"
             : live.phase === "runtime"
               ? "Программа работает"
               : "Компиляция…"}
         </span>
-        <span>{Math.round((live?.elapsedMs ?? 0) / 1000)} с · лимит 120 с</span>
+        <span>
+          {live
+            ? Math.round(live.elapsedMs / 1000) +
+              " с · лимит 120 с · вывод ≤ 1 МиБ"
+            : "Ожидаем состояние runner"}
+        </span>
       </div>
       <pre
         ref={output}

@@ -1,3 +1,4 @@
+import { diagnosticText } from "./diagnostics";
 import { useEffect, useRef } from "react";
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
@@ -147,7 +148,7 @@ export default function CodeEditor({
               d.code !== "UNSUPPORTED_CONTROL_FLOW",
           )
           .map((d) => ({
-            message: d.message,
+            message: diagnosticText(d, value),
             severity:
               d.severity === "error"
                 ? monaco.MarkerSeverity.Error

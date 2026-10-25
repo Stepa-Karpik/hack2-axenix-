@@ -2,6 +2,136 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  planFlowRoutes,
+  BRANCH_BADGE,
+  validOverviewPositions,
+} from "./flowRouting.ts";
+
+const crossesInterior = (a, b, r) =>
+  a.x === b.x
+    ? a.x > r.x + 0.5 &&
+      a.x < r.x + r.width - 0.5 &&
+      Math.max(a.y, b.y) > r.y + 0.5 &&
+      Math.min(a.y, b.y) < r.y + r.height - 0.5
+    : a.y === b.y &&
+      a.y > r.y + 0.5 &&
+      a.y < r.y + r.height - 0.5 &&
+      Math.max(a.x, b.x) > r.x + 0.5 &&
+      Math.min(a.x, b.x) < r.x + r.width - 0.5;
+test("manual screenshot geometry stays fixed while short routes keep real endpoints and avoid bodies", () => {
+  const boxes = [
+    { id: "entry", x: 900, y: 20, width: 264, height: 84 },
+    { id: "first", x: 40, y: 260, width: 264, height: 84 },
+    { id: "second", x: 350, y: -80, width: 264, height: 84 },
+    { id: "exit", x: 40, y: 530, width: 264, height: 84 },
+  ];
+  const edges = [
+    { id: "a", source: "entry", target: "first", kind: "normal" },
+    { id: "b", source: "first", target: "second", kind: "normal" },
+    { id: "c", source: "second", target: "exit", kind: "normal" },
+  ];
+  const frozen = JSON.stringify({ boxes, edges }),
+    result = planFlowRoutes(boxes, edges);
+  assert.equal(result.routes.size, 3);
+  for (const edge of edges) {
+    const route = result.routes.get(edge.id);
+    assert.equal(route.complete, true);
+    const source = boxes.find((b) => b.id === edge.source),
+      target = boxes.find((b) => b.id === edge.target);
+    const start = route.points[0],
+      end = route.points.at(-1);
+    assert.ok(
+      start.x >= source.x &&
+        start.x <= source.x + source.width &&
+        start.y >= source.y &&
+        start.y <= source.y + source.height,
+    );
+    assert.ok(
+      end.x >= target.x &&
+        end.x <= target.x + target.width &&
+        end.y >= target.y &&
+        end.y <= target.y + target.height,
+    );
+    route.points
+      .slice(1)
+      .forEach((p, i) =>
+        result.obstacles.forEach((r) =>
+          assert.equal(crossesInterior(route.points[i], p, r), false),
+        ),
+      );
+    assert.ok(route.points.every((p) => p.x >= -60 && p.x <= 1260));
+  }
+  assert.equal(JSON.stringify({ boxes, edges }), frozen);
+});
+test("branch badges are legible and the jointly rendered routes clear their full reserved rectangles", () => {
+  const boxes = [
+    { id: "check", x: 0, y: 0, width: 264, height: 84 },
+    { id: "yes", x: -170, y: 170, width: 264, height: 84 },
+    { id: "no", x: 180, y: 170, width: 264, height: 84 },
+  ];
+  const edges = [
+    { id: "yesEdge", source: "check", target: "yes", kind: "true" },
+    { id: "noEdge", source: "check", target: "no", kind: "false" },
+  ];
+  const result = planFlowRoutes(boxes, edges);
+  assert.deepEqual(BRANCH_BADGE, { width: 44, height: 26 });
+  for (const edge of edges) {
+    const route = result.routes.get(edge.id);
+    assert.equal(route.complete, true);
+    assert.ok(route.label);
+    assert.equal(route.label.width, 44);
+    assert.equal(route.label.height, 26);
+    assert.ok(edge.kind === "true" ? route.label.x < 0 : route.label.x > 264);
+    route.points
+      .slice(1)
+      .forEach((p, i) =>
+        result.obstacles.forEach((r) =>
+          assert.equal(crossesInterior(route.points[i], p, r), false),
+        ),
+      );
+  }
+  assert.notDeepEqual(
+    result.routes.get("yesEdge").points[1],
+    result.routes.get("noEdge").points[1],
+  );
+});
+test("blocked manual stem reports a limited route without relocating the source", () => {
+  const boxes = [
+    { id: "a", x: 0, y: 0, width: 264, height: 84 },
+    { id: "b", x: 0, y: 150, width: 264, height: 84 },
+    { id: "blocked", x: -20, y: 70, width: 310, height: 70 },
+  ];
+  const result = planFlowRoutes(boxes, [
+    { id: "edge", source: "a", target: "b", kind: "normal" },
+  ]);
+  assert.equal(result.routes.get("edge").complete, false);
+  assert.deepEqual(result.routes.get("edge").points[0], { x: 132, y: 84 });
+});
+test("overview snapshot requires all exact real bindings and finite unique final positions", () => {
+  const binding = new Map([
+    ["a", "one"],
+    ["b", "two"],
+    ["c", "two"],
+  ]);
+  const positions = [
+    { nodeId: "a", methodId: "one", x: 10, y: 20 },
+    { nodeId: "b", methodId: "two", x: 30, y: 40 },
+    { nodeId: "c", methodId: "two", x: 50, y: 60 },
+  ];
+  assert.equal(validOverviewPositions(positions, binding), true);
+  for (const bad of [
+    positions.slice(1),
+    [positions[0], positions[0], positions[2]],
+    positions.map((p) => ({ ...p, methodId: "wrong" })),
+    positions.map((p) => ({ ...p, x: NaN })),
+    positions.map((p) => ({ ...p, nodeId: p.nodeId + "old" })),
+  ])
+    assert.equal(validOverviewPositions(bad, binding), false);
+  const moved = positions.map((p) => ({ ...p, x: p.x + 17, y: p.y - 9 }));
+  assert.equal(validOverviewPositions(moved, binding), true);
+  assert.equal(moved[1].x - moved[0].x, positions[1].x - positions[0].x);
+});
+import {
   loopAreas,
   routeFlowEdges,
   routeOrthogonal,
@@ -621,4 +751,264 @@ test("new automatic rows avoid retained manual nodes without moving the manual l
           Math.abs(boxes[i].y - other.y) >= 84,
       );
   assert.equal(JSON.stringify([...automatic]), snapshot);
+});
+
+// Disposable insertion scenes retain actual IDs/source bindings and immutable bases.
+import { previewScene, baseNodeAt } from "./flowPreview.ts";
+function previewFixture() {
+  const sourceNodes = [
+    {
+      id: "entry",
+      methodId: "m",
+      kind: "entry",
+      parentId: null,
+      allowedOperations: ["insert_statement"],
+      insertionPositions: ["body_start", "body_end"],
+    },
+    {
+      id: "one",
+      methodId: "m",
+      kind: "ExpressionStmt",
+      parentId: "entry",
+      sourceRange: { startOffset: 10, endOffset: 20 },
+      allowedOperations: ["insert_statement"],
+      insertionPositions: ["before", "after"],
+    },
+    {
+      id: "two",
+      methodId: "m",
+      kind: "ExpressionStmt",
+      parentId: "entry",
+      sourceRange: { startOffset: 21, endOffset: 30 },
+    },
+    { id: "exit", methodId: "m", kind: "normal_exit", parentId: null },
+    { id: "foreign", methodId: "other", kind: "entry", parentId: null },
+  ].map((n) => ({ ...n, revisionId: "r", analysisId: "a" }));
+  const nodes = sourceNodes.map((n, i) => ({
+    id: n.id,
+    position: { x: i === 4 ? 900 : 40, y: i * 160 },
+    data: { binding: n.id },
+  }));
+  return {
+    nodes,
+    graph: {
+      nodes: sourceNodes,
+      revisionId: "r",
+      analysisId: "a",
+      edges: [
+        { id: "e1", source: "entry", target: "one" },
+        { id: "e2", source: "one", target: "two" },
+        { id: "e3", source: "two", target: "exit" },
+      ],
+    },
+  };
+}
+test("preview inserts a display gap in one real method without changing input positions, IDs or source graph", () => {
+  const f = previewFixture(),
+    before = JSON.stringify(f);
+  const result = previewScene(f.nodes, f.graph, {
+    kind: "condition",
+    anchorNodeId: "one",
+    position: "before",
+  });
+  assert.ok(result);
+  assert.deepEqual(
+    result.nodes.map((n) => n.id),
+    f.nodes.map((n) => n.id),
+  );
+  assert.ok(
+    result.nodes.find((n) => n.id === "one").position.y > f.nodes[1].position.y,
+  );
+  assert.deepEqual(
+    result.nodes.find((n) => n.id === "entry"),
+    f.nodes[0],
+  );
+  assert.deepEqual(
+    result.nodes.find((n) => n.id === "foreign"),
+    f.nodes[4],
+  );
+  assert.ok(result.connectors.length === 2);
+  assert.equal(JSON.stringify(f), before);
+  assert.equal(previewScene(f.nodes, f.graph, null), null);
+  assert.deepEqual(f.nodes[1].position, { x: 40, y: 160 });
+});
+test("preview resolves before/after and entry body slots while cancellation, invalid scope and unavailable edits return the base", () => {
+  const f = previewFixture();
+  for (const position of ["before", "after"]) {
+    const s = previewScene(f.nodes, f.graph, {
+      kind: "statement",
+      anchorNodeId: "one",
+      position,
+    });
+    assert.ok(s);
+    assert.equal(s.shiftedIds.has("one"), position === "before");
+    assert.equal(s.shiftedIds.has("two"), true);
+  }
+  for (const position of ["body_start", "body_end"]) {
+    const s = previewScene(f.nodes, f.graph, {
+      kind: "loop",
+      anchorNodeId: "entry",
+      position,
+    });
+    assert.ok(s);
+    assert.equal(s.shiftedIds.has("one"), position === "body_start");
+    assert.equal(s.shiftedIds.has("exit"), true);
+  }
+  const request = {
+    kind: "statement",
+    anchorNodeId: "one",
+    position: "before",
+  };
+  assert.equal(previewScene(f.nodes, f.graph, request, true), null);
+  assert.equal(
+    previewScene(f.nodes, { ...f.graph, analysisId: "new" }, request),
+    null,
+  );
+  assert.equal(
+    previewScene(f.nodes, { ...f.graph, revisionId: "new" }, request),
+    null,
+  );
+  assert.equal(
+    previewScene(
+      f.nodes.filter((n) => n.id === "foreign"),
+      f.graph,
+      request,
+    ),
+    null,
+  );
+  assert.equal(
+    previewScene(f.nodes, f.graph, { ...request, position: "body_start" }),
+    null,
+  );
+  assert.equal(
+    previewScene(f.nodes, f.graph, { ...request, anchorNodeId: "two" }),
+    null,
+  );
+});
+test("hover hit testing remains on the immutable original node while its provisional DOM is displaced", () => {
+  const f = previewFixture(),
+    point = { x: 80, y: 180 };
+  for (let i = 0; i < 5; i++) {
+    assert.equal(baseNodeAt(f.nodes, point).id, "one");
+    const display = previewScene(f.nodes, f.graph, {
+      kind: "condition",
+      anchorNodeId: baseNodeAt(f.nodes, point).id,
+      position: "before",
+    });
+    assert.equal(baseNodeAt(display.nodes, point), undefined);
+  }
+});
+
+test("preview omits ambiguous external branch connectors instead of attaching a nearby sibling", () => {
+  const f = previewFixture();
+  f.graph.nodes.push({ ...f.graph.nodes[1], id: "sibling", parentId: "entry" });
+  f.nodes.push({
+    id: "sibling",
+    position: { x: 500, y: 250 },
+    data: { binding: "sibling" },
+  });
+  f.graph.edges.push({ id: "ambiguous", source: "sibling", target: "one" });
+  const frozen = JSON.stringify(f.graph.edges);
+  const before = previewScene(f.nodes, f.graph, {
+    kind: "condition",
+    anchorNodeId: "one",
+    position: "before",
+  });
+  assert.ok(before);
+  assert.deepEqual(before.connectors, []);
+  f.graph.edges.push({ id: "branch", source: "one", target: "sibling" });
+  const after = previewScene(f.nodes, f.graph, {
+    kind: "condition",
+    anchorNodeId: "one",
+    position: "after",
+  });
+  assert.ok(after);
+  assert.deepEqual(after.connectors, []);
+  assert.equal(frozen, JSON.stringify(f.graph.edges.slice(0, -1)));
+});
+
+import { previewFingerprint, dismissedPreviewKeys } from "./flowPreview.ts";
+test("Escape dismisses both hover and existing draft until that draft or binding scope changes", () => {
+  const hover = { kind: "condition", anchorNodeId: "one", position: "before" };
+  const draft = {
+    kind: "loop",
+    anchorNodeId: "one",
+    position: "after",
+    source: "while (true) {}",
+  };
+  const keys = dismissedPreviewKeys("r/a/m", hover, draft);
+  assert.ok(keys.includes(previewFingerprint("r/a/m", hover)));
+  assert.ok(keys.includes(previewFingerprint("r/a/m", draft)));
+  assert.equal(
+    keys.includes(
+      previewFingerprint("r/a/m", { ...draft, source: "while (false) {}" }),
+    ),
+    false,
+  );
+  assert.equal(keys.includes(previewFingerprint("r/new/m", draft)), false);
+  assert.equal(
+    keys.includes(previewFingerprint("r/a/m", { ...draft, request: 2 })),
+    false,
+  );
+});
+
+test("overview preview shifts intersecting whole method groups and cascades rows without mutating two-file manual bases", () => {
+  const f = previewFixture();
+  // A foreign method below the active method, then another lower row.
+  f.nodes[4].position = { x: 40, y: 650 };
+  f.graph.nodes.push({
+    ...f.graph.nodes[4],
+    id: "foreign2",
+    methodId: "third",
+    sourceRange: { filePath: "Third.java" },
+  });
+  f.nodes.push({
+    id: "foreign2",
+    position: { x: 40, y: 900 },
+    data: { binding: "foreign2" },
+  });
+  f.graph.nodes[1].sourceRange.filePath = "Main.java";
+  f.graph.nodes[4].sourceRange = { filePath: "Helper.java" };
+  const frozen = JSON.stringify(f);
+  const scene = previewScene(f.nodes, f.graph, {
+    kind: "condition",
+    anchorNodeId: "one",
+    position: "before",
+  });
+  assert.ok(scene);
+  const exit = scene.nodes.find((n) => n.id === "exit"),
+    foreign = scene.nodes.find((n) => n.id === "foreign"),
+    last = scene.nodes.find((n) => n.id === "foreign2");
+  assert.ok(foreign.position.y > f.nodes[4].position.y);
+  assert.ok(last.position.y > f.nodes[5].position.y);
+  assert.ok(foreign.position.y - 24 >= exit.position.y + 84 + 24 + 80);
+  assert.ok(last.position.y - 24 >= foreign.position.y + 84 + 24 + 80);
+  assert.equal(JSON.stringify(f), frozen);
+  assert.equal(previewScene(f.nodes, f.graph, null), null);
+});
+
+import { previewHitSnapshot } from "./flowPreview.ts";
+test("native hover snapshots the already displaced draft card and keeps its hit box stable through subsequent template reflow", () => {
+  const f = previewFixture(),
+    frozen = JSON.stringify(f);
+  const draft = previewScene(f.nodes, f.graph, {
+    kind: "loop",
+    anchorNodeId: "one",
+    position: "before",
+  });
+  const hit = previewHitSnapshot(draft.nodes),
+    card = hit.find((n) => n.id === "one"),
+    point = { x: card.position.x + 20, y: card.position.y + 20 };
+  assert.equal(baseNodeAt(hit, point).id, "one");
+  assert.notEqual(baseNodeAt(f.nodes, point)?.id, "one");
+  for (const kind of ["condition", "statement", "loop"]) {
+    previewScene(f.nodes, f.graph, {
+      kind,
+      anchorNodeId: baseNodeAt(hit, point).id,
+      position: "before",
+    });
+    assert.equal(baseNodeAt(hit, point).id, "one");
+  }
+  assert.equal(JSON.stringify(f), frozen);
+  assert.notEqual(hit[1].position, draft.nodes[1].position);
 });

@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import {
   test,
   expect,
@@ -34,7 +35,7 @@ async function fixture(page: Page, text = source) {
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const analysis = (
@@ -81,14 +82,17 @@ test("local rename changes only exact references and applies after independent o
   await panToNode(page, node);
   await node.click();
   await revealPanel(page, "analysis", "Анализ");
-  await page
-    .getByLabel("Действие", { exact: true })
-    .selectOption("rename_local");
-  await page.getByLabel("Новое имя переменной").fill("doubled");
-  await expect(page.getByLabel("Цель изменения")).toHaveValue(
-    "preserve_behavior",
+  await chooseOption(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    "rename_local",
   );
-  await expect(page.getByLabel("Цель изменения")).toBeDisabled();
+  await page.getByLabel("Новое имя переменной").fill("doubled");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toHaveAttribute("data-value", "preserve_behavior");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toBeDisabled();
   const prepared = page.waitForResponse(
     (r) => r.url().endsWith("/changes") && r.request().method() === "POST",
   );

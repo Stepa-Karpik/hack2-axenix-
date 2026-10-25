@@ -10,9 +10,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class LocalSecurity implements Filter {
   private final Set<String> origins;
+  private final HostingAccess hosting;
 
-  public LocalSecurity(@Value("${jb.origins}") String values) {
+  public LocalSecurity(@Value("${jb.origins}") String values, HostingAccess hosting) {
     origins = Set.of(values.split(","));
+    this.hosting = hosting;
   }
 
   public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
@@ -23,12 +25,12 @@ public class LocalSecurity implements Filter {
     s.setHeader("Cache-Control", "no-store");
     s.setHeader("X-Frame-Options", "DENY");
     String host = r.getServerName();
-    if (!Set.of("localhost", "127.0.0.1", "[::1]", "::1").contains(host)) {
+    if (!hosting.allowsHost(host)) {
       deny(s, 403, "FORBIDDEN");
       return;
     }
     String origin = r.getHeader("Origin");
-    if (origin != null && !origins.contains(origin)) {
+    if (origin != null && !hosting.allowsOrigin(origin, origins)) {
       deny(s, 403, "FORBIDDEN");
       return;
     }
@@ -55,7 +57,7 @@ public class LocalSecurity implements Filter {
         .write(
             "{\"error\":{\"code\":\""
                 + code
-                + "\",\"message\":\"Local access check"
+                + "\",\"message\":\"Access check"
                 + " failed\",\"details\":[]},\"meta\":{\"requestId\":\""
                 + UUID.randomUUID()
                 + "\"}}");

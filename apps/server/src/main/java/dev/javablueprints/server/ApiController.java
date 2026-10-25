@@ -49,7 +49,7 @@ public class ApiController {
     return ok(
         map(
             "localMode",
-            true,
+            !accounts.hosting.hosted(),
             "javaRelease",
             21,
             "languageProfileId",
@@ -570,6 +570,42 @@ public class ApiController {
     return mutation(p + ":compare", key, b, 202, () -> w.enqueue(p, "compare", b));
   }
 
+  @PostMapping("/projects/{p}/runs/{j}/repeat")
+  Object repeat(@PathVariable String p, @PathVariable String j,
+      @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+    var previous = w.job(p, j);
+    if (Set.of("queued", "running").contains(previous.get("status")))
+      throw new ApiError(409, "JOB_ACTIVE", "Wait for the previous attempt to finish");
+    var input = w.decode(w.db.queryForObject(
+        "SELECT input::text FROM jobs WHERE project_id=? AND id=?", String.class, uuid(p), uuid(j)));
+    // Reuse immutable input, not the editor's current file/head or dialog defaults.
+    return switch (previous.get("type").toString()) {
+      case "run" -> run(p, key, input);
+      case "compare" -> compare(p, key, input);
+      default -> throw new ApiError(400, "INVALID_REQUEST", "Only runs and comparisons can be repeated");
+    };
+  }
+
+  @GetMapping("/projects/{p}/revisions/{r}/download")
+  Object sourceDownload(@PathVariable String p, @PathVariable String r, @RequestParam String path) {
+    TextTree.path(path);
+    var revision = w.revision(p, r);
+    Map<?, ?> source = ((List<?>) revision.get("files")).stream().map(v -> (Map<?, ?>) v)
+        .filter(v -> path.equals(v.get("path"))).findFirst().orElseThrow(Workspace::missing);
+    byte[] bytes = TextTree.utf8(source.get("canonicalText").toString());
+    if (source.get("rawArtifactRef") != null) {
+      var raw = w.db.queryForList("SELECT bytes FROM artifacts WHERE project_id=? AND id=?",
+          uuid(p), uuid(source.get("rawArtifactRef").toString()));
+      if (raw.isEmpty()) throw missing();
+      bytes = (byte[]) raw.getFirst().get("bytes");
+    }
+    String name = path.substring(path.lastIndexOf('/') + 1);
+    return ResponseEntity.ok()
+        .header("Content-Disposition", ContentDisposition.attachment().filename(name, StandardCharsets.UTF_8).build().toString())
+        .header("X-Content-Type-Options", "nosniff")
+        .contentType(MediaType.APPLICATION_OCTET_STREAM).body(bytes);
+  }
+
   @GetMapping({"/projects/{p}/jobs/{j}", "/projects/{p}/runs/{j}"})
   Object job(@PathVariable String p, @PathVariable String j) {
     var view=w.job(p,j);view.put("live",worker.live(p,j));view.put("progress",worker.comparisonProgress(p,j,view));return ok(view);
@@ -626,7 +662,8 @@ public class ApiController {
     if (rows.isEmpty()) throw missing();
     var row = rows.getFirst();
     return ResponseEntity.ok()
-        .header("Content-Disposition", "attachment; filename=\"artifact-" + a + "\"")
+        .header("Content-Disposition", "attachment; filename=\"artifact-" + a
+            + ("application/zip".equals(row.get("media_type")) ? ".zip" : "application/json".equals(row.get("media_type")) ? ".json" : ".txt") + "\"")
         .header("ETag", "\"" + row.get("sha256") + "\"")
         .contentType(MediaType.parseMediaType(row.get("media_type").toString()))
         .body((byte[]) row.get("bytes"));

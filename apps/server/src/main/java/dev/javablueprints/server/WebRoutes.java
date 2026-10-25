@@ -21,10 +21,17 @@ class WebRoutes {
         "/auth/reset-password",
         "/auth/verify-email",
         "/settings",
+        "/settings/profile",
+        "/settings/security",
+        "/settings/appearance",
+        "/settings/friends",
+        "/settings/integrations",
         "/account",
         "/friends",
         "/u/{username}",
-        "/profile/{username}"
+        "/u/{username}/friends",
+        "/profile/{username}",
+        "/profile/{username}/friends"
       },
       produces = MediaType.TEXT_HTML_VALUE)
   String application() {

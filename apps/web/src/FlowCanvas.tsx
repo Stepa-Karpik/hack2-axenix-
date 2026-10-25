@@ -10,6 +10,7 @@ import {
   applyNodeChanges,
   BaseEdge,
   EdgeLabelRenderer,
+  ViewportPortal,
 } from "@xyflow/react";
 import type {
   Node,
@@ -20,6 +21,19 @@ import type {
   ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./flowUX.css";
+import {
+  baseNodeAt,
+  previewScene,
+  previewFingerprint,
+  dismissedPreviewKeys,
+  previewHitSnapshot,
+} from "./flowPreview";
+import {
+  BRANCH_BADGE,
+  planFlowRoutes,
+  validOverviewPositions,
+} from "./flowRouting";
 import {
   Maximize2,
   Braces,
@@ -65,6 +79,7 @@ type FlowData = {
   visualKind?: ReturnType<typeof visualKind>;
   branch?: boolean;
   dropPosition?: string;
+  groupActive?: boolean;
 };
 const nodeIcons = {
   method: Braces,
@@ -79,12 +94,13 @@ const nodeIcons = {
   join: GitMerge,
   structure: Braces,
 };
-function BlueprintNode({ data }: NodeProps<Node<FlowData>>) {
+function BlueprintNode({ data, id }: NodeProps<Node<FlowData>>) {
   const Glyph = nodeIcons[data.visualKind ?? "operation"];
   return (
     <div
       data-insert-position={data.dropPosition}
       data-node-kind={data.kind}
+      data-node-id={id}
       data-visual-kind={data.visualKind}
       className={
         "blueprint-node " +
@@ -168,6 +184,23 @@ function LoopAreaNode({ data }: NodeProps<Node<FlowData>>) {
     </div>
   );
 }
+function MethodAreaNode({ data }: NodeProps<Node<FlowData>>) {
+  return (
+    <div
+      className={"graph-method-frame" + (data.groupActive ? " active" : "")}
+      data-method-frame={data.fullLabel}
+    >
+      <span>{data.label}</span>
+    </div>
+  );
+}
+export type FlowPreview = {
+  kind: "statement" | "condition" | "loop";
+  anchorNodeId: string;
+  position: "before" | "after" | "body_start" | "body_end";
+  source?: string;
+  request?: number;
+};
 export function kindName(kind: string) {
   return (
     (
@@ -265,11 +298,14 @@ function ShortcutEdge({
     departure?: number;
     arrival?: number;
     highlighted?: boolean;
+    provisional?: boolean;
+    plannedRoute?: { points: { x: number; y: number }[]; complete: boolean };
   }>
 >) {
   const routeX = data!.routeX;
   const route = useMemo(
     () =>
+      data?.plannedRoute ??
       routeOrthogonal(
         { x: sourceX, y: sourceY },
         { x: targetX, y: targetY },
@@ -321,8 +357,14 @@ function ShortcutEdge({
         data-route-source={source}
         data-route-highlighted={data?.highlighted || undefined}
         data-route-target={target}
+        data-provisional-route={data?.provisional || undefined}
         data-route-returning={data?.returning || undefined}
       >
+        {data?.provisional && (
+          <title>
+            Предварительное расположение; исходный поток ещё не изменён
+          </title>
+        )}
         {!route.complete && (
           <title>Маршрут ограничен: обход узлов не гарантирован</title>
         )}
@@ -350,7 +392,11 @@ function ShortcutEdge({
   );
 }
 const edgeTypes = { shortcut: ShortcutEdge };
-const nodeTypes = { blueprint: BlueprintNode, loopArea: LoopAreaNode };
+const nodeTypes = {
+  blueprint: BlueprintNode,
+  loopArea: LoopAreaNode,
+  methodArea: MethodAreaNode,
+};
 export default function FlowCanvas({
   graph,
   methodId,
@@ -365,6 +411,10 @@ export default function FlowCanvas({
   refreshing,
   onInsert,
   onEdit,
+  overview = false,
+  preview,
+  focusNodeId,
+  focusRequest,
 }: {
   graph: Graph;
   methodId: string;
@@ -379,12 +429,21 @@ export default function FlowCanvas({
   onInsert?: (nodeId: string, kind: string, position: string) => void;
   onEdit?: (node: GraphNode) => void;
   semantics?: SemanticModel | null;
+  overview?: boolean;
+  preview?: FlowPreview | null;
+  focusNodeId?: string | null;
+  focusRequest?: number;
 }) {
   const [dropTarget, setDropTarget] = useState<{
     id: string;
     highlightId: string;
     position: string;
   } | null>(null);
+  const [hoverKind, setHoverKind] = useState<FlowPreview["kind"] | null>(null);
+  const hoverScene = useRef<{ scope: string; nodes: Node<FlowData>[] } | null>(
+    null,
+  );
+  const [dismissedPreviews, setDismissedPreviews] = useState<string[]>([]);
   const [nodes, setNodes] = useState<Node<FlowData>[]>([]);
   const [layout, setLayout] = useState<Layout | null>(null);
   const [layoutError, setLayoutError] = useState("");
@@ -394,12 +453,32 @@ export default function FlowCanvas({
   selectedRef.current = selected;
   const flow = useRef<Pick<
     ReactFlowInstance<Node<FlowData>>,
-    "setViewport" | "getViewport"
+    "setViewport" | "getViewport" | "getNodes"
   > | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const viewportWidth = useRef(0);
   const method = graph.methods.find((candidate) => candidate.id === methodId);
-  const viewKey = methodViewKey(projectId, method, methodId);
+  const scopeMethodId = overview ? "overview" : methodId;
+  const viewKey = overview
+    ? JSON.stringify([projectId, "overview"])
+    : methodViewKey(projectId, method, methodId);
+  const overviewStorageKey = `java-blueprints:overview:v1:${projectId}`;
+  const overviewStorageKeyRef = useRef(overviewStorageKey);
+  overviewStorageKeyRef.current = overviewStorageKey;
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const overviewOrigins = useRef(new Map<string, { x: number; y: number }>());
+  const overviewManualIds = useRef(new Set<string>());
+  const [multiSelected, setMultiSelected] = useState<string[]>([]);
+  const [spacePan, setSpacePan] = useState(false);
+  const gestureRef = useRef<{ scope: string; committed: boolean } | null>(null);
+  const clickSelection = useRef<{
+    scope: string;
+    nodeId: string;
+    ids: Set<string>;
+  } | null>(null);
+  const consumedFocus = useRef("");
+  const nodesScope = useRef("");
   const cameraKey = `java-blueprints:camera:v3:${viewKey}`;
   const initializedCamera = useRef<string | null>(null);
   const initializedManual = useRef(new Set<string>());
@@ -435,6 +514,45 @@ export default function FlowCanvas({
         localStorage.setItem(cameraKeyRef.current, JSON.stringify(viewport));
     } catch {}
   }
+  function persistOverview(current: Node<FlowData>[] = nodesRef.current) {
+    if (provisional) return;
+    const real = new Map(graph.nodes.map((n) => [n.id, n]));
+    const positions = current
+      .filter((n) => real.has(n.id))
+      .map((n) => ({
+        nodeId: n.id,
+        methodId: real.get(n.id)!.methodId,
+        ...n.position,
+      }));
+    const bindings = new Map(
+      executionNodes(methodNodes, graph.edges).map((n) => [n.id, n.methodId]),
+    );
+    if (!validOverviewPositions(positions, bindings)) return;
+    try {
+      localStorage.setItem(
+        overviewStorageKeyRef.current,
+        JSON.stringify({
+          schemaVersion: 1,
+          projectId,
+          revisionId: graph.revisionId,
+          analysisId: graph.analysisId,
+          sourceMapVersion: graph.sourceMapVersion,
+          positions,
+          viewport: flow.current?.getViewport(),
+          origins: [...overviewOrigins.current],
+          manualNodeIds: [...overviewManualIds.current],
+          manualPositions: current
+            .filter(
+              (n) =>
+                overviewManualIds.current.has(n.id) && overviewKeys.has(n.id),
+            )
+            .map((n) => ({ key: overviewKeys.get(n.id), ...n.position })),
+        }),
+      );
+    } catch {
+      setLayoutError("Не удалось сохранить координаты в этом браузере");
+    }
+  }
   function fitCanvas() {
     if (!nodes.length) return;
     const area = safeArea();
@@ -447,7 +565,7 @@ export default function FlowCanvas({
         ...nodes.map((n) => n.position.y + (n.measured?.height ?? 84)),
       );
     const zoom = Math.max(
-      0.15,
+      overview ? 0.03 : 0.15,
       Math.min(
         1,
         (area.width - 100) / Math.max(1, right - left),
@@ -463,9 +581,35 @@ export default function FlowCanvas({
       .then(persistCamera);
   }
 
-  const scope = `${projectId}/${graph.revisionId}/${graph.analysisId}/${methodId}`;
+  const scope = `${projectId}/${graph.revisionId}/${graph.analysisId}/${scopeMethodId}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (
+        event.code !== "Space" ||
+        (event.target instanceof Element &&
+          event.target.closest(
+            "input,textarea,select,button,[contenteditable=true]",
+          ))
+      )
+        return;
+      event.preventDefault();
+      setSpacePan(true);
+    };
+    const release = () => setSpacePan(false);
+    const up = (event: KeyboardEvent) => {
+      if (event.code === "Space") release();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+    };
+  }, []);
   useEffect(() => {
     scopeRef.current = scope;
     return () => {
@@ -473,10 +617,74 @@ export default function FlowCanvas({
     };
   }, [scope]);
   const methodNodes = useMemo(
-    () => graph.nodes.filter((n) => n.methodId === methodId),
-    [graph, methodId],
+    () =>
+      overview
+        ? graph.nodes
+        : graph.nodes.filter((n) => n.methodId === methodId),
+    [graph, scopeMethodId],
   );
+  const overviewKeys = useMemo(() => {
+    const result = new Map<string, string>(),
+      counts = new Map<string, number>();
+    for (const m of graph.methods) {
+      const key = methodViewKey(projectId, m, m.id);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const m of graph.methods) {
+      const key = methodViewKey(projectId, m, m.id);
+      if (counts.get(key) !== 1) continue;
+      for (const [id, nodeKey] of stableNodeKeys(
+        graph.nodes.filter((n) => n.methodId === m.id),
+      ))
+        result.set(id, JSON.stringify([key, nodeKey]));
+    }
+    return result;
+  }, [graph, projectId]);
   const nodeKeys = useMemo(() => stableNodeKeys(methodNodes), [methodNodes]);
+  useEffect(() => {
+    if (
+      !focusNodeId ||
+      focusRequest === undefined ||
+      !flow.current ||
+      nodesScope.current !== scope
+    )
+      return;
+    const token = JSON.stringify([projectId, focusNodeId, focusRequest]);
+    if (consumedFocus.current === token) return;
+    let id: string | undefined = focusNodeId;
+    const visited = new Set<string>();
+    while (id && !nodes.some((n) => n.id === id) && !visited.has(id)) {
+      visited.add(id);
+      id = methodNodes.find((n) => n.id === id)?.parentId ?? undefined;
+    }
+    const target = nodes.find((n) => n.id === id);
+    if (!target) return;
+    consumedFocus.current = token;
+    initializedCamera.current = cameraKey;
+    const area = safeArea(),
+      zoom = Math.max(0.65, Math.min(1, flow.current.getViewport().zoom));
+    void flow.current
+      .setViewport({
+        x:
+          area.x +
+          area.width / 2 -
+          (target.position.x + (target.measured?.width ?? 264) / 2) * zoom,
+        y:
+          area.y +
+          area.height / 2 -
+          (target.position.y + (target.measured?.height ?? 84) / 2) * zoom,
+        zoom,
+      })
+      .then(persistCamera);
+  }, [
+    focusNodeId,
+    focusRequest,
+    nodes,
+    methodNodes,
+    projectId,
+    scope,
+    cameraKey,
+  ]);
   const ids = useMemo(
     () => new Set(executionNodes(methodNodes, graph.edges).map((n) => n.id)),
     [methodNodes, graph.edges],
@@ -522,6 +730,8 @@ export default function FlowCanvas({
     let active = true;
     setLayout(null);
     setLayoutError("");
+    setMultiSelected([]);
+    if (overview) return;
     api<Layout>(
       `${projectPath(projectId)}/revisions/${graph.revisionId}/layout?analysisId=${graph.analysisId}&methodId=${encodeURIComponent(methodId)}`,
     )
@@ -534,8 +744,182 @@ export default function FlowCanvas({
     return () => {
       active = false;
     };
-  }, [projectId, graph, methodId]);
+  }, [projectId, graph, scopeMethodId]);
   useEffect(() => {
+    if (overview) {
+      const visible = executionNodes(methodNodes, edges);
+      const positions = new Map<string, { x: number; y: number }>();
+      const origins = new Map<string, { x: number; y: number }>();
+      let x = 0,
+        y = 60,
+        rowHeight = 0,
+        lastFile = "";
+      for (const m of [...graph.methods].sort(
+        (a, b) =>
+          a.sourceRange.filePath.localeCompare(b.sourceRange.filePath) ||
+          a.sourceRange.startOffset - b.sourceRange.startOffset,
+      )) {
+        const all = methodNodes.filter((n) => n.methodId === m.id),
+          shown = visible.filter((n) => n.methodId === m.id);
+        const local = arrangeFlow(shown, edges, all),
+          keys = stableNodeKeys(all);
+        const manual = new Map<string, { x: number; y: number }>();
+        try {
+          const saved = JSON.parse(
+            localStorage.getItem(
+              `java-blueprints:positions:v2:${methodViewKey(projectId, m, m.id)}`,
+            ) ?? "null",
+          );
+          if (Array.isArray(saved)) {
+            const remembered = new Map<string, { x: number; y: number }>(saved);
+            for (const n of shown) {
+              const p = remembered.get(keys.get(n.id) ?? "");
+              if (p && Number.isFinite(p.x) && Number.isFinite(p.y))
+                manual.set(n.id, p);
+            }
+          }
+        } catch {}
+        const placed = placeManualFlow(local, manual);
+        const left = Math.min(0, ...[...placed.values()].map((p) => p.x)),
+          top = Math.min(0, ...[...placed.values()].map((p) => p.y));
+        const width =
+            Math.max(300, ...[...placed.values()].map((p) => p.x + 264)) - left,
+          height =
+            Math.max(100, ...[...placed.values()].map((p) => p.y + 84)) - top;
+        if (
+          lastFile &&
+          (lastFile !== m.sourceRange.filePath || x + width > 2200)
+        ) {
+          x = 0;
+          y += rowHeight + 130;
+          rowHeight = 0;
+        }
+        const origin = { x: x - left + 40, y: y - top + 40 };
+        origins.set(m.id, origin);
+        for (const [id, p] of placed)
+          positions.set(id, { x: p.x + origin.x, y: p.y + origin.y });
+        x += width + 160;
+        rowHeight = Math.max(rowHeight, height);
+        lastFile = m.sourceRange.filePath;
+      }
+      overviewOrigins.current = origins;
+      const bindings = new Map(visible.map((n) => [n.id, n.methodId]));
+      overviewManualIds.current = new Set();
+      try {
+        const snapshot = JSON.parse(
+          localStorage.getItem(overviewStorageKey) ?? "null",
+        );
+        if (
+          snapshot?.projectId === projectId &&
+          snapshot.analysisId === graph.analysisId &&
+          snapshot.revisionId === graph.revisionId &&
+          snapshot.sourceMapVersion === graph.sourceMapVersion &&
+          validOverviewPositions(snapshot.positions, bindings)
+        ) {
+          for (const p of snapshot.positions)
+            positions.set(p.nodeId, { x: p.x, y: p.y });
+          overviewManualIds.current = new Set(
+            (snapshot.manualNodeIds ?? []).filter((id: string) =>
+              bindings.has(id),
+            ),
+          );
+        } else if (
+          snapshot?.schemaVersion === 1 &&
+          snapshot.projectId === projectId &&
+          snapshot.sourceMapVersion === graph.sourceMapVersion &&
+          Array.isArray(snapshot.manualPositions)
+        ) {
+          const counts = new Map<string, number>();
+          for (const p of snapshot.manualPositions)
+            if (p && typeof p.key === "string")
+              counts.set(p.key, (counts.get(p.key) ?? 0) + 1);
+          for (const [id, key] of overviewKeys) {
+            const p = snapshot.manualPositions.find(
+              (p: { key: string }) => p?.key === key,
+            );
+            if (
+              bindings.has(id) &&
+              counts.get(key) === 1 &&
+              p &&
+              [p.x, p.y].every(
+                (n: number) => Number.isFinite(n) && Math.abs(n) <= 1000000,
+              )
+            ) {
+              positions.set(id, { x: p.x, y: p.y });
+              overviewManualIds.current.add(id);
+            }
+          }
+        }
+      } catch {}
+      nodesScope.current = scope;
+      setNodes(
+        visible.map((n) => ({
+          id: n.id,
+          type: "blueprint",
+          position: positions.get(n.id)!,
+          data: {
+            kind: n.kind,
+            executionRole: n.executionRole,
+            fullLabel: n.label,
+            label:
+              n.kind === "entry"
+                ? (graph.methods.find((m) => m.id === n.methodId)?.signature ??
+                  "Метод")
+                : n.kind === "switch_case"
+                  ? compactFlowLabel(n.label, 26)
+                  : n.executionRole === "structural"
+                    ? kindName(n.kind)
+                    : nodeCaption(n).split("\n")[0].slice(0, 110),
+            line: n.sourceRange ? `L${n.sourceRange.startLine}` : "",
+            selected: n.id === selectedRef.current,
+            visualKind: visualKind(n, semanticsRef.current),
+          },
+        })),
+      );
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (
+            scopeRef.current !== scope ||
+            initializedCamera.current === cameraKey ||
+            !flow.current
+          )
+            return;
+          initializedCamera.current = cameraKey;
+          let camera: null | { x: number; y: number; zoom: number } = null;
+          try {
+            const saved = JSON.parse(localStorage.getItem(cameraKey) ?? "null");
+            if (saved && [saved.x, saved.y, saved.zoom].every(Number.isFinite))
+              camera = saved;
+          } catch {}
+          if (camera) void flow.current.setViewport(camera);
+          else {
+            const area = safeArea();
+            const points = [...positions.values()];
+            if (!points.length) return;
+            const left = Math.min(...points.map((p) => p.x)),
+              top = Math.min(...points.map((p) => p.y));
+            const right = Math.max(...points.map((p) => p.x + 264)),
+              bottom = Math.max(...points.map((p) => p.y + 84));
+            const zoom = Math.max(
+              0.03,
+              Math.min(
+                0.75,
+                (area.width - 100) / Math.max(1, right - left),
+                (area.height - 150) / Math.max(1, bottom - top),
+              ),
+            );
+            void flow.current
+              .setViewport({
+                x: area.x + area.width / 2 - ((left + right) / 2) * zoom,
+                y: area.y + area.height / 2 - ((top + bottom) / 2) * zoom,
+                zoom,
+              })
+              .then(persistCamera);
+          }
+        }),
+      );
+      return;
+    }
     const visible = executionNodes(methodNodes, edges);
     const positions = arrangeFlow(visible, edges, methodNodes);
     let remembered = manualPositions.current.get(viewKey);
@@ -618,6 +1002,7 @@ export default function FlowCanvas({
         methodNodes.find((node) => node.id === selectedVisible)?.parentId ??
         undefined;
     }
+    nodesScope.current = scope;
     setNodes(
       visible.map((n, i) => {
         const pos = arranged.get(n.id) ?? { x: 300, y: i * 135 };
@@ -752,14 +1137,131 @@ export default function FlowCanvas({
       }),
     [selected, methodNodes],
   );
+  const proposedPreview = useMemo(
+    () =>
+      dropTarget && hoverKind
+        ? {
+            kind: hoverKind,
+            anchorNodeId: dropTarget.id,
+            position: dropTarget.position,
+            source: undefined,
+          }
+        : preview,
+    [
+      dropTarget?.id,
+      dropTarget?.position,
+      hoverKind,
+      preview?.kind,
+      preview?.anchorNodeId,
+      preview?.position,
+      preview?.source,
+      preview?.request,
+    ],
+  );
+  const previewKey = previewFingerprint(scope, proposedPreview);
+  const parentPreviewKey = previewFingerprint(scope, preview);
+  const visualPreview =
+    proposedPreview &&
+    !dismissedPreviews.includes(previewKey) &&
+    !stale &&
+    !readOnly
+      ? proposedPreview
+      : null;
+  const provisional = useMemo(
+    () => previewScene(nodes, graph, visualPreview, stale || readOnly),
+    [nodes, graph, visualPreview, stale, readOnly],
+  );
+  const sceneNodes = provisional?.nodes ?? nodes;
+  const sceneNodesRef = useRef(sceneNodes);
+  sceneNodesRef.current = sceneNodes;
+  useEffect(() => {
+    const start = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes("application/x-blueprint-block"))
+        hoverScene.current = {
+          scope,
+          nodes: previewHitSnapshot(sceneNodesRef.current),
+        };
+    };
+    window.addEventListener("dragstart", start);
+    return () => window.removeEventListener("dragstart", start);
+  }, [scope]);
+  useEffect(() => {
+    const clearHover = () => {
+      hoverScene.current = null;
+      setDropTarget(null);
+      setHoverKind(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDismissedPreviews(
+          dismissedPreviewKeys(scope, proposedPreview, preview),
+        );
+        clearHover();
+      }
+    };
+    const dragEnd = (event: DragEvent) => {
+      if (event.dataTransfer?.dropEffect === "none")
+        setDismissedPreviews(
+          dismissedPreviewKeys(scope, proposedPreview, preview),
+        );
+      clearHover();
+    };
+    window.addEventListener("keydown", escape);
+    window.addEventListener("dragend", dragEnd);
+    return () => {
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("dragend", dragEnd);
+    };
+  }, [previewKey, parentPreviewKey, scope]);
+  useEffect(() => {
+    hoverScene.current = null;
+    setDropTarget(null);
+    setHoverKind(null);
+  }, [scope, stale, readOnly]);
   const renderedEdges = useMemo(() => {
-    const routes = routeFlowEdges(nodes, edges);
-    const boxes = nodes.map((node) => ({
+    const routes = routeFlowEdges(sceneNodes, edges);
+    const boxes = sceneNodes.map((node) => ({
       id: node.id,
       ...node.position,
       width: node.measured?.width ?? 264,
       height: node.measured?.height ?? 84,
     }));
+    if (provisional)
+      boxes.push({ id: "preview-obstacle", ...provisional.ghost });
+    const planned = new Map<
+      string,
+      ReturnType<typeof planFlowRoutes>["routes"] extends Map<string, infer R>
+        ? R
+        : never
+    >();
+    const plannedObstacles = new Map<string, RouteBox[]>();
+    const realMethods = new Map(methodNodes.map((n) => [n.id, n.methodId]));
+    const groups = new Set(sceneNodes.map((n) => realMethods.get(n.id)));
+    for (const group of groups) {
+      const groupIds = new Set(
+        sceneNodes
+          .filter((n) => realMethods.get(n.id) === group)
+          .map((n) => n.id),
+      );
+      const ownBoxes = boxes.filter((b) => groupIds.has(b.id));
+      const nearby = boxes.filter(
+        (b) =>
+          groupIds.has(b.id) ||
+          ownBoxes.some(
+            (o) => Math.abs(o.x - b.x) < 500 && Math.abs(o.y - b.y) < 250,
+          ),
+      );
+      const plan = planFlowRoutes(
+        provisional && provisional.methodId === group
+          ? [...nearby, { id: "preview-obstacle", ...provisional.ghost }]
+          : nearby,
+        edges.filter((e) => groupIds.has(e.source) && groupIds.has(e.target)),
+      );
+      for (const [id, route] of plan.routes) {
+        planned.set(id, route);
+        plannedObstacles.set(id, plan.obstacles);
+      }
+    }
     const labelBoxes = edges
       .filter((edge) => edge.kind === "true" || edge.kind === "false")
       .flatMap((edge) => {
@@ -774,18 +1276,17 @@ export default function FlowCanvas({
         return [
           {
             id: `label:${edge.id}`,
-            x: at.x - 15,
-            y: at.y - 9,
-            width: 30,
-            height: 18,
+            x: at.x - BRANCH_BADGE.width / 2,
+            y: at.y - BRANCH_BADGE.height / 2,
+            ...BRANCH_BADGE,
           },
         ];
       });
     const departures = new Map<number, number>();
     const arrivals = new Map<number, number>();
     return edges.map((edge) => {
-      const source = nodes.find((node) => node.id === edge.source);
-      const target = nodes.find((node) => node.id === edge.target);
+      const source = sceneNodes.find((node) => node.id === edge.source);
+      const target = sceneNodes.find((node) => node.id === edge.target);
       const sourceRow = source?.position.y ?? 0,
         targetRow = target?.position.y ?? 0;
       const leaving = departures.get(sourceRow) ?? 0,
@@ -794,10 +1295,12 @@ export default function FlowCanvas({
       arrivals.set(targetRow, entering + 1);
       const sourceBox = boxes.find((box) => box.id === edge.source);
       const targetBox = boxes.find((box) => box.id === edge.target);
+      const plannedRoute = planned.get(edge.id);
       const ports =
-        sourceBox && targetBox
+        plannedRoute ??
+        (sourceBox && targetBox
           ? flowPorts(sourceBox, targetBox, edge.kind)
-          : { sourceSide: "bottom" as const, targetSide: "top" as const };
+          : { sourceSide: "bottom" as const, targetSide: "top" as const });
       const kind = source?.data.visualKind;
       const exceptional = [
         "throw",
@@ -825,19 +1328,26 @@ export default function FlowCanvas({
           ...edge.style,
           stroke: color,
           strokeDasharray:
-            edge.certainty === "conservative" ? "5 4" : undefined,
+            provisional?.movedMethods.has(realMethods.get(edge.source) ?? "") ||
+            edge.certainty === "conservative"
+              ? "5 4"
+              : undefined,
         },
         markerEnd: { ...edge.markerEnd, color },
         type: "shortcut",
         data: {
           ...edge.data,
+          provisional: provisional?.movedMethods.has(
+            realMethods.get(edge.source) ?? "",
+          ),
           highlighted: selected
             ? edge.source === selected || edge.target === selected
             : ["normal", "next", "true"].includes(edge.kind),
           routeX:
             routes.get(edge.id) ??
             ((source?.position.x ?? 0) + (target?.position.x ?? 0)) / 2 + 132,
-          boxes: [...boxes, ...labelBoxes],
+          boxes: plannedObstacles.get(edge.id) ?? [...boxes, ...labelBoxes],
+          plannedRoute,
           labelAtTarget: edge.kind === "case" || edge.kind === "default",
           ...ports,
           compact:
@@ -851,9 +1361,9 @@ export default function FlowCanvas({
         },
       };
     });
-  }, [nodes, edges, selected]);
+  }, [sceneNodes, edges, selected, methodNodes, provisional]);
   const renderedNodes = useMemo(() => {
-    const boxes = nodes.map((node) => ({
+    const boxes = sceneNodes.map((node) => ({
       id: node.id,
       ...node.position,
       width: node.measured?.width ?? 264,
@@ -884,9 +1394,44 @@ export default function FlowCanvas({
         },
       }),
     );
+    const frames: Node<FlowData>[] = overview
+      ? graph.methods.flatMap((m) => {
+          const members = boxes.filter(
+            (b) => methodNodes.find((n) => n.id === b.id)?.methodId === m.id,
+          );
+          if (!members.length) return [];
+          const x = Math.min(...members.map((b) => b.x)) - 24,
+            y = Math.min(...members.map((b) => b.y)) - 18;
+          const width = Math.max(...members.map((b) => b.x + b.width)) - x + 24,
+            height = Math.max(...members.map((b) => b.y + b.height)) - y + 24;
+          return [
+            {
+              id: "method-area:" + m.id,
+              type: "methodArea",
+              position: { x, y },
+              style: { width, height, pointerEvents: "none" },
+              width,
+              height,
+              zIndex: -2,
+              selectable: false,
+              draggable: false,
+              focusable: false,
+              data: {
+                kind: "method-area",
+                label: m.sourceRange.filePath + " · " + m.signature,
+                line: "",
+                selected: false,
+                groupActive: m.id === methodId,
+                fullLabel: m.id,
+              },
+            },
+          ];
+        })
+      : [];
     return [
+      ...frames,
       ...areas,
-      ...nodes.map((n) => ({
+      ...sceneNodes.map((n) => ({
         ...n,
         data: {
           ...n.data,
@@ -895,7 +1440,7 @@ export default function FlowCanvas({
         },
       })),
     ];
-  }, [nodes, methodNodes, dropTarget]);
+  }, [sceneNodes, methodNodes, dropTarget, overview, graph.methods, methodId]);
   useEffect(() => {
     const element = container.current;
     if (!element) return;
@@ -919,23 +1464,54 @@ export default function FlowCanvas({
     return () => observer.disconnect();
   }, []);
   const changes = useCallback(
-    (c: NodeChange<Node<FlowData>>[]) =>
-      setNodes((ns) =>
-        applyNodeChanges(
-          c.filter(
-            (change) =>
-              !("id" in change) || !change.id.startsWith("loop-area:"),
-          ),
-          ns,
-        ),
-      ),
-    [],
+    (c: NodeChange<Node<FlowData>>[]) => {
+      const accepted = c.filter(
+        (change) =>
+          (change.type !== "position" || !provisional) &&
+          (!("id" in change) ||
+            (!change.id.startsWith("loop-area:") &&
+              !change.id.startsWith("method-area:"))),
+      );
+      if (accepted.length) setNodes((ns) => applyNodeChanges(accepted, ns));
+    },
+    [provisional],
   );
   async function saveLayout(dragged: Node<FlowData>) {
-    if (!layout || stale || readOnly) return;
+    if (
+      stale ||
+      readOnly ||
+      provisional ||
+      gestureRef.current?.scope !== scopeRef.current ||
+      gestureRef.current?.committed
+    )
+      return;
+    gestureRef.current.committed = true;
+    const realIds = new Set(methodNodes.map((n) => n.id));
+    const finalNodes = (flow.current?.getNodes() ?? nodesRef.current).filter(
+      (n) => realIds.has(n.id),
+    );
+    const current = finalNodes.map((n) =>
+      n.id === dragged.id ? { ...n, position: dragged.position } : n,
+    );
+    nodesRef.current = current;
+    setNodes(current);
+    if (overview) {
+      for (const n of current.filter((n) => n.id === dragged.id || n.selected))
+        overviewManualIds.current.add(n.id);
+      persistOverview(current);
+      return;
+    }
+    if (!layout) {
+      setLayoutError("Координаты ещё загружаются; перемещение не отправлено");
+      return;
+    }
     const remembered = new Map(manualPositions.current.get(viewKey));
-    const key = nodeKeys.get(dragged.id);
-    if (key) remembered.set(key, { ...dragged.position });
+    for (const moved of current.filter(
+      (n) => n.id === dragged.id || n.selected,
+    )) {
+      const key = nodeKeys.get(moved.id);
+      if (key) remembered.set(key, { ...moved.position });
+    }
     initializedManual.current.add(viewKey);
     manualPositions.current.set(viewKey, remembered);
     try {
@@ -955,9 +1531,9 @@ export default function FlowCanvas({
             methodId,
             sourceMapVersion: graph.sourceMapVersion,
             layoutVersion: layout.layoutVersion,
-            positions: nodes.map((n) => ({
+            positions: current.map((n) => ({
               nodeId: n.id,
-              ...(n.id === dragged.id ? dragged.position : n.position),
+              ...n.position,
             })),
             collapsedNodeIds: layout.collapsedNodeIds,
             viewport: flow.current?.getViewport() ?? layout.viewport,
@@ -974,11 +1550,34 @@ export default function FlowCanvas({
   }
   return (
     <div
-      className="flow-area"
+      className={
+        "flow-area" +
+        (overview ? " flow-overview" : "") +
+        (spacePan ? " space-pan" : "")
+      }
+      data-graph-view={overview ? "overview" : "method"}
+      data-provisional-scene={provisional ? "true" : undefined}
       ref={container}
+      onPointerDownCapture={(event) => {
+        const target = (event.target as Element).closest(
+          ".react-flow__node-blueprint",
+        );
+        const nodeId = target?.getAttribute("data-id");
+        clickSelection.current = nodeId
+          ? {
+              scope: scopeRef.current,
+              nodeId,
+              ids: new Set(
+                nodesRef.current.filter((n) => n.selected).map((n) => n.id),
+              ),
+            }
+          : null;
+      }}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node))
+        if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node)) {
           setDropTarget(null);
+          setHoverKind(null);
+        }
       }}
       onDragOver={(e) => {
         if (
@@ -989,12 +1588,31 @@ export default function FlowCanvas({
           return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "none";
-        const target = (e.target as Element).closest(
-          ".react-flow__node-blueprint",
+        setHoverKind(
+          (["statement", "condition", "loop"] as const).find((kind) =>
+            e.dataTransfer.types.includes(
+              "application/x-blueprint-kind-" + kind,
+            ),
+          ) ?? null,
         );
-        const n = methodNodes.find(
-          (n) => n.id === target?.getAttribute("data-id"),
-        );
+        // Read the visible scene captured at native drag start. It already
+        // includes an existing draft, but subsequent hover reflow cannot move
+        // the hit boxes and make a stationary pointer alternate anchors.
+        if (hoverScene.current?.scope !== scope)
+          hoverScene.current = { scope, nodes: previewHitSnapshot(sceneNodes) };
+        const viewport = flow.current?.getViewport();
+        const rect = container.current?.getBoundingClientRect();
+        const point =
+          viewport && rect
+            ? {
+                x: (e.clientX - rect.left - viewport.x) / viewport.zoom,
+                y: (e.clientY - rect.top - viewport.y) / viewport.zoom,
+              }
+            : null;
+        const target = point
+          ? baseNodeAt(hoverScene.current.nodes, point)
+          : null;
+        const n = methodNodes.find((n) => n.id === target?.id);
         const anchor = n
           ? operationAnchor(n, methodNodes, "insert_statement")
           : null;
@@ -1002,9 +1620,10 @@ export default function FlowCanvas({
           setDropTarget(null);
           return;
         }
-        const rect = target.getBoundingClientRect();
         const desired =
-          e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+          point!.y < target.position.y + (target.measured?.height ?? 84) / 2
+            ? "before"
+            : "after";
         const position = anchor.insertionPositions?.includes(desired)
           ? desired
           : anchor.insertionPositions?.[0];
@@ -1013,12 +1632,23 @@ export default function FlowCanvas({
           return;
         }
         e.dataTransfer.dropEffect = "copy";
-        setDropTarget({ id: anchor.id, highlightId: n.id, position });
+        setDropTarget((current) =>
+          current?.id === anchor.id &&
+          current.highlightId === n.id &&
+          current.position === position
+            ? current
+            : { id: anchor.id, highlightId: n.id, position },
+        );
       }}
       onDrop={(e) => {
         const kind = e.dataTransfer.getData("application/x-blueprint-block");
+        const dropAnchor = methodNodes.find((n) => n.id === dropTarget?.id);
         if (
           dropTarget &&
+          dropAnchor?.analysisId === graph.analysisId &&
+          dropAnchor.revisionId === graph.revisionId &&
+          dropAnchor.allowedOperations?.includes("insert_statement") &&
+          dropAnchor.insertionPositions?.includes(dropTarget.position) &&
           ["statement", "condition", "loop"].includes(kind) &&
           !stale &&
           !readOnly
@@ -1027,6 +1657,8 @@ export default function FlowCanvas({
           onInsert?.(dropTarget.id, kind, dropTarget.position);
         }
         setDropTarget(null);
+        setHoverKind(null);
+        hoverScene.current = null;
       }}
     >
       {stale && (
@@ -1052,7 +1684,32 @@ export default function FlowCanvas({
         edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         onNodesChange={changes}
+        multiSelectionKeyCode={["Control", "Meta"]}
+        selectionKeyCode={["Control", "Shift"]}
+        panActivationKeyCode="Space"
+        panOnDrag={true}
+        noPanClassName={spacePan ? "space-pan-disabled" : "nopan"}
+        onSelectionChange={({ nodes: selectedNodes }) => {
+          const ids = selectedNodes
+            .filter((n) => n.type === "blueprint")
+            .map((n) => n.id);
+          setMultiSelected((current) =>
+            current.length === ids.length &&
+            current.every((id, i) => id === ids[i])
+              ? current
+              : ids,
+          );
+        }}
+        onNodeDragStart={() => {
+          gestureRef.current = { scope: scopeRef.current, committed: false };
+        }}
+        onSelectionDragStart={() => {
+          gestureRef.current = { scope: scopeRef.current, committed: false };
+        }}
         onNodeDragStop={(_, node) => void saveLayout(node)}
+        onSelectionDragStop={(_, selectedNodes) => {
+          if (selectedNodes[0]) void saveLayout(selectedNodes[0]);
+        }}
         onMoveEnd={(event, viewport) => {
           // Controls finish programmatic animations too. Ignore only the default
           // viewport before this method's first initialization.
@@ -1063,23 +1720,104 @@ export default function FlowCanvas({
               cameraKeyRef.current,
               JSON.stringify(viewport),
             );
+            if (overview && !provisional) persistOverview();
           } catch {}
         }}
-        onNodeClick={(_, n) => {
+        onNodeClick={(event, n) => {
           const source = methodNodes.find((s) => s.id === n.id);
-          if (source) onSelect(source);
+          if (!source) return;
+          const before = clickSelection.current;
+          const ids =
+            event.ctrlKey || event.metaKey
+              ? new Set(
+                  before?.scope === scopeRef.current && before.nodeId === n.id
+                    ? before.ids
+                    : nodesRef.current
+                        .filter((node) => node.selected)
+                        .map((node) => node.id),
+                )
+              : new Set<string>();
+          if ((event.ctrlKey || event.metaKey) && ids.has(n.id))
+            ids.delete(n.id);
+          else ids.add(n.id);
+          clickSelection.current = null;
+          setNodes((current) =>
+            current.map((node) => ({ ...node, selected: ids.has(node.id) })),
+          );
+          setMultiSelected([...ids]);
+          onSelect(source);
         }}
         onNodeDoubleClick={(_, n) => {
           const source = methodNodes.find((s) => s.id === n.id);
           if (source && !stale && !readOnly) onEdit?.(source);
         }}
-        nodesDraggable={!stale && !readOnly}
+        nodesDraggable={!provisional && !spacePan && !stale && !readOnly}
         nodesConnectable={false}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
-        minZoom={0.15}
+        minZoom={overview ? 0.03 : 0.15}
+        onlyRenderVisibleElements={overview}
         maxZoom={1.5}
         attributionPosition="bottom-left"
       >
+        {provisional && visualPreview && (
+          <ViewportPortal>
+            <svg className="graph-preview-connectors" aria-hidden="true">
+              {provisional.connectors.map((path, i) => (
+                <path key={i} d={path} />
+              ))}
+            </svg>
+            <div
+              className={"graph-preview preview-" + visualPreview.kind}
+              data-flow-preview="true"
+              aria-hidden="true"
+              style={{
+                left: provisional.ghost.x,
+                top: provisional.ghost.y,
+                minHeight: provisional.ghost.height,
+              }}
+            >
+              <strong>Схема шаблона · код ещё не изменён</strong>
+              <div
+                className="graph-preview-diagram"
+                data-preview-kind={visualPreview.kind}
+              >
+                <div className={"graph-preview-shape " + visualPreview.kind}>
+                  <span>
+                    {visualPreview.kind === "condition"
+                      ? "Условие"
+                      : visualPreview.kind === "loop"
+                        ? "Цикл"
+                        : "Действие"}
+                  </span>
+                </div>
+                {visualPreview.kind === "condition" && (
+                  <div className="graph-preview-branches">
+                    <span>
+                      да<span className="graph-preview-step">Тело</span>
+                    </span>
+                    <span>
+                      нет<span className="graph-preview-step">Далее</span>
+                    </span>
+                  </div>
+                )}
+                {visualPreview.kind === "loop" && (
+                  <div className="graph-preview-loop">
+                    <span className="graph-preview-step">Тело цикла</span>
+                    <span aria-hidden="true">↰ повтор</span>
+                  </div>
+                )}
+              </div>
+              <span title={visualPreview.source}>
+                {visualPreview.source ??
+                  (visualPreview.kind === "condition"
+                    ? "if (true) { … }"
+                    : visualPreview.kind === "loop"
+                      ? "for (…) { … }"
+                      : "Действие")}
+              </span>
+            </div>
+          </ViewportPortal>
+        )}
         <Background gap={22} size={1} color="var(--graph-grid, #d8ddcf)" />
         <Controls
           showInteractive={false}
@@ -1097,6 +1835,12 @@ export default function FlowCanvas({
           </ControlButton>
         </Controls>
       </ReactFlow>
+      {multiSelected.length > 1 && (
+        <span className="graph-selection-note" role="status">
+          Выбрано узлов: {multiSelected.length} · Ctrl — добавить · Space —
+          панорама
+        </span>
+      )}
       {layoutError && (
         <span className="canvas-note" role="status">
           Координаты: {layoutError}

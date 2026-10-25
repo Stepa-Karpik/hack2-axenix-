@@ -65,7 +65,7 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
     mimeType: "text/x-java-source",
     buffer: Buffer.from(source),
   });
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
@@ -76,7 +76,7 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
   const graph = analysis.graph;
   const method = (name: string) =>
     graph.methods.find((method: any) =>
@@ -176,7 +176,9 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   await panTo(page, selectorElement);
   await selectorElement.click();
   await expect(page.locator(".inspector-selection")).toContainText("Значение");
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Перейти к коду" }).click();
   await expect(
     page.locator(".monaco-editor .code-binding").first(),
@@ -186,7 +188,9 @@ test("traditional switch dispatch, fallthrough, source bindings and immutable ca
   );
   await panTo(page, caseElement);
   await caseElement.click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveCount(0);
   await expect(page.locator(".inspector-selection")).toContainText("default:");
   await page.getByRole("button", { name: "Перейти к коду" }).click();
   await expect(

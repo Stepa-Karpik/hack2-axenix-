@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import { expect, test } from "@playwright/test";
 import { fixture, head, headers, source, unzip, zip } from "./fileFixtures";
@@ -359,7 +360,10 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Открытая панель").selectOption("project");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Открытая панель" }),
+    "project",
+  );
   await expect(page.locator('[data-directory-path="renamed"]')).toBeVisible();
   expect(
     await page.evaluate(

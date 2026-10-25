@@ -14,12 +14,33 @@ import {
   visibleRoot,
   readLayout,
   layoutKey,
+  migrateLayout,
 } from "./workspaceLayout.ts";
 import { tileGeometry, tileDrop } from "./tileGeometry.ts";
 const all = (l) =>
   groups(l.root)
     .flatMap((g) => g.tabs)
     .sort();
+
+test("legacy workspace adds only hidden utilities without losing existing geometry",()=>{
+  const latest=defaultLayout("code");
+  const legacy=structuredClone(latest);
+  function strip(n){if(n.type==="split"){strip(n.first);strip(n.second);}else n.tabs=n.tabs.filter(p=>p!=="history"&&p!=="navigation");}
+  strip(legacy.root);legacy.hidden=legacy.hidden.filter(p=>p!=="history"&&p!=="navigation");
+  legacy.root.ratio=.32;
+  const result=migrateLayout(legacy);
+  assert.ok(validateLayout(result));assert.equal(result.root.ratio,.32);
+  assert.equal(result.root.first.id,legacy.root.first.id);
+  assert.ok(result.hidden.includes("history"));assert.ok(result.hidden.includes("navigation"));
+  const malformed=structuredClone(legacy);malformed.root.first.tabs=malformed.root.first.tabs.filter(p=>p!=="project");
+  assert.equal(migrateLayout(malformed),null);
+});
+test("collapsed navigation reserves a real short row and expands neighboring tile",()=>{
+  const layout=defaultLayout(),bounds={x:0,y:0,width:1440,height:800};
+  const normal=tileGeometry(layout.root,bounds),collapsed=tileGeometry(layout.root,bounds,true);
+  assert.equal(collapsed.tiles.find(t=>t.group.active==="navigation").rect.height,40);
+  assert.ok(collapsed.tiles.find(t=>t.group.active==="project").rect.height>normal.tiles.find(t=>t.group.active==="project").rect.height);
+});
 test("presets retain every panel exactly once, including hidden slots", () => {
   for (const name of ["default", "code", "review"]) {
     const l = defaultLayout(name);

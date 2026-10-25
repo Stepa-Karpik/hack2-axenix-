@@ -83,7 +83,7 @@ test("1100-line hierarchy imports without loss, remains navigable and verifies t
   await dialog
     .getByRole("button", { name: "Импортировать выбранное", exact: true })
     .click();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 60000,
   });
   const importToGraphMs = performance.now() - importStarted;

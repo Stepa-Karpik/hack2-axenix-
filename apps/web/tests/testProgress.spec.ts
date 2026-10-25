@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { test, expect, type Page } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { revealPanel, setTheme } from "./flowAssertions";
@@ -214,7 +215,10 @@ test("stop retains finished case verdicts and partial counts across reload witho
   ).toBeVisible();
   expect((await fixtureData.read()).progress).toEqual(stopped.progress);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Открытая панель").selectOption("tests");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Открытая панель" }),
+    "tests",
+  );
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

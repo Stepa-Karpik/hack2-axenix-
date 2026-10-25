@@ -128,17 +128,31 @@ class AccountController {
   }
 
   @GetMapping("/users/{username}/projects")
-  Object publicProjects(@PathVariable String username) {
-    return ok(
-        w
-            .db
-            .queryForList(
-                "SELECT id::text FROM projects WHERE owner_id=? AND visibility='public' ORDER BY"
-                    + " created_at DESC LIMIT 100",
-                uuid(a.byUsername(username)))
-            .stream()
-            .map(row -> w.project(row.get("id").toString()))
-            .toList());
+  Object publicProjects(@PathVariable String username, HttpServletRequest request) {
+    return ok(a.projectPage(a.byUsername(username), a.actor(request), 100, null).get("items"));
+  }
+
+  @GetMapping("/users/{username}/overview")
+  Object overview(
+      @PathVariable String username,
+      @RequestParam(defaultValue = "20") int limit,
+      @RequestParam(required = false) String before,
+      HttpServletRequest request) {
+    return ok(a.overview(a.byUsername(username), a.actor(request), limit, before));
+  }
+
+  @GetMapping("/users/{username}/friends")
+  Object profileFriends(
+      @PathVariable String username,
+      @RequestParam(defaultValue = "20") int limit,
+      @RequestParam(defaultValue = "0") int offset,
+      HttpServletRequest request) {
+    return ok(a.profileFriends(a.byUsername(username), a.actor(request), limit, offset));
+  }
+
+  @PutMapping("/profile/pins")
+  Object pins(@RequestBody Map<String, Object> body, HttpServletRequest request) {
+    return ok(a.savePins(a.require(request), body));
   }
 
   @GetMapping("/friends")

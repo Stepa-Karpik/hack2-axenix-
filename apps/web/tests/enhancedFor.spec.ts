@@ -43,7 +43,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
     mimeType: "text/x-java-source",
     buffer: Buffer.from(source),
   });
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
@@ -54,7 +54,7 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await page.request.get(base + "/revisions/" + head + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
   let layoutWrites = 0;
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().endsWith("/layout"))
@@ -135,7 +135,9 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
     await expect(page.locator(".inspector-selection")).toContainText(
       "Источник",
     );
-    await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+    await expect(
+      page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Перейти к коду" }).click();
     await expect(
       page.locator(".monaco-editor .code-binding").first(),
@@ -174,7 +176,9 @@ test("enhanced-for abstraction, readonly synthetic nodes and source candidate ap
       await expect(
         page.getByRole("button", { name: "Перейти к коду" }),
       ).toHaveCount(0);
-      await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+      await expect(
+        page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+      ).toHaveCount(0);
       await expect(page.locator(".monaco-editor .code-binding")).toHaveCount(0);
     }
     await assertRoutes(page);

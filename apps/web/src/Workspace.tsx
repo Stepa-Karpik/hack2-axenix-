@@ -1,7 +1,15 @@
+import Select from "./Select";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, CSSProperties } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { GripVertical, X, Maximize2, Minimize2 } from "lucide-react";
+import {
+  GripVertical,
+  X,
+  Maximize2,
+  Minimize2,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import {
   defaultLayout,
   groups,
@@ -39,6 +47,7 @@ export function useWorkspace(projectId: string) {
       );
       return {
         layout,
+        collapsedNavigation: state?.collapsedNavigation === true,
         focused: panelIds.includes(state?.focused)
           ? (state.focused as PanelId)
           : ("graph" as PanelId),
@@ -49,20 +58,48 @@ export function useWorkspace(projectId: string) {
             : null,
       };
     } catch {
-      return { layout, focused: "graph" as PanelId, maximized: null };
+      return {
+        layout,
+        focused: "graph" as PanelId,
+        maximized: null,
+        collapsedNavigation: false,
+      };
     }
   });
   const [layout, setLayout] = useState(initial.layout);
   const [maximized, setMaximized] = useState<PanelId | null>(initial.maximized);
   const [focused, setFocused] = useState<PanelId>(initial.focused);
+  const [collapsedNavigation, setCollapsedNavigation] = useState(
+    initial.collapsedNavigation,
+  );
+  useLayoutEffect(() => {
+    const revealForTour = (event: Event) => {
+      const panel = (event as CustomEvent<{ panel?: unknown }>).detail?.panel;
+      if (
+        typeof panel !== "string" ||
+        !["project", "graph", "palette", "code", "tests"].includes(panel)
+      )
+        return;
+      const target = panel as PanelId;
+      setLayout((current) => revealPanel(current, target));
+      setFocused(target);
+      setMaximized((current) =>
+        current && current !== target ? null : current,
+      );
+      if (target === "project") setCollapsedNavigation(false);
+    };
+    window.addEventListener("java-blueprints:tour-reveal", revealForTour);
+    return () =>
+      window.removeEventListener("java-blueprints:tour-reveal", revealForTour);
+  }, [projectId]);
   useEffect(() => {
     try {
       localStorage.setItem(
         "java-blueprints:window-state:" + projectId,
-        JSON.stringify({ focused, maximized }),
+        JSON.stringify({ focused, maximized, collapsedNavigation }),
       );
     } catch {}
-  }, [projectId, focused, maximized]);
+  }, [projectId, focused, maximized, collapsedNavigation]);
   function animate(change: () => void): Promise<void> {
     // CSS geometry transitions preserve live content; no screenshot overlays.
     flushSync(change);
@@ -75,6 +112,8 @@ export function useWorkspace(projectId: string) {
   }, [layout, projectId]);
   return {
     layout,
+    collapsedNavigation,
+    toggleNavigation: () => setCollapsedNavigation((v) => !v),
     setLayout,
     animateLayout: (update: (layout: WorkspaceLayout) => WorkspaceLayout) =>
       animate(() => setLayout(update)),
@@ -136,7 +175,7 @@ export default function Workspace({
 }) {
   const container = useRef<HTMLDivElement>(null),
     storage = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
+  const [size, setSize] = useState({ width: 0, height: 0, topInset: 78 });
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null),
     wasDrag = useRef(false);
@@ -171,12 +210,20 @@ export default function Workspace({
     [hosts],
   );
   useEffect(() => {
-    const observer = new ResizeObserver(([entry]) =>
+    const observer = new ResizeObserver(([entry]) => {
+      const element = container.current;
+      const shell = element?.closest(".workbench");
+      const offset =
+        element && shell
+          ? element.getBoundingClientRect().top -
+            shell.getBoundingClientRect().top
+          : 0;
       setSize({
         width: entry.contentRect.width,
         height: entry.contentRect.height,
-      }),
-    );
+        topInset: Math.max(10, 78 - offset),
+      });
+    });
     if (container.current) observer.observe(container.current);
     return () => observer.disconnect();
   }, []);
@@ -190,13 +237,13 @@ export default function Workspace({
   const compact = size.width > 0 && size.width < 980;
   const bounds = {
     x: 12,
-    y: 78,
+    y: size.topInset,
     width: Math.max(1, size.width - 24),
-    height: Math.max(1, size.height - 160),
+    height: Math.max(1, size.height - size.topInset - 82),
   };
   const layout = drag?.moved ? drag.preview : c.layout;
   const root = visibleRoot(layout);
-  const geometry = tileGeometry(root, bounds);
+  const geometry = tileGeometry(root, bounds, c.collapsedNavigation);
   const shown = visiblePanels(layout);
   const focus =
     c.maximized ??
@@ -237,7 +284,11 @@ export default function Workspace({
         current.moved || Math.hypot(x - current.startX, y - current.startY) > 6;
       if (!moved) return;
       event.preventDefault();
-      const targets = tileGeometry(visibleRoot(current.base), bounds).tiles;
+      const targets = tileGeometry(
+        visibleRoot(current.base),
+        bounds,
+        c.collapsedNavigation,
+      ).tiles;
       const target = targets.find(
         (t) =>
           x >= t.rect.x &&
@@ -316,13 +367,21 @@ export default function Workspace({
       window.removeEventListener("keydown", cancel);
       document.body.classList.remove("is-tiling");
     };
-  }, [size.width, size.height, c.setLayout]);
+  }, [
+    size.width,
+    size.height,
+    size.topInset,
+    c.setLayout,
+    c.collapsedNavigation,
+  ]);
   function begin(panel: PanelId, event: React.PointerEvent) {
     if (compact || event.button !== 0 || panel === "graph") return;
     const box = container.current!.getBoundingClientRect();
-    const tile = tileGeometry(visibleRoot(c.layout), bounds).tiles.find((t) =>
-      t.group.tabs.includes(panel),
-    );
+    const tile = tileGeometry(
+      visibleRoot(c.layout),
+      bounds,
+      c.collapsedNavigation,
+    ).tiles.find((t) => t.group.tabs.includes(panel));
     if (!tile) return;
     const x = event.clientX - box.left,
       y = event.clientY - box.top;
@@ -397,9 +456,9 @@ export default function Workspace({
     if (focus)
       rect = {
         x: 12,
-        y: 78,
+        y: bounds.y,
         width: Math.max(1, size.width - 24),
-        height: Math.max(1, size.height - 160),
+        height: bounds.height,
       };
     const moving = drag?.panel === group.active && drag.moved;
     const style: CSSProperties = moving
@@ -416,7 +475,10 @@ export default function Workspace({
         className={
           "workspace-group glass-tile" +
           (moving ? " tile-dragging" : "") +
-          (sidebar ? " project-shell" : "")
+          (sidebar ? " project-shell" : "") +
+          (group.active === "navigation" && c.collapsedNavigation
+            ? " navigation-collapsed"
+            : "")
         }
         aria-label={panelLabels[group.active]}
         data-group-id={group.id}
@@ -446,10 +508,34 @@ export default function Workspace({
                   className={panel === group.active ? "active" : ""}
                   onClick={() => void c.reveal(panel)}
                 >
-                  {panelLabels[panel]}
+                  {panel === "navigation" ? (
+                    <span className="navigation-wordmark">
+                      <img src="/brand-lockup.png" alt="JB" />
+                      JavaBlueprints
+                    </span>
+                  ) : (
+                    panelLabels[panel]
+                  )}
                 </button>
               ))}
           </div>
+          {group.active === "navigation" && (
+            <button
+              className="workspace-panel-action"
+              aria-label={
+                c.collapsedNavigation
+                  ? "Развернуть навигацию"
+                  : "Свернуть навигацию"
+              }
+              onClick={c.toggleNavigation}
+            >
+              {c.collapsedNavigation ? (
+                <ChevronDown size={13} />
+              ) : (
+                <ChevronUp size={13} />
+              )}
+            </button>
+          )}
           <button
             className="workspace-panel-action"
             aria-label={
@@ -546,7 +632,7 @@ export default function Workspace({
       ) : null}
       {compact && (
         <nav className="workspace-mobile-panels">
-          <select
+          <Select
             aria-label="Открытая панель"
             value={focus ?? "graph"}
             onChange={(e) => void c.reveal(e.target.value as PanelId)}
@@ -556,7 +642,7 @@ export default function Workspace({
                 {panelLabels[p]}
               </option>
             ))}
-          </select>
+          </Select>
         </nav>
       )}
       <div className="workspace-layout">
@@ -694,7 +780,7 @@ function MovePanelMenu({
       <div className="workspace-move-popup">
         <label>
           Рядом с панелью
-          <select
+          <Select
             aria-label="Панель назначения"
             value={selected}
             onChange={(e) => setTarget(e.target.value)}
@@ -704,11 +790,11 @@ function MovePanelMenu({
                 {panelLabels[g.active]}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label>
           Расположение
-          <select
+          <Select
             aria-label="Способ перемещения"
             value={edge}
             onChange={(e) => setEdge(e.target.value as DropEdge)}
@@ -729,7 +815,7 @@ function MovePanelMenu({
                 }
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <button
           disabled={!selected || !canMove(selected, edge)}

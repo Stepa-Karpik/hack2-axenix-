@@ -114,7 +114,7 @@ async function fixture(page: Page, text = source) {
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const analysis = (
@@ -122,7 +122,7 @@ async function fixture(page: Page, text = source) {
       await page.request.get(base + "/revisions/" + original.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
   return { id, base, original, analysis };
 }
 async function done(request: APIRequestContext, base: string, id: string) {
@@ -158,13 +158,15 @@ test("membership recommendation compiles a detached index and applies only after
     .locator('[data-optimization="OPT-MEMBERSHIP-001"]')
     .getByRole("button", { name: "Открыть изменение", exact: true })
     .click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "optimize_membership",
-  );
-  await expect(page.getByLabel("Цель изменения")).toHaveValue(
-    "preserve_behavior",
-  );
-  await expect(page.getByLabel("Цель изменения")).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "optimize_membership");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toHaveAttribute("data-value", "preserve_behavior");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toBeDisabled();
   await expect(page.getByLabel("Условия оптимизации")).toContainText(
     "дополнительной памяти",
   );
@@ -180,17 +182,17 @@ test("membership recommendation compiles a detached index and applies only after
       y: Math.min(20, loopBox.height / 2),
     },
   });
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "insert_statement",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "insert_statement");
   await panel.getByRole("tab", { name: /^Рекомендации/ }).click();
   await panel
     .locator('[data-optimization="OPT-MEMBERSHIP-001"]')
     .getByRole("button", { name: "Открыть изменение", exact: true })
     .click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "optimize_membership",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "optimize_membership");
   await setTheme(page, "dark");
   await page.screenshot({
     path: info.outputPath("membership-assumptions-dark.png"),

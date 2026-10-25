@@ -8,7 +8,7 @@ import {
   ProductBrand,
   useAccount,
 } from "./Account";
-import { ThemeToggle } from "./theme";
+import type { ReactNode } from "react";
 type AuthMode =
   "login" | "register" | "forgot-password" | "reset-password" | "verify-email";
 const headings: Record<AuthMode, string> = {
@@ -18,7 +18,13 @@ const headings: Record<AuthMode, string> = {
   "reset-password": "Новый пароль",
   "verify-email": "Подтвердите почту",
 };
-export default function AccountAuth({ mode }: { mode: AuthMode }) {
+export default function AccountAuth({
+  mode,
+  githubLogin,
+}: {
+  mode: AuthMode;
+  githubLogin?: ReactNode;
+}) {
   const { refresh } = useAccount();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -94,7 +100,6 @@ export default function AccountAuth({ mode }: { mode: AuthMode }) {
     <div className="product-page auth-page">
       <header className="product-header">
         <ProductBrand />
-        <ThemeToggle />
       </header>
       <main className="auth-layout">
         <section className="auth-story">
@@ -137,6 +142,7 @@ export default function AccountAuth({ mode }: { mode: AuthMode }) {
         <section className="auth-form-panel">
           <div className="auth-form-wrap">
             <h2>{headings[mode]}</h2>
+            {mode === "login" && githubLogin}
             <p className="product-muted">
               {mode === "login"
                 ? "Продолжите работу со своими проектами."

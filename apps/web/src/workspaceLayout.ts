@@ -7,6 +7,8 @@ export const panelIds = [
   "console",
   "tests",
   "changes",
+  "history",
+  "navigation",
 ] as const;
 export type PanelId = (typeof panelIds)[number];
 export const panelLabels: Record<PanelId, string> = {
@@ -18,6 +20,8 @@ export const panelLabels: Record<PanelId, string> = {
   console: "Консоль",
   tests: "Тесты",
   changes: "Изменения",
+  history: "История",
+  navigation: "JavaBlueprints",
 };
 export type Group = {
   type: "group";
@@ -53,7 +57,7 @@ const split = (
   first: LayoutNode,
   second: LayoutNode,
 ): Split => ({ type: "split", id, axis, ratio, first, second });
-export function defaultLayout(
+function baseLayout(
   preset: "default" | "code" | "review" = "default",
 ): WorkspaceLayout {
   if (preset === "code")
@@ -126,6 +130,35 @@ export function defaultLayout(
     ),
   };
 }
+export function defaultLayout(
+  preset: "default" | "code" | "review" = "default",
+): WorkspaceLayout {
+  const layout = baseLayout(preset);
+  function add(node: LayoutNode): LayoutNode {
+    if (node.type === "split")
+      return { ...node, first: add(node.first), second: add(node.second) };
+    if (!node.tabs.includes("project")) return node;
+    const project = { ...node, tabs: [...node.tabs, "history" as PanelId] };
+    return preset === "default"
+      ? split(
+          "navigation-split",
+          "vertical",
+          0.25,
+          group("navigation", ["navigation"]),
+          project,
+        )
+      : { ...project, tabs: [...project.tabs, "navigation" as PanelId] };
+  }
+  return {
+    ...layout,
+    root: add(layout.root),
+    hidden: [
+      ...(layout.hidden ?? []),
+      "history",
+      ...(preset === "default" ? [] : ["navigation" as PanelId]),
+    ],
+  };
+}
 export function groups(node: LayoutNode): Group[] {
   return node.type === "group"
     ? [node]
@@ -158,7 +191,10 @@ export function visibleRoot(layout: WorkspaceLayout): LayoutNode {
 export function activePanels(layout: WorkspaceLayout): PanelId[] {
   return groups(visibleRoot(layout)).map((g) => g.active);
 }
-export function validateLayout(value: unknown): value is WorkspaceLayout {
+function validateLayoutShape(
+  value: unknown,
+  expected: readonly PanelId[],
+): value is WorkspaceLayout {
   if (
     !value ||
     typeof value !== "object" ||
@@ -204,8 +240,8 @@ export function validateLayout(value: unknown): value is WorkspaceLayout {
   const l = value as WorkspaceLayout;
   return (
     valid(l.root, 0) &&
-    panels.size === panelIds.length &&
-    panelIds.every((panel) => panels.has(panel)) &&
+    panels.size === expected.length &&
+    expected.every((panel) => panels.has(panel)) &&
     (l.hidden === undefined ||
       (Array.isArray(l.hidden) &&
         new Set(l.hidden).size === l.hidden.length &&
@@ -213,12 +249,44 @@ export function validateLayout(value: unknown): value is WorkspaceLayout {
         l.hidden.every((p) => panelIds.includes(p) && panels.has(p))))
   );
 }
+export function validateLayout(value: unknown): value is WorkspaceLayout {
+  return validateLayoutShape(value, panelIds);
+}
+export function migrateLayout(value: unknown): WorkspaceLayout | null {
+  if (validateLayout(value)) return value;
+  // Only the two explicitly added utilities may be missing. All legacy
+  // geometry, active tabs and hidden state are retained byte-for-byte.
+  const legacy = panelIds.filter((p) => p !== "history" && p !== "navigation");
+  for (const optional of [[], ["history"], ["navigation"]] as PanelId[][]) {
+    if (!validateLayoutShape(value, [...legacy, ...optional])) continue;
+    const old = value as WorkspaceLayout;
+    const missing = (["history", "navigation"] as PanelId[]).filter(
+      (p) => !optional.includes(p),
+    );
+    const target =
+      groups(old.root).find((g) => g.tabs.includes("project")) ??
+      groups(old.root)[0];
+    const append = (n: LayoutNode): LayoutNode =>
+      n.type === "split"
+        ? { ...n, first: append(n.first), second: append(n.second) }
+        : n.id === target.id
+          ? { ...n, tabs: [...n.tabs, ...missing] }
+          : n;
+    const next = {
+      ...old,
+      root: append(old.root),
+      hidden: [...(old.hidden ?? []), ...missing],
+    };
+    return validateLayout(next) ? next : null;
+  }
+  return null;
+}
 export function readLayout(projectId: string): WorkspaceLayout {
   try {
     const raw = localStorage.getItem(layoutKey(projectId));
     if (raw !== null) {
       const value: unknown = JSON.parse(raw);
-      return validateLayout(value) ? value : defaultLayout();
+      return migrateLayout(value) ?? defaultLayout();
     }
   } catch {
     return defaultLayout();
@@ -229,7 +297,8 @@ export function readLayout(projectId: string): WorkspaceLayout {
       localStorage.getItem("java-blueprints:workspace:v1:" + projectId) ??
         "null",
     );
-    if (validateLayout(previous)) {
+    const upgraded = migrateLayout(previous);
+    if (upgraded) {
       const oldDefault = split(
         "root",
         "horizontal",
@@ -263,7 +332,7 @@ export function readLayout(projectId: string): WorkspaceLayout {
       );
       return JSON.stringify(previous.root) === JSON.stringify(oldDefault)
         ? defaultLayout()
-        : previous;
+        : upgraded;
     }
     const legacy = JSON.parse(
       localStorage.getItem("java-blueprints:view:" + projectId) ?? "null",

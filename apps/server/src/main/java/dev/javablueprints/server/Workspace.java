@@ -242,9 +242,10 @@ public class Workspace {
             expected);
     if (n != 1) throw new ApiError(409, "REVISION_CONFLICT", "Project head changed");
     db.update(
-        "INSERT INTO audit_events(project_id,event,entity_id) VALUES(?,'head_changed',?)",
+        "INSERT INTO audit_events(project_id,event,entity_id,actor_id) VALUES(?,'head_changed',?,?)",
         uuid(p),
-        uuid(next));
+        uuid(next),
+        currentActor() == null ? null : uuid(currentActor()));
   }
 
   Map<String, String> files(Map<String, Object> rev) {

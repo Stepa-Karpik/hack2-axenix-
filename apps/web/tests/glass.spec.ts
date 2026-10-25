@@ -71,14 +71,20 @@ test("glass material, uncluttered dock, real output and restored windows", async
   ).toBe("rgb(0, 0, 0)");
   const material = await page
     .locator('[data-tile-panel="code"]')
-    .evaluate((el) => ({
-      bg: getComputedStyle(el).backgroundColor,
-      filter: getComputedStyle(el).backdropFilter,
-      shadow: getComputedStyle(el).boxShadow,
-    }));
+    .evaluate((el) => {
+      const style = getComputedStyle(el);
+      const pixel = document.createElement("canvas").getContext("2d")!;
+      pixel.fillStyle = style.backgroundColor;
+      pixel.fillRect(0, 0, 1, 1);
+      return {
+        bg: [...pixel.getImageData(0, 0, 1, 1).data],
+        filter: style.backdropFilter,
+        shadow: style.boxShadow,
+      };
+    });
   expect(material).toEqual({
-    bg: "rgba(5, 5, 5, 0.84)",
-    filter: "blur(18px)",
+    bg: [5, 5, 5, 224],
+    filter: "blur(24px) saturate(1.1)",
     shadow: "none",
   });
   const dock = (await page.locator(".workspace-dock").boundingBox())!;
@@ -91,7 +97,9 @@ test("glass material, uncluttered dock, real output and restored windows", async
     expect(r.y + r.height).toBeLessThan(dock.y);
   }
   await page.keyboard.press("Control+k");
-  await expect(page.getByLabel("Поиск файлов и методов")).toBeFocused();
+  await expect(
+    page.getByRole("combobox", { name: "Поиск по проекту" }),
+  ).toBeFocused();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Запуск", exact: true }).click();
   await page.getByLabel("Класс с main").fill("Main");

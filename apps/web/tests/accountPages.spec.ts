@@ -1,5 +1,7 @@
+import { chooseOption } from "./selectControl";
 import { test, expect } from "@playwright/test";
 import { headers } from "./fileFixtures";
+import { revealPanel } from "./flowAssertions";
 
 test.beforeEach(async ({ page }) => {
   const session = (await (await page.request.get("/api/v1/session")).json())
@@ -117,16 +119,27 @@ test("real account login, profile save, friendship and explicit local workspace"
     await page.getByRole("button", { name: "Поделиться", exact: true }).click();
     const access = page.getByRole("dialog", { name: "Доступ к проекту" });
     await expect(access).toBeVisible();
-    await access.getByLabel("Видимость проекта").selectOption("public");
-    await expect(access.getByLabel("Видимость проекта")).toBeEnabled();
+    await chooseOption(
+      access.getByRole("combobox", { name: "Видимость проекта" }),
+      "public",
+    );
+    await expect(
+      access.getByRole("combobox", { name: "Видимость проекта" }),
+    ).toBeEnabled();
     const beforeInvite = (
       await (await secondPage.request.get("/api/v1/projects")).json()
     ).data;
     expect(beforeInvite.map((p: { id: string }) => p.id)).not.toContain(
       project.id,
     );
-    await access.getByLabel("Друг для приглашения").selectOption(peer);
-    await access.getByLabel("Роль участника").selectOption("editor");
+    await chooseOption(
+      access.getByRole("combobox", { name: "Друг для приглашения" }),
+      peer,
+    );
+    await chooseOption(
+      access.getByRole("combobox", { name: "Роль участника" }),
+      "editor",
+    );
     await access
       .getByRole("button", { name: "Пригласить", exact: true })
       .click();
@@ -146,12 +159,20 @@ test("real account login, profile save, friendship and explicit local workspace"
         "Вам доступно редактирование. Доступом управляет владелец.",
       ),
     ).toBeVisible();
-    await expect(secondPage.getByLabel("Видимость проекта")).toHaveCount(0);
+    await expect(
+      secondPage.getByRole("combobox", { name: "Видимость проекта" }),
+    ).toHaveCount(0);
     await access
       .getByRole("button", { name: "Убрать доступ", exact: true })
       .click();
-    await access.getByLabel("Друг для приглашения").selectOption(peer);
-    await access.getByLabel("Роль участника").selectOption("viewer");
+    await chooseOption(
+      access.getByRole("combobox", { name: "Друг для приглашения" }),
+      peer,
+    );
+    await chooseOption(
+      access.getByRole("combobox", { name: "Роль участника" }),
+      "viewer",
+    );
     await access
       .getByRole("button", { name: "Пригласить", exact: true })
       .click();
@@ -174,7 +195,7 @@ test("real account login, profile save, friendship and explicit local workspace"
       )
         mutations.push(request.url());
     });
-    await secondPage.locator("#project-history > summary").click();
+    await revealPanel(secondPage, "history", "История");
     const restore = secondPage
       .getByRole("button", { name: /^Восстановить версию/ })
       .first();

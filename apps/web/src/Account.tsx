@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode, MouseEvent } from "react";
 import { api, ApiError, setSessionCsrf } from "./api";
-import { ThemeToggle } from "./theme";
+import "./account-pages.css";
 export interface AccountUser {
   id: string;
   username: string;
@@ -18,7 +18,23 @@ export interface AccountSession {
     registration: boolean;
     emailDelivery: boolean;
     legacyGuestWorkspace: boolean;
+    projectCreation?: boolean;
+    projectExport?: boolean;
   };
+}
+export function canCreateProjects(session: AccountSession | null) {
+  return (
+    !!session &&
+    (session.capabilities.projectCreation ??
+      (!!session.user || session.capabilities.legacyGuestWorkspace))
+  );
+}
+export function canExportProjects(session: AccountSession | null) {
+  return (
+    !!session &&
+    (session.capabilities.projectExport ??
+      (!!session.user || session.capabilities.legacyGuestWorkspace))
+  );
 }
 const AccountContext = createContext<{
   session: AccountSession | null;
@@ -72,6 +88,7 @@ const accountMessages: Record<string, string> = {
   SMTP_UNAVAILABLE: "Отправка писем пока недоступна. Попробуйте позже.",
   RATE_LIMITED: "Слишком много попыток. Попробуйте через 15 минут.",
   ACCESS_DENIED: "У вас нет доступа к этому действию.",
+  PIN_OWNER_REQUIRED: "Закреплять можно только собственные проекты.",
   OWNER_REQUIRED: "Доступом к проекту управляет его владелец.",
   FRIEND_REQUIRED: "Сначала добавьте этого пользователя в друзья.",
   ALREADY_FRIENDS: "Вы уже в друзьях.",
@@ -130,11 +147,10 @@ export function AccountNav() {
   const { session, loading } = useAccount();
   return (
     <nav className="account-nav" aria-label="Аккаунт">
-      <ThemeToggle />
       {session?.user ? (
         <>
           <PageLink to="/friends">Друзья</PageLink>
-          <PageLink to="/settings">Настройки</PageLink>
+          <PageLink to="/settings/profile">Настройки</PageLink>
           <PageLink
             className="account-avatar-link"
             to={"/u/" + encodeURIComponent(session.user.username)}
@@ -169,7 +185,10 @@ export function ProductShell({ children }: { children: ReactNode }) {
           <button onClick={() => void refresh()}>Повторить</button>
         </div>
       )}
-      {children}
+      <div className="product-body">
+        <ProductSidebar />
+        <div className="product-content">{children}</div>
+      </div>
     </div>
   );
 }
@@ -182,5 +201,36 @@ export function SignedInRequired() {
         Войти
       </PageLink>
     </div>
+  );
+}
+
+export function ProductSidebar({ active }: { active?: string }) {
+  const { session } = useAccount();
+  const path = active ?? location.pathname;
+  const links = [
+    ["/", "Проекты"],
+    ...(session?.user
+      ? [["/u/" + encodeURIComponent(session.user.username), "Мой профиль"]]
+      : []),
+    ["/settings/profile", "Профиль"],
+    ["/settings/security", "Безопасность"],
+    ["/settings/appearance", "Оформление"],
+    ["/settings/friends", "Друзья"],
+    ["/settings/integrations", "Интеграции"],
+  ];
+  return (
+    <aside className="product-sidebar" data-tour="navigation">
+      <nav aria-label="Разделы приложения">
+        {links.map(([to, label]) => (
+          <PageLink
+            key={to}
+            to={to}
+            className={path === to ? "active" : undefined}
+          >
+            {label}
+          </PageLink>
+        ))}
+      </nav>
+    </aside>
   );
 }

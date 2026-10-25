@@ -6,7 +6,7 @@ test("Monaco Ctrl+S cancels browser save, publishes once and retains drafts duri
 }) => {
   const { projectId, base, original } = await fixture(page.request);
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   const editor = page.locator(".monaco-editor textarea.inputarea");
   await editor.focus();
   await page.keyboard.press("Control+End");
@@ -104,7 +104,7 @@ test("confirmed file and folder deletion preserves other dirty files, tabs and h
   expect(seeded.ok()).toBeTruthy();
   const before = (await seeded.json()).data;
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+End");
   await page.keyboard.insertText("\n// retain other dirty file\n");
@@ -161,7 +161,7 @@ test("a stale delete keeps the current tab and local draft when project CAS reje
 }) => {
   const { projectId, base, original } = await fixture(page.request);
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+End");
   await page.keyboard.insertText("\n// keep rejected deletion draft\n");

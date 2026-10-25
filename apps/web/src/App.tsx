@@ -1,5 +1,24 @@
+import ReportDownloads from "./ReportDownloads";
+import ImportReview from "./ImportReview";
+import type { ImportTree } from "./ImportReview";
+import { isSaveShortcut } from "./shortcuts";
+import ProjectSearch from "./ProjectSearch";
+import GuidedTour, { TargetSpotlight } from "./Spotlight";
+import GitHubSettings from "./GitHubSettings";
+import GitHubLoginButton from "./GitHubLoginButton";
+import GitHubImport from "./GitHubImport";
+import type { SearchHit } from "./searchIndex";
+import "./workspaceUX.css";
+import Select from "./Select";
 import ProjectAccess from "./ProjectAccess";
-import { AccountProvider, AccountNav, useAccount } from "./Account";
+import {
+  AccountProvider,
+  AccountNav,
+  ProductSidebar,
+  useAccount,
+  canCreateProjects,
+  canExportProjects,
+} from "./Account";
 import AccountAuth from "./AccountAuth";
 import ProfilePage from "./ProfilePage";
 import SettingsPage from "./SettingsPage";
@@ -20,7 +39,7 @@ import { useProjectList } from "./useProjectList";
 import "./projectList.css";
 import { testDuration, testReason } from "./testProgress";
 import LiveConsole from "./LiveConsole";
-import { ThemeToggle } from "./theme";
+
 import Workspace, { useWorkspace } from "./Workspace";
 import WorkspaceMenu from "./WorkspaceMenu";
 import { activePanels } from "./workspaceLayout";
@@ -131,6 +150,7 @@ interface WorkbenchView {
   methodId: string;
   methodIdentity?: ReturnType<typeof methodIdentity>;
   tabs?: string[];
+  overview?: boolean;
   methodSelections?: Record<string, ReturnType<typeof methodIdentity>>;
 }
 function readView(id: string): Partial<WorkbenchView> {
@@ -139,6 +159,7 @@ function readView(id: string): Partial<WorkbenchView> {
       localStorage.getItem("java-blueprints:view:" + id) ?? "{}",
     );
     return {
+      overview: typeof view?.overview === "boolean" ? view.overview : true,
       file: typeof view?.file === "string" ? view.file : undefined,
       methodId: typeof view?.methodId === "string" ? view.methodId : undefined,
       methodIdentity: view?.methodIdentity,
@@ -205,6 +226,14 @@ function AppRoutes() {
     addEventListener("popstate", change);
     return () => removeEventListener("popstate", change);
   }, []);
+  return (
+    <>
+      <RouteContent path={path} />
+      <GuidedTour path={path} />
+    </>
+  );
+}
+function RouteContent({ path }: { path: string }) {
   const match = path.match(/^\/projects\/([^/]+)(?:\/runs\/([^/]+))?\/?$/);
   const authModes = [
     "login",
@@ -216,9 +245,36 @@ function AppRoutes() {
   const authMode = authModes.find(
     (mode) => path === "/" + mode || path === "/auth/" + mode,
   );
-  if (authMode) return <AccountAuth key={authMode} mode={authMode} />;
-  if (path === "/settings" || path === "/account") return <SettingsPage />;
+  if (authMode)
+    return (
+      <AccountAuth
+        key={authMode}
+        mode={authMode}
+        githubLogin={authMode === "login" ? <GitHubLoginButton /> : undefined}
+      />
+    );
+  const section = path.match(
+    /^\/settings(?:\/(profile|security|appearance|friends|integrations))?\/?$/,
+  );
+  if (section || path === "/account")
+    return (
+      <SettingsPage
+        section={
+          (section?.[1] ?? "profile") as
+            "profile" | "security" | "appearance" | "friends" | "integrations"
+        }
+        integrations={<GitHubSettings />}
+      />
+    );
   if (path === "/friends") return <FriendsPage />;
+  const profileFriends = path.match(/^\/(?:u|profile)\/([^/]+)\/friends\/?$/);
+  if (profileFriends) {
+    let username = profileFriends[1];
+    try {
+      username = decodeURIComponent(username);
+    } catch {}
+    return <FriendsPage key={username} username={username} />;
+  }
   const profile = path.match(/^\/(?:u|profile)\/([^/]+)\/?$/);
   if (profile) {
     let username = profile[1];
@@ -235,10 +291,13 @@ function AppRoutes() {
 }
 function Projects() {
   const { session } = useAccount();
+  const mayCreate = canCreateProjects(session);
+  const legacyAvailable = session?.capabilities.legacyGuestWorkspace === true;
   const [scope, setScope] = useState<"account" | "legacy">("account");
   const list = useProjectList(
-    scope === "legacy" ? "legacy" : undefined,
+    scope === "legacy" && legacyAvailable ? "legacy" : undefined,
     session?.user?.id,
+    mayCreate,
   );
   const projects = list.rows,
     loading = list.loading;
@@ -246,12 +305,105 @@ function Projects() {
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const [githubChooser, setGithubChooser] = useState(false);
+  const [homePreview, setHomePreview] = useState<ImportTree | null>(null);
+  const homeRequest = useRef<{
+    projectKey: string;
+    revisionKey: string;
+    name: string;
+    projectId?: string;
+    tree: ImportTree;
+  } | null>(null);
+  const creatingImport = useRef(false),
+    homeActive = useRef(true);
+  const homeEpoch = useRef(0),
+    homeController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    homeEpoch.current++;
+    homeController.current?.abort();
+    homeRequest.current = null;
+    creatingImport.current = false;
+    setBusy(false);
+    setGithubChooser(false);
+    setHomePreview(null);
+  }, [session?.user?.id]);
+  useEffect(() => {
+    homeActive.current = true;
+    return () => {
+      homeActive.current = false;
+      homeEpoch.current++;
+      homeController.current?.abort();
+    };
+  }, []);
+  async function createFromGitHub(preview: ImportTree) {
+    if (!mayCreate || creatingImport.current) return;
+    creatingImport.current = true;
+    const epoch = homeEpoch.current,
+      controller = new AbortController();
+    homeController.current = controller;
+    const current = () =>
+      homeActive.current &&
+      homeEpoch.current === epoch &&
+      !controller.signal.aborted;
+    setBusy(true);
+    setError("");
+    const request = homeRequest.current ?? {
+      projectKey: crypto.randomUUID(),
+      revisionKey: crypto.randomUUID(),
+      name: name.trim() || "GitHub project",
+      tree: preview,
+    };
+    homeRequest.current = request;
+    try {
+      if (!request.projectId) {
+        const p = await api<Project>("/projects", {
+          method: "POST",
+          key: request.projectKey,
+          signal: controller.signal,
+          body: { name: request.name },
+        });
+        request.projectId = p.id;
+      }
+      if (!current()) return;
+      await api<Revision>(projectPath(request.projectId) + "/revisions", {
+        method: "POST",
+        key: request.revisionKey,
+        signal: controller.signal,
+        head: null,
+        body: {
+          files: request.tree.files,
+          directories: request.tree.directories,
+          importedPaths: request.tree.files.map((f) => f.path),
+          importedDirectories: request.tree.directories,
+        },
+      });
+      if (current()) navigate("/projects/" + request.projectId);
+    } catch (e) {
+      if (current()) setError(message(e));
+    } finally {
+      if (current()) {
+        creatingImport.current = false;
+        setBusy(false);
+      }
+      if (homeController.current === controller) homeController.current = null;
+    }
+  }
   async function create(sample = false, files?: FileList | null) {
+    if (!mayCreate || creatingImport.current) return;
+    creatingImport.current = true;
+    const ticket = homeEpoch.current;
+    const controller = new AbortController();
+    homeController.current = controller;
+    const current = () =>
+      homeActive.current &&
+      ticket === homeEpoch.current &&
+      !controller.signal.aborted;
     setBusy(true);
     setError("");
     try {
       const p = await api<Project>("/projects", {
         method: "POST",
+        signal: controller.signal,
         body: {
           name:
             name.trim() ||
@@ -260,6 +412,7 @@ function Projects() {
               : files?.[0]?.name.replace(/\.java$/, "") || "Новый проект"),
         },
       });
+      if (!current()) return;
       if (sample || files?.length) {
         const data = new FormData();
         if (sample)
@@ -273,19 +426,52 @@ function Projects() {
         data.append("languageProfileId", "java21-v1");
         await api<Revision>(projectPath(p.id) + "/imports", {
           method: "POST",
+          signal: controller.signal,
           head: null,
           body: data,
         });
       }
-      navigate("/projects/" + p.id);
+      if (current()) navigate("/projects/" + p.id);
     } catch (e) {
-      setError(message(e));
+      if (current()) setError(message(e));
     } finally {
-      setBusy(false);
+      if (current()) {
+        creatingImport.current = false;
+        setBusy(false);
+      }
+      if (homeController.current === controller) homeController.current = null;
     }
   }
+  if (session && !mayCreate)
+    return (
+      <div className="projects-page">
+        <ProductSidebar active="/" />
+        <header className="home-header">
+          <Brand />
+          <AccountNav />
+        </header>
+        <main className="project-main">
+          <div className="project-heading">
+            <h1>
+              Ваше рабочее пространство<span className="lime-dot">.</span>
+            </h1>
+          </div>
+          <p className="quiet">
+            Войдите, чтобы создавать проекты, сохранять изменения и запускать
+            Java.
+          </p>
+          <div className="github-actions">
+            <a className="primary" href="/login">
+              Войти
+            </a>
+            <a href="/register">Создать аккаунт</a>
+          </div>
+        </main>
+      </div>
+    );
   return (
     <div className="projects-page">
+      <ProductSidebar active="/" />
       <header className="home-header">
         <Brand />
         <AccountNav />
@@ -299,12 +485,12 @@ function Projects() {
           <button
             className="primary"
             onClick={() => input.current?.click()}
-            disabled={busy}
+            disabled={busy || !mayCreate}
           >
             <Icon name="upload" /> Импорт .java
           </button>
         </div>
-        {session?.user && (
+        {session?.user && legacyAvailable && (
           <div className="projects-scope" aria-label="Рабочее пространство">
             <button
               aria-pressed={scope === "account"}
@@ -325,6 +511,60 @@ function Projects() {
             </span>
           </div>
         )}
+        {githubChooser && (
+          <div className="modal-backdrop">
+            <section
+              className="modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Импорт из GitHub"
+            >
+              <button
+                disabled={busy}
+                onClick={() => {
+                  setGithubChooser(false);
+                  setHomePreview(null);
+                  homeRequest.current = null;
+                }}
+              >
+                Закрыть
+              </button>
+              {homePreview ? (
+                <ImportReview
+                  key={homeRequest.current?.projectKey ?? "preview"}
+                  preview={homeRequest.current?.tree ?? homePreview}
+                  busy={busy}
+                  locked={!!homeRequest.current}
+                  onBack={() => {
+                    if (homeRequest.current) {
+                      setError(
+                        "Повторите подтверждённый импорт; проект уже мог быть создан.",
+                      );
+                      return;
+                    }
+                    setHomePreview(null);
+                  }}
+                  onConfirm={(preview) => void createFromGitHub(preview)}
+                />
+              ) : (
+                <GitHubImport
+                  onPreview={(preview) => {
+                    homeRequest.current = null;
+                    setHomePreview(preview);
+                  }}
+                />
+              )}
+              {error && <p role="alert">{error}</p>}
+            </section>
+          </div>
+        )}
+        <button
+          className="github-project-import"
+          disabled={busy || !mayCreate}
+          onClick={() => setGithubChooser(true)}
+        >
+          Импорт из GitHub
+        </button>
         <div className="new-project">
           <label className="sr-only" htmlFor="project-name">
             Название проекта
@@ -336,7 +576,7 @@ function Projects() {
             placeholder="Название нового проекта"
             maxLength={120}
           />
-          <button onClick={() => void create()} disabled={busy}>
+          <button onClick={() => void create()} disabled={busy || !mayCreate}>
             Создать проект <Icon name="external" />
           </button>
         </div>
@@ -421,7 +661,7 @@ function Projects() {
         )}
         <button
           className="sample-row"
-          disabled={busy}
+          disabled={busy || !mayCreate}
           onClick={() => void create(true)}
         >
           <span className="sample-icon">
@@ -496,6 +736,23 @@ function Workbench({
   const [file, setFile] = useState(initialView.file ?? "");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
+  const [overview, setOverview] = useState(initialView.overview ?? true);
+  const [focusNode, setFocusNode] = useState<{
+    id: string;
+    request: number;
+  } | null>(null);
+  const [spotlight, setSpotlight] = useState<Element | null>(null);
+  const [githubImport, setGithubImport] = useState(false);
+  const [wideMenu, setWideMenu] = useState(
+    () => matchMedia("(min-width:981px)").matches,
+  );
+  const [menuExpanded, setMenuExpanded] = useState(false);
+  useEffect(() => {
+    const query = matchMedia("(min-width:981px)");
+    const update = () => setWideMenu(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
   const [requestedMethodId, setMethodId] = useState(initialView.methodId ?? "");
   const fileMethods =
     graph?.methods.filter((m) => m.sourceRange.filePath === file) ?? [];
@@ -564,6 +821,18 @@ function Workbench({
   const [referenceId, setReferenceId] = useState<string | null>(null);
   const [expression, setExpression] = useState("");
   const [operation, setOperation] = useState("");
+  const [insertionPreview, setInsertionPreview] = useState<{
+    nodeId: string;
+    request: number;
+  } | null>(null);
+  const insertionPreviewSequence = useRef(0);
+  function previewInsertion(nodeId: string | undefined) {
+    if (nodeId)
+      setInsertionPreview({
+        nodeId,
+        request: ++insertionPreviewSequence.current,
+      });
+  }
   const [position, setPosition] = useState("");
   const [template, setTemplate] = useState("statement");
   const [statement, setStatement] = useState(statementTemplates.statement);
@@ -603,6 +872,7 @@ function Workbench({
       localStorage.setItem(
         "java-blueprints:view:" + projectId,
         JSON.stringify({
+          overview,
           file,
           methodId,
           tabs,
@@ -613,7 +883,7 @@ function Workbench({
         }),
       );
     } catch {}
-  }, [projectId, file, methodId, tabs]);
+  }, [projectId, file, methodId, tabs, overview]);
   useEffect(() => {
     if (file && Object.hasOwn(files, file))
       setTabs((old) => (old.includes(file) ? old : [...old, file]));
@@ -1048,10 +1318,7 @@ function Workbench({
   ]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.code === "KeyS" || e.key.toLowerCase() === "s")
-      ) {
+      if (isSaveShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
         void save();
@@ -1065,7 +1332,10 @@ function Workbench({
           });
         else setDialog(kind);
       }
-      if (e.key === "Escape") {
+      if (
+        e.key === "Escape" &&
+        !(e.target as Element)?.closest?.('[role="listbox"]')
+      ) {
         setDialog(null);
         workspace.setMaximized(null);
       }
@@ -1144,10 +1414,36 @@ function Workbench({
     setMethodId(enclosing?.id ?? "");
     setMode("split");
   }
+  function chooseSearch(hit: SearchHit) {
+    if (!Object.hasOwn(files, hit.file)) return;
+    setFile(hit.file);
+    setRange(hit.range ?? null);
+    setReferenceId(null);
+    if (hit.methodId) setMethodId(hit.methodId);
+    if (hit.nodeId && !stale) {
+      const n = graph?.nodes.find((n) => n.id === hit.nodeId);
+      if (n) pickNode(n);
+      setFocusNode({ id: hit.nodeId, request: Date.now() });
+      void workspace.revealMany(["graph", "code"]).then(() =>
+        requestAnimationFrame(() => {
+          const node = Array.from(
+            document.querySelectorAll("[data-node-id]"),
+          ).find((el) => el.getAttribute("data-node-id") === hit.nodeId);
+          if (node) setSpotlight(node);
+        }),
+      );
+    } else {
+      setSelected(null);
+      if (hit.kind === "file") setOverview(true);
+      else if (hit.kind === "method") setOverview(false);
+      void workspace.reveal(hit.kind === "method" ? "graph" : "code");
+    }
+  }
   function pickNode(n: GraphNode) {
     if (stale || busy || saving || loadingRevision) return;
     setInspectorFocus((value) => value + 1);
     setSelected(n);
+    setMethodId(n.methodId);
     setReferenceId(
       bindingsActive && n.sourceRange
         ? (references.find(
@@ -1465,6 +1761,7 @@ function Workbench({
   });
   useEffect(() => {
     proposalEpoch.current++;
+    setInsertionPreview(null);
     setOperation(nodeOperations(selected)[0] ?? "");
     setPosition(selected?.insertionPositions?.[0] ?? "");
     setTemplate("statement");
@@ -1485,6 +1782,7 @@ function Workbench({
     setElseSource("{\n\n}");
     setProposal(null);
     if (dropEdit && dropEdit.nodeId === selected?.id) {
+      previewInsertion(selected.id);
       setOperation("insert_statement");
       setTemplate(dropEdit.kind);
       setStatement(statementTemplates[dropEdit.kind]);
@@ -1768,8 +2066,64 @@ function Workbench({
       setBusy(false);
     }
   }
+  async function repeatJob(previous: Job) {
+    if (
+      accessReadOnly ||
+      busy ||
+      ["queued", "running"].includes(previous.status)
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await api<Job>(base + "/runs/" + previous.id + "/repeat", {
+        method: "POST",
+      });
+      if (!mounted.current) return;
+      setJob(next);
+      setDock(next.type === "compare" ? "tests" : "output");
+      navigate(`/projects/${projectId}/runs/${next.id}`);
+    } catch (e) {
+      if (mounted.current) setError(message(e));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
+  function rerunButton(previous: Job | null | undefined) {
+    return previous && !["queued", "running"].includes(previous.status) ? (
+      <button
+        className="rerun-button"
+        disabled={accessReadOnly || busy || runnerAvailable === false}
+        onClick={() => void repeatJob(previous)}
+        title="Повторить сохранённую версию и параметры. Ответы интерактивной программе вводятся заново."
+      >
+        <Icon name="play" size={14} />
+        Запустить снова <small>{short(previous.revisionId)}</small>
+      </button>
+    ) : null;
+  }
   async function exportRevision(paths?: string[]) {
     if (!revision) return;
+    if (
+      paths?.length === 1 &&
+      revision.files.some((f) => f.path === paths[0])
+    ) {
+      const a = document.createElement("a");
+      a.href =
+        "/api/v1" +
+        base +
+        "/revisions/" +
+        revision.id +
+        "/download?path=" +
+        encodeURIComponent(paths[0]);
+      a.download = paths[0].split("/").pop()!;
+      a.click();
+      return;
+    }
+    if (!canExportProjects(accountSession)) {
+      setError("Войдите в аккаунт, чтобы скачать ZIP проекта.");
+      return;
+    }
     setBusy(true);
     try {
       const result = await api<{ downloadUrl: string }>(base + "/exports", {
@@ -1914,6 +2268,95 @@ function Workbench({
     );
   }
   const panels = {
+    navigation: (
+      <nav
+        className="workspace-navigation-content"
+        aria-label="Навигация проекта"
+      >
+        <button onClick={() => navigate("/")}>
+          <House size={17} />
+          Проекты
+        </button>
+        <button onClick={() => void workspace.reveal("graph")}>
+          <Icon name="file" size={17} />
+          Редактор
+        </button>
+        <button onClick={() => void workspace.reveal("history")}>
+          <History size={17} />
+          История
+        </button>
+      </nav>
+    ),
+    history: (
+      <section className="history-panel" id="project-history">
+        <div className="panel-caption">
+          ИСТОРИЯ{" "}
+          <button
+            title="Обновить историю"
+            aria-label="Обновить историю"
+            onClick={() => void refreshHistory()}
+          >
+            <Icon name="refresh" size={14} />
+          </button>
+        </div>
+        <div className="revision-list">
+          {historyRows.map((r, i) => (
+            <div className="revision-row" key={r.id}>
+              <button
+                disabled={inFlight}
+                className={revision?.id === r.id ? "current" : ""}
+                onClick={() => {
+                  if (dirty) {
+                    setError(
+                      "Локальная правка сохранена. Сначала сохраните её на сервер или скачайте черновик.",
+                    );
+                    return;
+                  }
+                  void openRevision(r.id);
+                }}
+              >
+                <span className="revision-dot" />
+                <span>
+                  {short(r.id)}{" "}
+                  <small>
+                    {r.id === project?.originalRevisionId
+                      ? "Исходная"
+                      : r.origin === "restore"
+                        ? "Восстановлена"
+                        : r.origin === "candidate"
+                          ? "Кандидат"
+                          : i === 0
+                            ? "Последняя"
+                            : new Date(r.createdAt).toLocaleTimeString(
+                                "ru-RU",
+                                {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                },
+                              )}
+                  </small>
+                </span>
+              </button>
+              {r.id !== project?.headRevisionId && (
+                <button
+                  className="restore-revision"
+                  aria-label={"Восстановить версию " + short(r.id)}
+                  title={
+                    dirty || conflict
+                      ? "Сначала сохраните локальную правку"
+                      : "Восстановить как новую версию"
+                  }
+                  disabled={accessReadOnly || inFlight || dirty || conflict}
+                  onClick={() => void restoreRevision(r.id)}
+                >
+                  Восстановить
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+    ),
     project: (
       <aside className="sidebar">
         <div className="project-root">
@@ -1923,13 +2366,14 @@ function Workbench({
         <ProjectExplorer
           snapshot={{ files, directories }}
           active={file}
-          search={search}
+          search=""
           methods={graph?.methods ?? []}
           methodsDisabled={stale || analyzing}
           methodId={methodId}
           disabled={inFlight || conflict || (!!file && !editorReady)}
           readOnly={readOnly}
           onOpen={(p) => {
+            setOverview(true);
             setMethodId(
               matchingMethod(graph?.methods ?? [], methodSelections.current[p])
                 ?.id ??
@@ -1944,6 +2388,7 @@ function Workbench({
           }}
           onMethod={(m) => {
             if (stale) return;
+            setOverview(false);
             setMethodId(m.id);
             selectedMethodIdentity.current = methodIdentity(m);
             methodSelections.current[m.sourceRange.filePath] =
@@ -1959,74 +2404,7 @@ function Workbench({
           onDownload={(p) => void exportRevision([p])}
           createCommand={createCommand}
         />
-        <details className="sidebar-bottom" id="project-history">
-          <summary className="panel-caption">
-            ИСТОРИЯ{" "}
-            <button
-              title="Обновить историю"
-              aria-label="Обновить историю"
-              onClick={() => void refreshHistory()}
-            >
-              <Icon name="refresh" size={14} />
-            </button>
-          </summary>
-          <div className="revision-list">
-            {historyRows.map((r, i) => (
-              <div className="revision-row" key={r.id}>
-                <button
-                  disabled={inFlight}
-                  className={revision?.id === r.id ? "current" : ""}
-                  onClick={() => {
-                    if (dirty) {
-                      setError(
-                        "Локальная правка сохранена. Сначала сохраните её на сервер или скачайте черновик.",
-                      );
-                      return;
-                    }
-                    void openRevision(r.id);
-                  }}
-                >
-                  <span className="revision-dot" />
-                  <span>
-                    {short(r.id)}{" "}
-                    <small>
-                      {r.id === project?.originalRevisionId
-                        ? "Исходная"
-                        : r.origin === "restore"
-                          ? "Восстановлена"
-                          : r.origin === "candidate"
-                            ? "Кандидат"
-                            : i === 0
-                              ? "Последняя"
-                              : new Date(r.createdAt).toLocaleTimeString(
-                                  "ru-RU",
-                                  {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  },
-                                )}
-                    </small>
-                  </span>
-                </button>
-                {r.id !== project?.headRevisionId && (
-                  <button
-                    className="restore-revision"
-                    aria-label={"Восстановить версию " + short(r.id)}
-                    title={
-                      dirty || conflict
-                        ? "Сначала сохраните локальную правку"
-                        : "Восстановить как новую версию"
-                    }
-                    disabled={accessReadOnly || inFlight || dirty || conflict}
-                    onClick={() => void restoreRevision(r.id)}
-                  >
-                    Восстановить
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </details>
+
         <div className="local-label" role="status" aria-live="polite">
           <span className={"connection-dot " + (dirty ? "unsaved" : "")} />
           {saving ? "Сохранение…" : dirty ? "Есть локальные изменения" : status}
@@ -2043,6 +2421,10 @@ function Workbench({
             draggable={!stale && !readOnly && !inFlight}
             onDragStart={(e) => {
               e.dataTransfer.setData("application/x-blueprint-block", kind);
+              e.dataTransfer.setData(
+                "application/x-blueprint-kind-" + kind,
+                "1",
+              );
               e.dataTransfer.effectAllowed = "copy";
             }}
             disabled={stale || readOnly || inFlight}
@@ -2052,6 +2434,7 @@ function Workbench({
                 return;
               }
               setOperation("insert_statement");
+              previewInsertion(selected.id);
               setTemplate(kind);
               setStatement(statementTemplates[kind]);
               if (!positions.includes(position))
@@ -2086,7 +2469,16 @@ function Workbench({
       >
         <div className="editor-caption">
           <span title={file}>СХЕМА · {file.split("/").pop()}</span>
-          <span>{method ? method.signature : "Выберите метод"}</span>
+          <span>
+            {overview
+              ? "Обзор проекта"
+              : method
+                ? method.signature
+                : "Выберите метод"}
+          </span>
+          <button onClick={() => setOverview((v) => !v)}>
+            {overview ? "Выбранный метод" : "Все методы"}
+          </button>
           {graph && (
             <span title={graph.revisionId}>
               Версия {short(graph.revisionId)}
@@ -2101,7 +2493,7 @@ function Workbench({
               : "Схема относится к предыдущей сохранённой версии; обновление ещё не завершено."}
           </p>
         )}
-        {graph && methodId ? (
+        {graph && (overview || methodId) ? (
           <FlowCanvas
             graph={graph}
             semantics={
@@ -2113,6 +2505,25 @@ function Workbench({
                 : undefined
             }
             methodId={methodId}
+            overview={overview}
+            focusNodeId={focusNode?.id}
+            focusRequest={focusNode?.request}
+            preview={
+              !stale &&
+              selected &&
+              insertionPreview?.nodeId === selected.id &&
+              operation === "insert_statement" &&
+              ["statement", "condition", "loop"].includes(template)
+                ? {
+                    kind: template as "statement" | "condition" | "loop",
+                    anchorNodeId: selected.id,
+                    position: position as
+                      "before" | "after" | "body_start" | "body_end",
+                    source: statement,
+                    request: insertionPreview.request,
+                  }
+                : null
+            }
             selected={selected?.id}
             onSelect={pickNode}
             projectId={projectId}
@@ -2332,7 +2743,8 @@ function Workbench({
               }),
             )}
             onSelectionChange={(selection) => {
-              if (busy || saving || treeSaving || loadingRevision || inFlight) return;
+              if (busy || saving || treeSaving || loadingRevision || inFlight)
+                return;
               if (!selection) {
                 setSelectionNotice("");
                 return;
@@ -2396,6 +2808,7 @@ function Workbench({
         )}
         <CodeInsights
           analysis={analysis}
+          sourceText={files[file]}
           file={file}
           methodId={methodId}
           focusKey={inspectorFocus}
@@ -2504,12 +2917,15 @@ function Workbench({
               {operations.length > 0 ? (
                 <div className="expression-form">
                   <label htmlFor="node-operation">Действие</label>
-                  <select
+                  <Select
                     id="node-operation"
                     value={operation}
                     disabled={inFlight || stale || readOnly}
                     onChange={(e) => {
                       setOperation(e.target.value);
+                      if (e.target.value === "insert_statement")
+                        previewInsertion(selected.id);
+                      else setInsertionPreview(null);
                       if (
                         [
                           "optimize_membership",
@@ -2526,7 +2942,7 @@ function Workbench({
                         {operationLabels[op]}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   {operation === "replace_expression" &&
                     editRange(selected) && (
                       <>
@@ -2561,11 +2977,14 @@ function Workbench({
                   {operation === "insert_statement" && (
                     <>
                       <label htmlFor="insert-position">Позиция</label>
-                      <select
+                      <Select
                         id="insert-position"
                         value={position}
                         disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setPosition(e.target.value)}
+                        onChange={(e) => {
+                          previewInsertion(selected.id);
+                          setPosition(e.target.value);
+                        }}
                       >
                         {positions.map((p) => (
                           <option key={p} value={p}>
@@ -2579,13 +2998,14 @@ function Workbench({
                             )[p] ?? p}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       <label htmlFor="statement-template">Шаблон</label>
-                      <select
+                      <Select
                         id="statement-template"
                         value={template}
                         disabled={inFlight || stale || readOnly}
                         onChange={(e) => {
+                          previewInsertion(selected.id);
                           setTemplate(e.target.value);
                           setStatement(statementTemplates[e.target.value]);
                         }}
@@ -2593,7 +3013,7 @@ function Workbench({
                         <option value="statement">Оператор</option>
                         <option value="condition">Условие</option>
                         <option value="loop">Цикл</option>
-                      </select>
+                      </Select>
                       <label htmlFor="statement-source">Java оператор</label>
                       <textarea
                         id="statement-source"
@@ -2601,7 +3021,10 @@ function Workbench({
                         rows={6}
                         spellCheck={false}
                         disabled={inFlight || stale || readOnly}
-                        onChange={(e) => setStatement(e.target.value)}
+                        onChange={(e) => {
+                          previewInsertion(selected.id);
+                          setStatement(e.target.value);
+                        }}
                       />
                     </>
                   )}
@@ -2613,7 +3036,7 @@ function Workbench({
                       <label htmlFor="move-target">
                         Относительно оператора
                       </label>
-                      <select
+                      <Select
                         id="move-target"
                         value={targetNodeId}
                         disabled={inFlight || stale || readOnly}
@@ -2635,9 +3058,9 @@ function Workbench({
                             {`Строка ${n.sourceRange!.startLine} · ${nodeCaption(n).split("\n")[0].slice(0, 90)}`}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       <label htmlFor="move-position">Позиция перемещения</label>
-                      <select
+                      <Select
                         id="move-position"
                         value={movePosition}
                         disabled={inFlight || stale || readOnly || !target}
@@ -2653,7 +3076,7 @@ function Workbench({
                               : "После оператора"}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       {!targets.length && (
                         <p className="small quiet">
                           В этом блоке нет доступных операторов для перемещения.
@@ -2751,7 +3174,7 @@ function Workbench({
                         onChange={(e) => setExtractedMethodName(e.target.value)}
                       />
                       <label htmlFor="extraction-end">Последний оператор</label>
-                      <select
+                      <Select
                         id="extraction-end"
                         value={extractionEndNodeId}
                         disabled={inFlight || stale || readOnly}
@@ -2763,7 +3186,7 @@ function Workbench({
                             {n.label.slice(0, 90)}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                       {!validMethodName(extractedMethodName) && (
                         <p className="small quiet" role="status">
                           Укажите допустимое имя Java-метода.
@@ -2788,7 +3211,7 @@ function Workbench({
                     </div>
                   )}
                   <label htmlFor="change-intent">Цель изменения</label>
-                  <select
+                  <Select
                     id="change-intent"
                     value={
                       [
@@ -2817,7 +3240,7 @@ function Workbench({
                     <option value="preserve_behavior">
                       Сохранить поведение
                     </option>
-                  </select>
+                  </Select>
                   <button
                     className="primary wide"
                     disabled={
@@ -2894,6 +3317,7 @@ function Workbench({
     console: (
       <div className="dock-content" data-source-file={file}>
         {resultContext("run", runJob)}
+        {rerunButton(runJob)}
         <>
           {runJob?.type === "run" &&
             (dirty ||
@@ -2919,6 +3343,7 @@ function Workbench({
               projectId={projectId}
               jobId={runJob.id}
               live={runJob.live}
+              status={runJob.status}
               readOnly={accessReadOnly}
             />
           ) : runReport ? (
@@ -2957,6 +3382,7 @@ function Workbench({
     tests: (
       <div className="dock-content" data-source-file={file}>
         {resultContext("compare", testJob)}
+        {rerunButton(testJob)}
         {testJob?.type === "compare" &&
         (!testReport?.testResults ||
           ["queued", "running"].includes(testJob.status)) ? (
@@ -3188,7 +3614,20 @@ function Workbench({
       data-readonly={accessReadOnly || undefined}
     >
       <header className="toolbar glass-topbar">
-        <details className="sidebar-command-menu global-command-menu">
+        <ProjectSearch
+          files={files}
+          graph={stale ? null : graph}
+          inputRef={searchInput}
+          onSelect={chooseSearch}
+        />
+        <details
+          open={wideMenu || menuExpanded}
+          onToggle={(e) => {
+            if (e.target === e.currentTarget && !wideMenu)
+              setMenuExpanded(e.currentTarget.open);
+          }}
+          className="sidebar-command-menu global-command-menu"
+        >
           <summary>
             Меню проекта
             <ChevronDown size={14} />
@@ -3238,32 +3677,19 @@ function Workbench({
                 dirty ||
                 busy ||
                 !Object.keys(files).some((p) => p.endsWith(".java")),
-              exportDisabled: !revision || busy,
+              exportDisabled:
+                !revision || busy || !canExportProjects(accountSession),
               importDisabled: busy || readOnly,
               stopDisabled: !job || !["queued", "running"].includes(job.status),
             }}
           />
         </details>
-        <label className="global-search">
-          <Icon name="search" size={17} />
-          <input
-            ref={searchInput}
-            aria-label="Поиск файлов и методов"
-            placeholder="Поиск по проекту"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              if (e.target.value) void workspace.reveal("project");
-            }}
-          />
-          <kbd>Ctrl K</kbd>
-        </label>
         <span className="toolbar-spacer" />
         <button
           className="local-presence"
           title="Аккаунт"
           aria-label="Открыть настройки аккаунта"
-          onClick={() => navigate("/settings")}
+          onClick={() => navigate("/settings/profile")}
         >
           <CircleUserRound size={23} />
         </button>
@@ -3289,6 +3715,12 @@ function Workbench({
           project={project}
           onClose={() => setShowAccess(false)}
           onUpdate={setProject}
+        />
+      )}
+      {spotlight && (
+        <TargetSpotlight
+          target={spotlight}
+          onClose={() => setSpotlight(null)}
         />
       )}
       <main className="workbench-body">
@@ -3359,53 +3791,6 @@ function Workbench({
                   </small>
                 )}
               </p>
-            </>
-          }
-          sidebarChrome={
-            <>
-              <Brand />
-              <nav
-                className="sidebar-navigation"
-                aria-label="Навигация проекта"
-              >
-                <button onClick={() => navigate("/")}>
-                  <House size={19} />
-                  Проекты
-                </button>
-                <button
-                  className="active"
-                  onClick={() => void workspace.reveal("graph")}
-                >
-                  <Icon name="file" size={19} />
-                  Редактор
-                </button>
-                <button
-                  onClick={() => {
-                    void workspace
-                      .reveal("project")
-                      .then(() =>
-                        document
-                          .getElementById("project-history")
-                          ?.setAttribute("open", ""),
-                      );
-                  }}
-                >
-                  <History size={19} />
-                  История
-                </button>
-                <details className="sidebar-settings">
-                  <summary>
-                    <Settings2 size={19} />
-                    Настройки
-                  </summary>
-                  <div className="sidebar-settings-body">
-                    <ThemeToggle />
-                    <button onClick={() => void workspace.preset("default")}>
-                      Сбросить расположение
-                    </button>
-                  </div>
-                </details>
-              </nav>
             </>
           }
         />
@@ -3592,7 +3977,7 @@ function Workbench({
         {...({ webkitdirectory: "" } as Record<string, string>)}
         onChange={(e) => void importFiles(e.target.files)}
       />
-      {(importChooser || importPreview) && (
+      {(importChooser || importPreview || githubImport) && (
         <div className="modal-backdrop">
           <section
             className="modal import-modal"
@@ -3608,12 +3993,26 @@ function Workbench({
                 onClick={() => {
                   setImportChooser(false);
                   setImportPreview(null);
+                  setGithubImport(false);
                 }}
               >
                 ×
               </button>
             </div>
-            {importPreview ? (
+            {githubImport && !importPreview ? (
+              <GitHubImport
+                onClose={() => setGithubImport(false)}
+                onPreview={(preview) => {
+                  setImportPreview(preview);
+                  setImportSelected([
+                    ...preview.files.map((f) => f.path),
+                    ...preview.directories,
+                  ]);
+                  setGithubImport(false);
+                  setImportChooser(false);
+                }}
+              />
+            ) : importPreview ? (
               <>
                 <p className="small quiet">
                   Совпадающие пути не перезаписываются.
@@ -3689,6 +4088,7 @@ function Workbench({
                 >
                   Выбрать папку
                 </button>
+                <button onClick={() => setGithubImport(true)}>GitHub</button>
                 <p className="small quiet">
                   Текстовые файлы UTF-8. Анализ и запуск доступны для Java.
                   Пустые папки можно импортировать из ZIP или создать в проекте.
@@ -3958,7 +4358,7 @@ function RunDialog({
               <div className="version-pair">
                 <label>
                   Базовая версия
-                  <select
+                  <Select
                     value={baseRevision}
                     onChange={(e) => setBaseRevision(e.target.value)}
                   >
@@ -3970,12 +4370,12 @@ function RunDialog({
                           : ""}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
                 <span>→</span>
                 <label>
                   Кандидат
-                  <select
+                  <Select
                     value={candidate}
                     onChange={(e) => setCandidate(e.target.value)}
                   >
@@ -3985,7 +4385,7 @@ function RunDialog({
                         {r.id === project.headRevisionId ? " · текущая" : ""}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               </div>
               <TestCasesEditor
@@ -4070,14 +4470,18 @@ function ReportView({
   }, [projectId, report.revisionId]);
   if (report.revisionId)
     return (
-      <SingleRunOutput
-        report={report}
-        sourceHash={sourceHash}
-        cancelled={cancelled}
-      />
+      <>
+        <ReportDownloads report={report} />
+        <SingleRunOutput
+          report={report}
+          sourceHash={sourceHash}
+          cancelled={cancelled}
+        />
+      </>
     );
   return (
     <div className="report">
+      <ReportDownloads report={report} />
       {report.revisionId && (
         <div className="run-provenance">
           <span className="run-revision" title={report.revisionId}>

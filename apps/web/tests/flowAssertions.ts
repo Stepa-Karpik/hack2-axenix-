@@ -1,7 +1,17 @@
+import { chooseOption } from "./selectControl";
 import { expect, type Page } from "@playwright/test";
 export async function revealPanel(page: Page, id: string, label: string) {
-  const chooser = page.getByLabel("Открытая панель");
-  if (await chooser.isVisible()) await chooser.selectOption(id);
+  if (id === "graph") {
+    await page
+      .locator(".workspace-dock")
+      .getByRole("button", { name: "Схема", exact: true })
+      .click();
+    await expect(page.locator(".graph-pane")).toBeVisible();
+    await expect(page.locator(".react-flow__pane")).toBeVisible();
+    return;
+  }
+  const chooser = page.getByRole("combobox", { name: "Открытая панель" });
+  if (await chooser.isVisible()) await chooseOption(chooser, id);
   else {
     const tab = page.locator(`[data-panel-tab="${id}"]`);
     if (await tab.count()) await tab.click();
@@ -95,9 +105,7 @@ export async function assertRoutes(page: Page) {
     .locator("g[data-shortcut-source]")
     .evaluateAll((groups) => {
       const boxes = Array.from(
-        document.querySelectorAll(
-          ".react-flow__node:not(.react-flow__node-loopArea)",
-        ),
+        document.querySelectorAll(".react-flow__node-blueprint"),
       ).map((node) => ({
         id: node.getAttribute("data-id"),
         r: node.getBoundingClientRect(),
@@ -197,24 +205,32 @@ export async function assertDistinctFalseRoutes(
   expect(overlaps).toEqual([]);
 }
 
-export async function setTheme(page: Page, theme: string) {
-  if ((await page.locator("html").getAttribute("data-theme")) === theme) return;
-  const settings = page.locator(".sidebar-settings");
-  if (await settings.count()) {
-    if (!(await settings.isVisible()))
-      await revealPanel(page, "project", "Проект");
-    if ((await settings.getAttribute("open")) === null)
-      await settings.locator(":scope > summary").click();
+export async function setTheme(page: Page, theme: "light" | "dark") {
+  if ((await page.locator("html").getAttribute("data-theme-preset")) === theme)
+    return;
+  const appearance = await page.context().newPage();
+  try {
+    await appearance.goto(new URL("/settings/appearance", page.url()).href);
+    const preset = appearance.locator(".theme-options").getByRole("button", {
+      name: theme === "dark" ? "Тёмная" : "Светлая",
+      exact: true,
+    });
+    await expect(preset).toBeVisible();
+    await preset.click();
+    await expect(preset).toHaveAttribute("aria-pressed", "true");
+    await expect(appearance.locator("html")).toHaveAttribute(
+      "data-theme-preset",
+      theme,
+    );
+    // The production provider receives the browser's native cross-tab storage
+    // event. The original page and its in-flight proposal/editor stay mounted.
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-theme-preset",
+      theme,
+    );
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  } finally {
+    await appearance.close();
+    if (!page.isClosed()) await page.bringToFront();
   }
-  await page
-    .getByRole("button", {
-      name: theme === "dark" ? "Включить тёмную тему" : "Включить светлую тему",
-    })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  if (
-    (await settings.count()) &&
-    (await settings.getAttribute("open")) !== null
-  )
-    await settings.locator(":scope > summary").click();
 }

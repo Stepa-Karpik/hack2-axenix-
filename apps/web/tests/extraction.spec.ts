@@ -36,7 +36,7 @@ async function fixture(page: Page, text = source) {
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const analysis = (
@@ -78,13 +78,15 @@ test("selected statements infer a helper and require exact 3+3 oracle comparison
   test.setTimeout(300000);
   const f = await fixture(page);
   await selectStatements(page);
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "extract_method",
-  );
-  await expect(page.getByLabel("Цель изменения")).toHaveValue(
-    "preserve_behavior",
-  );
-  await expect(page.getByLabel("Цель изменения")).toBeDisabled();
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "extract_method");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toHaveAttribute("data-value", "preserve_behavior");
+  await expect(
+    page.getByRole("combobox", { name: "Цель изменения" }),
+  ).toBeDisabled();
   await page.getByLabel("Имя нового метода").fill("calculateResult");
   const prepared = page.waitForResponse(
     (r) => r.url().endsWith("/changes") && r.request().method() === "POST",

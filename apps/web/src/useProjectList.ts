@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Project } from "./types";
 const PAGE_SIZE = 20;
-export function useProjectList(scope?: "legacy", accountId?: string) {
+export function useProjectList(
+  scope?: "legacy",
+  accountId?: string,
+  enabled = true,
+) {
   const [rows, setRows] = useState<Project[]>([]),
     [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true),
@@ -14,6 +18,8 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
     controller = useRef<AbortController | null>(null),
     pending = useRef(false);
   const loadedQuery = useRef<string | null>(null);
+  const contextKey = (accountId ?? "local") + ":" + (scope ?? "account");
+  const [loadedContext, setLoadedContext] = useState("");
   const read = useCallback(
     async (after: string | undefined, ticket: number, filter: string) => {
       controller.current?.abort();
@@ -41,6 +47,7 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
             : page,
         );
         loadedQuery.current = filter;
+        setLoadedContext(contextKey);
         setHasMore(result.length > PAGE_SIZE);
       } catch (e) {
         if (current())
@@ -56,7 +63,7 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
         }
       }
     },
-    [scope, accountId],
+    [scope, accountId, contextKey],
   );
   useEffect(() => {
     const ticket = ++epoch.current;
@@ -68,6 +75,10 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
     setError("");
     setLoading(true);
     setLoadingMore(false);
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     const timer = setTimeout(
       () => void read(undefined, ticket, query.trim()),
       query ? 250 : 0,
@@ -77,9 +88,10 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
       epoch.current++;
       controller.current?.abort();
     };
-  }, [query, attempt, read]);
+  }, [query, attempt, read, enabled]);
   function loadMore() {
     if (
+      !enabled ||
       loading ||
       pending.current ||
       !hasMore ||
@@ -92,7 +104,7 @@ export function useProjectList(scope?: "legacy", accountId?: string) {
     void read(rows.at(-1)!.id, epoch.current, query.trim());
   }
   return {
-    rows,
+    rows: enabled && loadedContext === contextKey ? rows : [],
     query,
     setQuery,
     loading,

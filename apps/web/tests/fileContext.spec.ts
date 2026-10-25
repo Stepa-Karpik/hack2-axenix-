@@ -36,7 +36,7 @@ async function fixture(page: Page) {
   expect(saved.status()).toBe(201);
   const revision = (await saved.json()).data.id;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   return { id, base, revision };
 }
 async function open(page: Page, path: string) {
@@ -87,7 +87,31 @@ test("file selection binds graph, selected node and analysis through explorer, t
   ).toContainText("Beta.java");
   await expect(panel).not.toContainText("alphaOnly");
   await open(page, "note.txt");
-  await expect(page.locator(".blueprint-node")).toHaveCount(0);
+  await expect(graph).toHaveAttribute("data-source-file", "note.txt");
+  await expect(
+    page.locator('.flow-area[data-graph-view="overview"]'),
+  ).toBeVisible();
+  const response = await page.request.get(
+    f.base + "/revisions/" + f.revision + "/analysis",
+  );
+  expect(response.ok()).toBe(true);
+  const current = (await response.json()).data;
+  expect(current.revisionId).toBe(f.revision);
+  const frameIds = await page
+    .locator("[data-method-frame]")
+    .evaluateAll((frames) =>
+      frames.map((frame) => frame.getAttribute("data-method-frame")).sort(),
+    );
+  expect(frameIds).toEqual(
+    current.graph.methods.map((method: any) => method.id).sort(),
+  );
+  await expect(page.locator(".graph-method-frame.active")).toHaveCount(0);
+  const visibleIds = await page
+    .locator(".react-flow__node-blueprint")
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-id")));
+  expect(visibleIds.length).toBeGreaterThan(0);
+  const actualIds = new Set(current.graph.nodes.map((node: any) => node.id));
+  for (const id of visibleIds) expect(actualIds.has(id)).toBe(true);
   await expect(
     panel.getByRole("region", { name: "Метрики метода" }),
   ).toHaveCount(0);
@@ -266,7 +290,7 @@ test("background test progress belongs to its launch file and completed results 
   await expect(panel.getByTestId("other-file-result")).toHaveCount(0);
   await page.reload();
   await expect(panel).toContainText("Alpha expected");
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await expect(page.locator(".local-label")).toHaveText("Сохранено");
   await revealPanel(page, "console", "Консоль");
   await expect(

@@ -14,13 +14,15 @@ import org.springframework.web.context.request.*;
 class Accounts {
   final Workspace w;
   final AccountMail mail;
+  final HostingAccess hosting;
   final Map<String, Attempt> attempts = new ConcurrentHashMap<>();
 
   record Attempt(long window, int count) {}
 
-  Accounts(Workspace w, AccountMail mail) {
+  Accounts(Workspace w, AccountMail mail, HostingAccess hosting) {
     this.w = w;
     this.mail = mail;
+    this.hosting = hosting;
   }
 
   void throttle(String action, String identity, int limit) {
@@ -104,15 +106,20 @@ class Accounts {
     String actor = actor(req);
     return map(
         "mode",
-        actor == null ? "local_guest" : "authenticated",
+        actor == null ? (hosting.hosted() ? "anonymous" : "local_guest") : "authenticated",
         "csrfToken",
         session.getAttribute("csrf"),
         "localOwnerId",
-        "local",
+        hosting.hosted() ? null : "local",
         "user",
         actor == null ? null : user(actor, true),
         "capabilities",
-        map("registration", true, "emailDelivery", mail.available(), "legacyGuestWorkspace", true));
+        map(
+            "registration", true,
+            "emailDelivery", mail.available(),
+            "legacyGuestWorkspace", !hosting.hosted(),
+            "projectCreation", hosting.projectCreation(actor),
+            "projectExport", hosting.projectCreation(actor)));
   }
 
   void signIn(HttpServletRequest req, String account, int checkedVersion) {
@@ -295,5 +302,254 @@ class Accounts {
               return version;
             });
     signIn(req, account, changedVersion);
+  }
+
+  static final String PROFILE_PROJECT_SCOPE =
+      "(p.owner_id=?::uuid OR EXISTS(SELECT 1 FROM project_members tm WHERE tm.project_id=p.id AND"
+          + " tm.account_id=?::uuid)) AND (p.visibility='public' OR p.owner_id=?::uuid OR"
+          + " EXISTS(SELECT 1 FROM project_members vm WHERE vm.project_id=p.id AND"
+          + " vm.account_id=?::uuid))";
+  static final String VIEWER_SCOPE =
+      "(p.visibility='public' OR p.owner_id=?::uuid OR EXISTS(SELECT 1 FROM project_members vm"
+          + " WHERE vm.project_id=p.id AND vm.account_id=?::uuid))";
+
+  Map<String, Object> projectPage(String target, String viewer, int limit, String before) {
+    if (limit < 1 || limit > 100)
+      throw new ApiError(400, "INVALID_REQUEST", "Project page limit must be 1..100");
+    String cursorId = null, cursorTime = null;
+    if (before != null)
+      try {
+        String[] parts =
+            new String(
+                    Base64.getUrlDecoder().decode(before), java.nio.charset.StandardCharsets.UTF_8)
+                .split("\\n", -1);
+        if (parts.length != 2) throw new IllegalArgumentException();
+        cursorTime = Instant.parse(parts[0]).toString();
+        cursorId = uuid(parts[1]).toString();
+      } catch (Exception e) {
+        throw new ApiError(400, "INVALID_REQUEST", "Invalid project cursor");
+      }
+    Integer total =
+        w.db.queryForObject(
+            "SELECT count(*) FROM projects p WHERE " + PROFILE_PROJECT_SCOPE,
+            Integer.class,
+            target,
+            target,
+            viewer,
+            viewer);
+    var rows =
+        w.db.queryForList(
+            "SELECT p.id::text,p.updated_at FROM projects p WHERE "
+                + PROFILE_PROJECT_SCOPE
+                + " AND (?::uuid IS NULL OR (p.updated_at,p.id)<(?::timestamptz,?::uuid)) ORDER BY"
+                + " p.updated_at DESC,p.id DESC LIMIT ?",
+            target,
+            target,
+            viewer,
+            viewer,
+            cursorId,
+            cursorTime,
+            cursorId,
+            limit + 1);
+    boolean more = rows.size() > limit;
+    var page = rows.subList(0, Math.min(rows.size(), limit));
+    String next = null;
+    if (more) {
+      var last = page.getLast();
+      String time = ((java.sql.Timestamp) last.get("updated_at")).toInstant().toString();
+      next =
+          Base64.getUrlEncoder()
+              .withoutPadding()
+              .encodeToString(
+                  (time + "\n" + last.get("id")).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    return map(
+        "items",
+        page.stream().map(row -> w.project(row.get("id").toString())).toList(),
+        "nextCursor",
+        next,
+        "totalVisible",
+        total);
+  }
+
+  List<Map<String, Object>> pins(String target, String viewer) {
+    return w
+        .db
+        .queryForList(
+            "SELECT p.id::text FROM profile_pins pin JOIN projects p ON p.id=pin.project_id WHERE"
+                + " pin.account_id=?::uuid AND p.owner_id=?::uuid AND "
+                + VIEWER_SCOPE
+                + " ORDER BY pin.position",
+            target,
+            target,
+            viewer,
+            viewer)
+        .stream()
+        .map(row -> w.project(row.get("id").toString()))
+        .toList();
+  }
+
+  Map<String, Object> savePins(String actor, Map<String, Object> body) {
+    ApiController.fields(body, "projectIds");
+    if (!(body.get("projectIds") instanceof List<?> values)
+        || values.size() > 6
+        || values.stream().anyMatch(v -> !(v instanceof String))
+        || new HashSet<>(values).size() != values.size())
+      throw new ApiError(400, "INVALID_REQUEST", "Choose up to six distinct owned projects");
+    var ids = values.stream().map(v -> uuid(v.toString())).toList();
+    return w.tx.execute(
+        tx -> {
+          w.db.queryForObject(
+              "SELECT id FROM accounts WHERE id=? FOR UPDATE", UUID.class, uuid(actor));
+          for (UUID project : ids) {
+            var owners =
+                w.db.queryForList(
+                    "SELECT owner_id::text FROM projects WHERE id=? FOR UPDATE", project);
+            if (owners.isEmpty() || !actor.equals(owners.getFirst().get("owner_id")))
+              throw new ApiError(403, "PIN_OWNER_REQUIRED", "Only your own projects can be pinned");
+          }
+          w.db.update("DELETE FROM profile_pins WHERE account_id=?", uuid(actor));
+          for (int index = 0; index < ids.size(); index++)
+            w.db.update(
+                "INSERT INTO profile_pins(account_id,project_id,position)VALUES(?,?,?)",
+                uuid(actor),
+                ids.get(index),
+                index);
+          return map("items", pins(actor, actor));
+        });
+  }
+
+  Map<String, Object> profileFriends(String target, String viewer, int limit, int offset) {
+    if (limit < 1 || limit > 100 || offset < 0 || offset > 100000)
+      throw new ApiError(400, "INVALID_REQUEST", "Invalid friend page");
+    String people =
+        "SELECT CASE WHEN first_id=?::uuid THEN second_id ELSE first_id END AS id FROM friendships"
+            + " WHERE first_id=?::uuid OR second_id=?::uuid";
+    Integer total =
+        w.db.queryForObject(
+            "SELECT count(*) FROM friendships WHERE first_id=?::uuid OR second_id=?::uuid",
+            Integer.class,
+            target,
+            target);
+    Integer mutual =
+        viewer == null
+            ? 0
+            : w.db.queryForObject(
+                "SELECT count(*) FROM (" + people + ") theirs JOIN (" + people + ") mine USING(id)",
+                Integer.class,
+                target,
+                target,
+                target,
+                viewer,
+                viewer,
+                viewer);
+    var rows =
+        w.db.queryForList(
+            "SELECT friend.id::text FROM ("
+                + people
+                + ") friend JOIN accounts u ON u.id=friend.id ORDER BY lower(u.username),u.id LIMIT"
+                + " ? OFFSET ?",
+            target,
+            target,
+            target,
+            limit,
+            offset);
+    return map(
+        "items",
+        rows.stream().map(row -> user(row.get("id").toString(), false)).toList(),
+        "count",
+        total,
+        "mutualCount",
+        mutual,
+        "nextOffset",
+        offset + rows.size() < total ? offset + rows.size() : null);
+  }
+
+  Map<String, Object> overview(String target, String viewer, int limit, String before) {
+    LocalDate today = LocalDate.now(ZoneOffset.UTC), from = today.minusDays(364);
+    Instant start = from.atStartOfDay(ZoneOffset.UTC).toInstant(),
+        end = today.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
+    String scope =
+        " FROM audit_events e JOIN revisions r ON r.project_id=e.project_id AND r.id=e.entity_id"
+            + " JOIN projects p ON p.id=r.project_id WHERE e.actor_id=?::uuid AND"
+            + " e.event='head_changed' AND e.created_at>=? AND e.created_at<? AND "
+            + VIEWER_SCOPE;
+    var counts =
+        w.db.queryForList(
+            "SELECT (e.created_at AT TIME ZONE 'UTC')::date::text AS day,count(DISTINCT"
+                + " e.entity_id) AS count"
+                + scope
+                + " GROUP BY day ORDER BY day",
+            target,
+            java.sql.Timestamp.from(start),
+            java.sql.Timestamp.from(end),
+            viewer,
+            viewer);
+    var byDay = new HashMap<String, Integer>();
+    for (var row : counts)
+      byDay.put(row.get("day").toString(), ((Number) row.get("count")).intValue());
+    var days = new ArrayList<Map<String, Object>>();
+    int total = 0;
+    for (LocalDate day = from; !day.isAfter(today); day = day.plusDays(1)) {
+      int n = byDay.getOrDefault(day.toString(), 0);
+      total += n;
+      days.add(map("date", day.toString(), "count", n));
+    }
+    var activity =
+        w
+            .db
+            .queryForList(
+                "SELECT r.id::text AS revision_id,p.id::text AS project_id,p.name AS"
+                    + " project_name,e.created_at,r.data->>'origin' AS origin"
+                    + scope
+                    + " ORDER BY e.created_at DESC,e.id DESC LIMIT 20",
+                target,
+                java.sql.Timestamp.from(start),
+                java.sql.Timestamp.from(end),
+                viewer,
+                viewer)
+            .stream()
+            .map(
+                row ->
+                    map(
+                        "revisionId",
+                        row.get("revision_id"),
+                        "projectId",
+                        row.get("project_id"),
+                        "projectName",
+                        row.get("project_name"),
+                        "createdAt",
+                        ((java.sql.Timestamp) row.get("created_at")).toInstant().toString(),
+                        "origin",
+                        row.get("origin")))
+            .toList();
+    var friends = profileFriends(target, viewer, 1, 0);
+    return map(
+        "user",
+        user(target, false),
+        "projects",
+        projectPage(target, viewer, limit, before),
+        "pinnedProjects",
+        pins(target, viewer),
+        "friends",
+        map("count", friends.get("count"), "mutualCount", friends.get("mutualCount")),
+        "contributions",
+        map(
+            "from",
+            from.toString(),
+            "to",
+            today.toString(),
+            "timezone",
+            "UTC",
+            "days",
+            days,
+            "total",
+            total,
+            "attribution",
+            "head_change_actor"),
+        "activity",
+        activity,
+        "tracking",
+        map("legacyUnattributed", true));
   }
 }

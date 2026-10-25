@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { fixture, headers, head, source } from "./fileFixtures";
+import { revealPanel } from "./flowAssertions";
 
 test("an editable historical revision can be restored as a new head", async ({
   page,
@@ -17,8 +18,8 @@ test("an editable historical revision can be restored as a new head", async ({
   expect(advanced.ok()).toBeTruthy();
   const current = (await advanced.json()).data.id;
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
-  await page.locator("#project-history > summary").click();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
+  await revealPanel(page, "history", "История");
   const row = page.locator(".revision-row").filter({
     has: page.getByRole("button", {
       name: "Восстановить версию " + original.id.slice(0, 8),
@@ -47,7 +48,7 @@ test("focus refresh preserves a dirty editing base and exposes concurrent-save r
 }) => {
   const { projectId, base, original } = await fixture(page.request);
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   const advanced = await page.request.post(base + "/revisions", {
     headers: await headers(page.request, original.id),
     data: {

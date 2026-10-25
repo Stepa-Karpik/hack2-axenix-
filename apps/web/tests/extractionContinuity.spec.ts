@@ -1,3 +1,4 @@
+import { selectValue } from "./selectControl";
 import { test, expect, type APIResponse } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { revealPanel } from "./flowAssertions";
@@ -33,7 +34,7 @@ test("selecting other complete statements while proposal response is pending ret
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   await revealPanel(page, "code", "Код");
@@ -47,13 +48,16 @@ test("selecting other complete statements while proposal response is pending ret
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.up("Shift");
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "extract_method",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "extract_method");
   await page.getByLabel("Имя нового метода").fill("calculateOriginalSelection");
-  const initialLast = await page
-    .getByLabel("Последний оператор", { exact: true })
-    .inputValue();
+  const initialLast = await selectValue(
+    page.getByRole("combobox", {
+      name: "Последний оператор",
+      ...{ exact: true },
+    }),
+  );
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
     release = resolve;
@@ -90,8 +94,11 @@ test("selecting other complete statements while proposal response is pending ret
     await page.keyboard.press("ArrowDown");
     await page.keyboard.up("Shift");
     await expect(
-      page.getByLabel("Последний оператор", { exact: true }),
-    ).toHaveValue(initialLast);
+      page.getByRole("combobox", {
+        name: "Последний оператор",
+        ...{ exact: true },
+      }),
+    ).toHaveAttribute("data-value", initialLast);
     release();
     await expect(
       page.getByLabel("Извлечённый метод", { exact: true }),

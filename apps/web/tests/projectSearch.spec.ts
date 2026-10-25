@@ -1,3 +1,4 @@
+import { setTheme } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
 import { headers } from "./fileFixtures";
 async function create(page: Page, name: string) {
@@ -96,9 +97,7 @@ test("literal UTF8 names, clear and empty results stay usable in narrow light an
   await search.fill(name.toLowerCase());
   await expect(page.locator(".project-row")).toHaveCount(1);
   await expect(page.locator(".project-row")).toContainText(name);
-  await page
-    .getByRole("button", { name: "Включить светлую тему", exact: true })
-    .click();
+  await setTheme(page, "light");
   await page.screenshot({
     path: info.outputPath("projects-search-light.png"),
     animations: "disabled",
@@ -119,9 +118,7 @@ test("literal UTF8 names, clear and empty results stay usable in narrow light an
     .click();
   await expect(search).toHaveValue("");
   await expect(page.locator(".project-row")).toHaveCount(20);
-  await page
-    .getByRole("button", { name: "Включить тёмную тему", exact: true })
-    .click();
+  await setTheme(page, "dark");
   await page.screenshot({
     path: info.outputPath("projects-search-narrow-dark.png"),
     animations: "disabled",

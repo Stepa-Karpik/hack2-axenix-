@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { panToNode } from "./flowAssertions";
@@ -184,7 +185,10 @@ test("real API sample → graph/code selection → invalid persisted draft → r
     page.getByRole("button", { name: "Подготовить изменение" }),
   ).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Открытая панель").selectOption("code");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Открытая панель" }),
+    "code",
+  );
   await expect(page.locator(".inspector")).not.toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("workbench-narrow.png"),
@@ -251,7 +255,7 @@ test("real API empty project, import, run availability and keyboard dialog", asy
     await page
       .getByRole("button", { name: "Скрыть Консоль", exact: true })
       .click();
-    await page.locator(".sidebar-command-menu > summary").click();
+    if ((await page.locator(".global-command-menu").getAttribute("open")) === null) await page.locator(".sidebar-command-menu > summary").click();
     const view = page
       .locator(".workspace-menu")
       .filter({ has: page.locator("summary").filter({ hasText: /^Вид$/ }) });
@@ -359,7 +363,7 @@ test("real candidate compile → mismatch report → explicit semantic apply", a
     (request) =>
       request.url().endsWith("/exports") && request.method() === "POST",
   );
-  await page.locator(".sidebar-command-menu > summary").click();
+  if ((await page.locator(".global-command-menu").getAttribute("open")) === null) await page.locator(".sidebar-command-menu > summary").click();
   const fileMenu = page
     .locator(".workspace-menu")
     .filter({ has: page.locator("summary").filter({ hasText: /^Файл$/ }) });

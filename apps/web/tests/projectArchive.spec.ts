@@ -160,10 +160,13 @@ test("project archive UI preserves raw/canonical history and inert graph/layout/
   );
   expect(layout.ok()).toBe(true);
   await page.goto("/projects/" + f.id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
-  await page.locator(".sidebar-command-menu > summary").click();
+  if (
+    (await page.locator(".global-command-menu").getAttribute("open")) === null
+  )
+    await page.locator(".sidebar-command-menu > summary").click();
   await page
     .locator(".workspace-menubar summary")
     .filter({ hasText: /^Вид$/ })
@@ -279,7 +282,7 @@ test("project archive UI preserves raw/canonical history and inert graph/layout/
     ),
   ).toEqual(workspaceBefore);
   await page.reload();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   expect(
@@ -337,10 +340,13 @@ test("archive UI validates a tampered checksum before creating a target project"
     archive = await (await page.request.get(metadata.downloadUrl)).json();
   archive.manifest.payloadSha256 = "0".repeat(64);
   await page.goto("/projects/" + f.id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
-  await page.locator(".sidebar-command-menu > summary").click();
+  if (
+    (await page.locator(".global-command-menu").getAttribute("open")) === null
+  )
+    await page.locator(".sidebar-command-menu > summary").click();
   await page
     .locator(".workspace-menubar summary")
     .filter({ hasText: /^Файл$/ })

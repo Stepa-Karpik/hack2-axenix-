@@ -25,7 +25,7 @@ import java.util.function.Supplier;
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.13.0"; }
+    private static String analyzerVersion() { return "engine-0.13.1"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -505,6 +505,19 @@ public final class ProgramEngine {
                 continue;
             }
             CompilationUnit unit = result.getResult().orElseThrow();
+            // JavaParser can synthesize a compact class even at JAVA_21. Its
+            // implicit name has no source tokens and is outside our non-preview
+            // compiler profile; reject it before symbol/source-map traversal.
+            if (unit.findAll(com.github.javaparser.ast.body.ClassOrInterfaceDeclaration.class)
+                    .stream().anyMatch(com.github.javaparser.ast.body.ClassOrInterfaceDeclaration::isCompact)) {
+                builder.invalid = true;
+                SourceRange range = unit.findFirst(CallableDeclaration.class)
+                        .flatMap(Node::getTokenRange)
+                        .map(tokens -> diagnosticRange(entry.getKey(), entry.getValue(), tokens)).orElse(null);
+                builder.diagnostics.add(new Diagnostic(builder.id(), "error", "PARSE_ERROR",
+                        "Methods must be inside an explicit class in the Java 21 non-preview profile", range));
+                continue;
+            }
             if (!boundedAst(unit)) {
                 builder.invalid = true;
                 builder.diagnostics.add(new Diagnostic(builder.id(), "error", "ANALYSIS_LIMIT", "Source exceeds AST depth or node budget", null));

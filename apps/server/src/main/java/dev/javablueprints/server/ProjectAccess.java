@@ -13,10 +13,12 @@ import org.springframework.web.servlet.config.annotation.*;
 class ProjectAccess implements HandlerInterceptor, WebMvcConfigurer {
   final Accounts accounts;
   final Workspace w;
+  final HostingAccess hosting;
 
-  ProjectAccess(Accounts accounts, Workspace w) {
+  ProjectAccess(Accounts accounts, Workspace w, HostingAccess hosting) {
     this.accounts = accounts;
     this.w = w;
+    this.hosting = hosting;
   }
 
   @Override
@@ -28,17 +30,42 @@ class ProjectAccess implements HandlerInterceptor, WebMvcConfigurer {
   public boolean preHandle(HttpServletRequest req, HttpServletResponse res, Object handler) {
     String actor = accounts.actor(req);
     req.setAttribute("accountId", actor);
-    String path = req.getRequestURI().substring(req.getContextPath().length());
+    // Authorize the route MVC actually matched: raw URI checks can be bypassed by matrix
+    // parameters or encoded path segments that MVC normalizes before controller dispatch.
+    String path =
+        Objects.toString(
+            req.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE),
+            req.getRequestURI().substring(req.getContextPath().length()));
+    if (hosting.hosted()) {
+      if (path.equals("/api/v1/projects") || path.equals("/api/v1/archive-previews"))
+        hosting.requireActor(actor);
+      String[] scopes = req.getParameterValues("scope");
+      if (path.equals("/api/v1/projects")
+          && scopes != null
+          && Arrays.asList(scopes).contains("legacy"))
+        throw new ApiError(403, "ACCESS_DENIED", "Legacy workspace is unavailable in hosted mode");
+    }
     String prefix = "/api/v1/projects/";
     if (!path.startsWith(prefix)) return true;
-    String project = path.substring(prefix.length()).split("/", 2)[0];
+    String segment = path.substring(prefix.length()).split("/", 2)[0];
+    String suffix = path.substring(prefix.length() + segment.length());
+    String project = segment;
+    if (segment.startsWith("{") && segment.endsWith("}")) {
+      Object variables = req.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+      project =
+          variables instanceof Map<?, ?> values
+              ? Objects.toString(values.get(segment.substring(1, segment.length() - 1)), null)
+              : null;
+    }
     var rows =
         w.db.queryForList(
             "SELECT owner_id::text,visibility FROM projects WHERE id=?", uuid(project));
     if (rows.isEmpty()) throw missing();
     var row = rows.getFirst();
-    if (row.get("owner_id") == null)
+    if (row.get("owner_id") == null) {
+      if (hosting.hosted()) throw missing();
       return true; // Explicitly local compatibility workspace, never a private account project.
+    }
     boolean owner = Objects.equals(actor, row.get("owner_id"));
     String role =
         actor == null
@@ -54,11 +81,11 @@ class ProjectAccess implements HandlerInterceptor, WebMvcConfigurer {
                 .findFirst()
                 .orElse(null);
     boolean read = Set.of("GET", "HEAD", "OPTIONS").contains(req.getMethod());
+    if (hosting.hosted() && !read) hosting.requireActor(actor);
     // Source export only materializes an artifact from already-readable snapshots. It cannot run
     // code or modify source/head; every other POST still requires owner/editor permission.
     boolean sourceExport =
-        req.getMethod().equals("POST") && (path.equals(prefix + project + "/exports")
-            || path.equals(prefix + project + "/archives"));
+        req.getMethod().equals("POST") && (suffix.equals("/exports") || suffix.equals("/archives"));
     if (sourceExport && (owner || role != null || row.get("visibility").equals("public")))
       return true;
     if (read && (owner || role != null || row.get("visibility").equals("public"))) return true;

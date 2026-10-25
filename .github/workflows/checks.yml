@@ -43,3 +43,60 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test:web
       - run: pnpm build
+      - name: Validate deployment receiver
+        run: python3 -m unittest discover -s tests/deploy -v
+      - name: Build immutable production release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: bash scripts/build-release.sh "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: javablueprints-release
+          path: |
+            .local/release.tar
+            .local/release.tar.sha256
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 3
+
+  deploy:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Stepa-Karpik/hack2-axenix-'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: javablueprints-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: javablueprints-release
+          path: .local
+      - name: Deploy the tested main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SSH_KEY: ${{ secrets.JB_DEPLOY_SSH_KEY }}
+          SSH_HOSTS: ${{ secrets.JB_DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.JB_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.JB_DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          current="$(gh api repos/Stepa-Karpik/hack2-axenix-/git/ref/heads/main --jq .object.sha)"
+          if [[ "$current" != "$GITHUB_SHA" ]]; then
+            echo "A newer main revision exists; this deployment is superseded."
+            exit 0
+          fi
+          [[ -n "$SSH_KEY" && -n "$SSH_HOSTS" && -n "$DEPLOY_HOST" && -n "$DEPLOY_USER" ]]
+          umask 077
+          key="$RUNNER_TEMP/javablueprints-cd.key"
+          hosts="$RUNNER_TEMP/javablueprints-known-hosts"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$key"
+          printf '%s\n' "$SSH_HOSTS" > "$hosts"
+          expected="$(awk '{print $1}' .local/release.tar.sha256)"
+          actual="$(sha256sum .local/release.tar | awk '{print $1}')"
+          [[ "$expected" == "$actual" && "$expected" =~ ^[a-f0-9]{64}$ ]]
+          ssh -i "$key" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA $expected" < .local/release.tar

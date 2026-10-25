@@ -10,7 +10,7 @@ for (const [layout, key] of [
   }) => {
     const { projectId, base, original } = await fixture(page.request);
     await page.goto("/projects/" + projectId);
-    await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+    await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
     const editor = page.locator(".monaco-editor textarea.inputarea");
     const cdp = await page.context().newCDPSession(page);
     await page.evaluate(() => {
@@ -68,7 +68,7 @@ for (const [layout, key] of [
       const marker = `\n// ${layout} physical save from ${focus}\n`;
       await page.keyboard.insertText(marker);
       if (focus === "search")
-        await page.getByPlaceholder("Поиск по проекту").focus();
+        await page.getByRole("combobox", { name: "Поиск по проекту" }).focus();
       const saved = page
         .waitForResponse(
           (response) =>

@@ -24,7 +24,7 @@ test("running interactive output retains its original revision after editing and
   expect(initial.status()).toBe(201);
   const r1 = (await initial.json()).data.id;
   await page.goto("/projects/" + projectId);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await page.getByRole("button", { name: "Запуск", exact: true }).click();
   await page.getByLabel("Класс с main").fill("Main");
   const submitted = page.waitForResponse(

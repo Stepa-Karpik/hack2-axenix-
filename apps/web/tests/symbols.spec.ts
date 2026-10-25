@@ -53,7 +53,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
       buffer: Buffer.from(helperSource),
     },
   ]);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
@@ -228,9 +228,13 @@ test("older analysis without semantics remains navigable without symbol bindings
     .getByLabel("Название проекта")
     .fill("Legacy symbols UI " + Date.now());
   await page.getByRole("button", { name: "Начать с примера" }).click();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
+  await page
+    .locator(".method-item")
+    .filter({ hasText: /^main\(/ })
+    .click();
   await page.locator(".blueprint-node.entry").click();
   await expect(page.locator(".symbol-inspector")).toHaveCount(0);
   await expect(page.locator(".monaco-editor")).toBeVisible();

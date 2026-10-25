@@ -1,0 +1,76 @@
+:root[data-theme][data-theme-preset] {
+  --product-bg: var(--theme-background);
+  --product-surface: var(--theme-surface);
+  --product-text: var(--theme-text);
+  --product-muted: var(--theme-muted);
+  --product-accent: var(--theme-accent);
+  --product-border: var(--theme-muted);
+  --bg: var(--theme-background);
+  --panel: var(--theme-surface);
+  --text: var(--theme-text);
+  --muted: var(--theme-muted);
+  --accent: var(--theme-accent);
+}
+:root[data-theme-preset] .product-page {
+  background: var(--theme-background);
+  color: var(--theme-text);
+}
+:root[data-theme-preset] .product-card,
+:root[data-theme-preset] .public-project-card,
+:root[data-theme-preset] .product-header,
+:root[data-theme-preset] .auth-card {
+  background: var(--theme-surface);
+  color: var(--theme-text);
+  border-color: var(--product-border);
+}
+:root[data-theme-preset] .product-page input,
+:root[data-theme-preset] .product-page textarea {
+  background: var(--theme-background);
+  color: var(--theme-text);
+  border-color: var(--theme-muted);
+}
+:root[data-theme-preset] .product-action {
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  border-color: var(--theme-accent);
+}
+:root[data-theme-preset] .product-muted,
+:root[data-theme-preset] .profile-handle {
+  color: var(--theme-muted);
+}
+:root[data-theme-preset] .product-page :focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 3px;
+}
+:root[data-theme-preset] .glass-workbench {
+  --glass-text: var(--theme-text);
+  --glass-muted: var(--theme-muted);
+  --glass-accent: var(--theme-accent);
+  --glass-panel: var(--theme-surface);
+}
+:root[data-theme][data-theme-preset] .glass-workbench {
+  --glass-fill: var(--theme-surface);
+  --glass-node: var(--theme-surface);
+  --glass-bg: var(--theme-background);
+  --ink: var(--theme-text);
+  --quiet: var(--theme-muted);
+  --line: var(--theme-muted);
+  --surface: var(--theme-surface);
+  --surface-hover: color-mix(
+    in srgb,
+    var(--theme-surface) 94%,
+    var(--theme-text)
+  );
+  --subtle: var(--theme-background);
+  --selected: color-mix(in srgb, var(--theme-surface) 90%, var(--theme-accent));
+  --lime: var(--theme-accent);
+  --green: var(--theme-accent);
+  --muted-strong: var(--theme-muted);
+}
+:root[data-theme][data-theme-preset] {
+  --product-hover: color-mix(
+    in srgb,
+    var(--theme-surface) 94%,
+    var(--theme-text)
+  );
+}

@@ -1,3 +1,4 @@
+import { nativeOptions, chooseOption } from "./selectControl";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { revealPanel } from "./flowAssertions";
@@ -80,7 +81,7 @@ test("filename failure is actionable, repair preserves source and rerun tests th
     },
   );
   await page.goto("/projects/" + f.id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await page.locator('[data-file-path="abc.java"]').click();
   await revealPanel(page, "tests", "Тесты");
   await page
@@ -88,11 +89,13 @@ test("filename failure is actionable, repair preserves source and rerun tests th
     .click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("Класс с main")).toHaveValue("Main");
-  await expect(dialog.getByLabel("Базовая версия")).toHaveValue(f.second.id);
   await expect(
-    dialog
-      .getByLabel("Базовая версия")
-      .locator(`option[value="${f.first.id}"]`),
+    dialog.getByRole("combobox", { name: "Базовая версия" }),
+  ).toHaveAttribute("data-value", f.second.id);
+  await expect(
+    nativeOptions(
+      dialog.getByRole("combobox", { name: "Базовая версия" }),
+    ).locator(`option[value="${f.first.id}"]`),
   ).toHaveCount(1);
   await expect(dialog.getByRole("alert")).toContainText("abc.java");
   await expect(
@@ -181,8 +184,12 @@ test("filename failure is actionable, repair preserves source and rerun tests th
     .getByRole("button", { name: "Сравнить версии", exact: true })
     .click();
   await expect(dialog.getByLabel("Класс с main")).toHaveValue("Main");
-  await expect(dialog.getByLabel("Базовая версия")).toHaveValue(fixed.id);
-  await expect(dialog.getByLabel("Кандидат")).toHaveValue(fixed.id);
+  await expect(
+    dialog.getByRole("combobox", { name: "Базовая версия" }),
+  ).toHaveAttribute("data-value", fixed.id);
+  await expect(
+    dialog.getByRole("combobox", { name: "Кандидат" }),
+  ).toHaveAttribute("data-value", fixed.id);
   await dialog.getByRole("button", { name: "JSON", exact: true }).click();
   await dialog.getByLabel("Входные данные · JSON cases").fill(
     JSON.stringify([
@@ -231,7 +238,7 @@ test("historical base filename errors stay read-only and changing selected versi
 }) => {
   const f = await fixture(page.request, true);
   await page.goto("/projects/" + f.id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await revealPanel(page, "tests", "Тесты");
   await page
     .getByRole("button", { name: "Сравнить версии", exact: true })
@@ -241,12 +248,18 @@ test("historical base filename errors stay read-only and changing selected versi
   await expect(
     dialog.getByRole("button", { name: "Сравнить", exact: true }),
   ).toBeDisabled();
-  await dialog.getByLabel("Базовая версия").selectOption(f.second.id);
+  await chooseOption(
+    dialog.getByRole("combobox", { name: "Базовая версия" }),
+    f.second.id,
+  );
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect(
     dialog.getByRole("button", { name: "Сравнить", exact: true }),
   ).toBeEnabled();
-  await dialog.getByLabel("Базовая версия").selectOption(f.first.id);
+  await chooseOption(
+    dialog.getByRole("combobox", { name: "Базовая версия" }),
+    f.first.id,
+  );
   await expect(dialog.getByRole("alert")).toContainText("abc.java");
   await dialog
     .getByRole("button", { name: "Открыть abc.java", exact: true })

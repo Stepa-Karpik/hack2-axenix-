@@ -58,3 +58,5 @@ Thumbs.db
 Desktop.ini
 
 *.tsbuildinfo
+__pycache__/
+*.py[cod]

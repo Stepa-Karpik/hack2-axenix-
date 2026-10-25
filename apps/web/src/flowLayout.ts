@@ -511,8 +511,8 @@ export function routePort(box: RouteBox, side: RouteSide): RoutePoint {
 }
 export function branchLabelPosition(start: RoutePoint, side: RouteSide) {
   return {
-    x: start.x + (side === "left" ? -28 : side === "right" ? 28 : 20),
-    y: start.y + (side === "top" ? -20 : side === "bottom" ? 20 : -14),
+    x: start.x + (side === "left" ? -34 : side === "right" ? 34 : 26),
+    y: start.y + (side === "top" ? -24 : side === "bottom" ? 24 : -19),
   };
 }
 export type RouteBox = {

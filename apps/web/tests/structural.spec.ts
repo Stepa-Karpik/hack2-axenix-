@@ -1,3 +1,4 @@
+import { nativeOptions, chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { panToNode, revealPanel } from "./flowAssertions";
@@ -18,7 +19,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
     mimeType: "text/x-java-source",
     buffer: Buffer.from(source),
   });
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const base = "/api/v1/projects/" + page.url().split("/projects/")[1];
@@ -30,25 +31,36 @@ test("structural edits and historical restore use explicit compiled proposals", 
     (await (await page.request.get(base + "/revisions/" + id)).json()).data;
   await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "insert_statement",
-  );
-  await expect(page.getByLabel("Позиция")).toHaveValue("body_start");
   await expect(
-    page.getByLabel("Действие", { exact: true }).locator("option"),
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "insert_statement");
+  await expect(page.getByRole("combobox", { name: "Позиция" })).toHaveAttribute(
+    "data-value",
+    "body_start",
+  );
+  await expect(
+    nativeOptions(
+      page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    ).locator("option"),
   ).toHaveCount(2);
   await expect(
-    page
-      .getByLabel("Действие", { exact: true })
-      .locator('option[value="rename_local"]'),
+    nativeOptions(
+      page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    ).locator('option[value="rename_local"]'),
   ).toHaveText("Переименовать локальную переменную");
-  await page.getByLabel("Шаблон").selectOption("condition");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Шаблон" }),
+    "condition",
+  );
   await expect(page.getByLabel("Java оператор")).toHaveValue(
     'if (true) {\n    System.out.println("value");\n}',
   );
-  await page.getByLabel("Шаблон").selectOption("loop");
+  await chooseOption(page.getByRole("combobox", { name: "Шаблон" }), "loop");
   await expect(page.getByLabel("Java оператор")).toHaveValue(/for/);
-  await page.getByLabel("Шаблон").selectOption("statement");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Шаблон" }),
+    "statement",
+  );
   await page
     .getByLabel("Java оператор")
     .fill('System.out.println("inserted");');
@@ -66,9 +78,10 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await expect(page.locator(".monaco-editor")).toContainText("inserted");
   await panToNode(page, page.locator(".blueprint-node.ExpressionStmt"));
   await page.locator(".blueprint-node.ExpressionStmt").click();
-  await page
-    .getByLabel("Действие", { exact: true })
-    .selectOption("delete_statement");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+    "delete_statement",
+  );
   await expect(
     page.getByText("Удаление выбранного оператора", { exact: true }),
   ).toBeVisible();
@@ -83,18 +96,17 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await expect.poll(readHead).not.toBe(inserted);
   const deleted = await readHead();
   await page.reload();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await expect(page.locator(".monaco-editor")).not.toContainText("inserted");
   await panToNode(page, page.locator(".blueprint-node.normal_exit"));
   await page.locator(".blueprint-node.normal_exit").click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveCount(0);
   await expect(
     page.getByText("Нет доступных действий", { exact: true }),
   ).toBeVisible();
-  await page
-    .locator(".sidebar-navigation > button")
-    .filter({ hasText: "История" })
-    .click();
+  await revealPanel(page, "history", "История");
   const restore = page.getByRole("button", {
     name: "Восстановить версию " + inserted.slice(0, 8),
     exact: true,
@@ -159,10 +171,7 @@ test("structural edits and historical restore use explicit compiled proposals", 
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("structural-narrow.png") });
   await page.setViewportSize({ width: 1512, height: 982 });
-  await page
-    .locator(".sidebar-navigation > button")
-    .filter({ hasText: "История" })
-    .click();
+  await revealPanel(page, "history", "История");
   // Local edits block restore before the autosave debounce can replace the draft.
   await page.locator(".monaco-editor textarea.inputarea").focus();
   await page.keyboard.press("Control+End");
@@ -200,24 +209,30 @@ test("persisted analysis without capabilities exposes no structural actions", as
     .getByLabel("Название проекта")
     .fill("Legacy capability UI " + Date.now());
   await page.getByRole("button", { name: "Начать с примера" }).click();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
+  await page
+    .locator(".method-item")
+    .filter({ hasText: /^main\(/ })
+    .click();
   await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
   await expect(
     page.getByText("Нет доступных действий", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Подготовить изменение" }),
   ).toHaveCount(0);
   await page.unroute("**/revisions/*/analysis");
   await page.reload();
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   await panToNode(page, page.locator(".blueprint-node.entry"));
   await page.locator(".blueprint-node.entry").click();
-  await expect(page.getByLabel("Действие", { exact: true })).toHaveValue(
-    "insert_statement",
-  );
+  await expect(
+    page.getByRole("combobox", { name: "Действие", ...{ exact: true } }),
+  ).toHaveAttribute("data-value", "insert_statement");
 });

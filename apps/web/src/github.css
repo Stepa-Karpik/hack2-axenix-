@@ -1,0 +1,89 @@
+.github-settings,
+.github-import,
+.github-connection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.github-settings h2,
+.github-import h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.github-settings p,
+.github-import p,
+.github-connection p {
+  margin: 0;
+  line-height: 1.55;
+}
+.github-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.github-consent {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.github-consent input {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+.github-import-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.github-import label {
+  font-size: 13px;
+}
+.github-tree {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line, #80808040);
+  border-radius: 8px;
+  padding: 8px;
+}
+.github-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 0;
+}
+.github-tree-row label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+.github-tree-row input {
+  width: auto;
+  flex: 0 0 auto;
+}
+.github-tree-row button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.github-commit {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.github-login {
+  width: 100%;
+  justify-content: center;
+}
+@media (max-width: 680px) {
+  .github-import-grid {
+    grid-template-columns: 1fr;
+  }
+}

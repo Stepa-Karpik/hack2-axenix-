@@ -1,3 +1,4 @@
+import Select from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Lock, X } from "lucide-react";
 import { api, projectPath } from "./api";
@@ -159,7 +160,7 @@ export default function ProjectAccess({
                   Публичный проект появляется в вашем профиле.
                 </p>
               </div>
-              <select
+              <Select
                 aria-label="Видимость проекта"
                 disabled={busy}
                 value={project.visibility ?? "private"}
@@ -171,7 +172,7 @@ export default function ProjectAccess({
               >
                 <option value="private">Приватный</option>
                 <option value="public">Публичный</option>
-              </select>
+              </Select>
             </div>
             <h3>Участники</h3>
             {loading ? (
@@ -187,7 +188,7 @@ export default function ProjectAccess({
                 >
                   <label>
                     Друг
-                    <select
+                    <Select
                       required
                       aria-label="Друг для приглашения"
                       disabled={busy}
@@ -202,11 +203,11 @@ export default function ProjectAccess({
                             @{f.username}
                           </option>
                         ))}
-                    </select>
+                    </Select>
                   </label>
                   <label>
                     Роль
-                    <select
+                    <Select
                       aria-label="Роль участника"
                       disabled={busy}
                       value={role}
@@ -214,7 +215,7 @@ export default function ProjectAccess({
                     >
                       <option value="viewer">Просмотр</option>
                       <option value="editor">Редактирование</option>
-                    </select>
+                    </Select>
                   </label>
                   <button disabled={busy || !username}>Пригласить</button>
                 </form>

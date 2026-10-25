@@ -31,7 +31,7 @@ async function fixture(page: Page) {
   expect(saved.status()).toBe(201);
   const original = (await saved.json()).data;
   await page.goto("/projects/" + id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible({
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible({
     timeout: 30000,
   });
   const analysis = (
@@ -108,7 +108,7 @@ test("foreign and stale hints are rejected while local conflicting draft remains
     .toBeNull();
   expect((await head(page.request, b.base)).id).toBe(b.original.id);
   await page.goto("/projects/" + a.id);
-  await expect(page.locator(".blueprint-node.entry")).toBeVisible();
+  await expect(page.locator(".blueprint-node.entry").first()).toBeVisible();
   const changed = await page.request.post(a.base + "/revisions", {
     headers: await headers(page.request, a.original.id),
     data: {
@@ -240,7 +240,10 @@ test("leaving during a pending suite request cannot start a later comparison or 
       .click();
     await arrived;
     await page.keyboard.press("Escape");
-    await page.locator("a.brand").click();
+    await page
+      .getByRole("navigation", { name: "Навигация проекта" })
+      .getByRole("button", { name: "Проекты", exact: true })
+      .click();
     await expect(page.getByLabel("Название проекта")).toBeVisible();
     release();
     await page.waitForTimeout(800);

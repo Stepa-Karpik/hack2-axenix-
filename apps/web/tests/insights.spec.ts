@@ -1,3 +1,4 @@
+import { chooseOption } from "./selectControl";
 import { test, expect, type Page } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { revealPanel, panToNode, setTheme } from "./flowAssertions";
@@ -52,7 +53,7 @@ async function fixture(page: Page) {
       await page.request.get(base + "/revisions/" + revision.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.1");
   return { id, base, revision, panel, analysis };
 }
 
@@ -120,7 +121,10 @@ test("metrics and recommendations use actual method/source bindings without muta
     animations: "disabled",
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("Открытая панель").selectOption("analysis");
+  await chooseOption(
+    page.getByRole("combobox", { name: "Открытая панель" }),
+    "analysis",
+  );
   await expect(metrics).toBeVisible();
   expect(
     await page.evaluate(

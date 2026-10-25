@@ -9,7 +9,11 @@ export function canDockTile(rect: TileRect, edge: DropEdge) {
     ? rect.width >= 368
     : rect.height >= 248;
 }
-export function tileGeometry(root: LayoutNode, bounds: TileRect) {
+export function tileGeometry(
+  root: LayoutNode,
+  bounds: TileRect,
+  collapsedNavigation = false,
+) {
   const tiles: Tile[] = [],
     dividers: Divider[] = [];
   function visit(node: LayoutNode, rect: TileRect) {
@@ -20,7 +24,14 @@ export function tileGeometry(root: LayoutNode, bounds: TileRect) {
     const horizontal = node.axis === "horizontal",
       gap = 8;
     const extent = Math.max(0, (horizontal ? rect.width : rect.height) - gap);
-    const first = extent * node.ratio;
+    const collapsed = (n: LayoutNode) =>
+      collapsedNavigation && n.type === "group" && n.active === "navigation";
+    const first =
+      !horizontal && collapsed(node.first)
+        ? Math.min(40, extent)
+        : !horizontal && collapsed(node.second)
+          ? Math.max(0, extent - 40)
+          : extent * node.ratio;
     visit(node.first, {
       ...rect,
       width: horizontal ? first : rect.width,

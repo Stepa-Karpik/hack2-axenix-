@@ -1,0 +1,175 @@
+.flow-area,
+.flow-area .react-flow,
+.flow-area .react-flow__renderer {
+  background-color: #000;
+}
+.flow-area .react-flow .shortcut-label.branch-label {
+  width: 44px;
+  height: 26px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 24px;
+  border-color: currentColor;
+  color: var(--graph-yellow, #d5bd61);
+  background: #080807;
+}
+.flow-area .react-flow__node.selected .blueprint-node {
+  outline: 2px solid var(--graph-violet, #ad8cdf);
+  outline-offset: 3px;
+}
+.flow-area .graph-method-frame {
+  width: 100%;
+  height: 100%;
+  border: 1px solid #62547166;
+  border-radius: 14px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.flow-area .graph-method-frame.active {
+  border: 2px dashed #b494e4;
+}
+.flow-area .graph-method-frame > span {
+  position: absolute;
+  top: -30px;
+  left: 8px;
+  color: #c9b6e5;
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 600px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flow-area .react-flow__node-methodArea {
+  pointer-events: none !important;
+}
+.flow-area .graph-selection-note {
+  position: absolute;
+  bottom: 12px;
+  left: 60px;
+  z-index: 5;
+  color: #d1c5e1;
+  background: #080808e8;
+  padding: 5px 10px;
+  border: 1px solid #51455f;
+  border-radius: 5px;
+  font-size: 12px;
+  pointer-events: none;
+}
+.flow-area .graph-preview {
+  position: absolute;
+  width: 264px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 2px dashed #a58bd2;
+  background: #131019ed;
+  color: #e0d3f1;
+  border-radius: 10px;
+  pointer-events: none;
+  white-space: pre-wrap;
+  font:
+    12px/1.5 Consolas,
+    monospace;
+  z-index: 8;
+}
+.flow-area .graph-preview strong {
+  display: block;
+  font-family: inherit;
+  font-size: 11px;
+  color: #b89bdc;
+  margin-bottom: 5px;
+}
+.flow-area .graph-preview > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.flow-area .graph-preview-diagram {
+  display: grid;
+  justify-items: center;
+  padding: 6px 0 12px;
+  gap: 8px;
+}
+.flow-area .graph-preview-shape {
+  border: 1px dashed #72aabc;
+  padding: 9px 16px;
+  min-width: 94px;
+  text-align: center;
+  background: #102026;
+  color: #9bc8d6;
+}
+.flow-area .graph-preview-shape.condition {
+  width: 70px;
+  height: 70px;
+  min-width: 0;
+  padding: 0;
+  margin: 14px 0;
+  transform: rotate(45deg);
+  border-color: #d5bd61;
+  background: #24200e;
+  color: #e4d593;
+  display: grid;
+  place-items: center;
+}
+.flow-area .graph-preview-shape.condition > span {
+  transform: rotate(-45deg);
+}
+.flow-area .graph-preview-shape.loop {
+  border-color: #b494e4;
+  border-radius: 14px;
+  background: #24172e;
+  color: #c4a6e7;
+}
+.flow-area .graph-preview-branches {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  color: #d5bd61;
+}
+.flow-area .graph-preview-branches > span {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border-top: 1px dashed #d5bd61;
+  padding-top: 6px;
+  width: 45%;
+}
+.flow-area .graph-preview-step {
+  display: block;
+  border: 1px dashed #887d9a;
+  padding: 5px 8px;
+  color: #c9bdd8;
+}
+.flow-area .graph-preview-loop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c4a6e7;
+  border-right: 1px dashed #b494e4;
+  border-bottom: 1px dashed #b494e4;
+  padding: 0 8px 8px;
+}
+.flow-area .graph-preview-connectors {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+.flow-area .graph-preview-connectors path {
+  fill: none;
+  stroke: #b494e4;
+  stroke-width: 2px;
+  stroke-dasharray: 5 5;
+}
+.flow-area .react-flow__selection {
+  background: #a68bd51a;
+  border: 1px solid #b594e1;
+}
+.flow-area.space-pan .react-flow__nodesselection,
+.flow-area.space-pan .react-flow__nodesselection-rect {
+  pointer-events: none !important;
+}

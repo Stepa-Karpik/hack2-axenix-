@@ -1,0 +1,19 @@
+/* Tour blocks workspace actions while its keyboard focus stays in the dialog. */
+.guided-tour.guided-tour {
+  pointer-events: auto;
+}
+.guided-tour .tour-card {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.guided-tour .tour-card:focus-visible {
+  outline: 2px solid var(--theme-accent, #b8f38a);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .guided-tour .tour-aperture,
+  .guided-tour .tour-card {
+    transition: none;
+    animation: none;
+  }
+}
