@@ -9,6 +9,8 @@ import "./workspace.css";
 import "./files.css";
 import "./glass.css";
 import "./product.css";
+import "./auth.css";
+import "./account-profile.css";
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>

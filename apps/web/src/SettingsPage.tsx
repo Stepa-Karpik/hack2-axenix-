@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from "react";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { FriendsContent } from "./FriendsPage";
+import AvatarUpload from "./AvatarUpload";
 export type SettingsSection =
   "profile" | "security" | "appearance" | "friends" | "integrations";
 export default function SettingsPage({
@@ -119,6 +120,7 @@ export default function SettingsPage({
                 <section id="profile" className="product-card">
                   <h2>Публичный профиль</h2>
                   <p className="product-muted">@{user.username}</p>
+                  <AvatarUpload />
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -156,94 +158,118 @@ export default function SettingsPage({
               {section === "security" && (
                 <section id="security" className="product-card">
                   <h2>Безопасность</h2>
-                  <div className="setting-row">
-                    <div>
-                      <strong>{user.email}</strong>
-                      <p className="product-muted">
-                        {user.emailVerified
-                          ? "Почта подтверждена"
-                          : "Почта не подтверждена"}
-                      </p>
-                    </div>
-                    {!user.emailVerified && (
-                      <button
-                        disabled={!!busy}
-                        onClick={() => void action("resend-verification", {})}
+                  {user.authMethod === "github" ? (
+                    <div className="setting-row">
+                      <div>
+                        <strong>Вход через GitHub</strong>
+                        <p className="product-muted">
+                          Этот аккаунт создан через GitHub. Для входа
+                          используйте GitHub.
+                        </p>
+                      </div>
+                      <PageLink
+                        className="product-outline"
+                        to="/settings/integrations"
                       >
-                        Отправить письмо
-                      </button>
-                    )}
-                  </div>
-                  {!user.emailVerified &&
-                    session?.capabilities.emailDelivery === false && (
-                      <p className="product-muted">
-                        Отправка почты пока не настроена на сервере.
-                      </p>
-                    )}
-                  <form
-                    onChange={() => {
-                      setError("");
-                      setResult("");
-                    }}
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const form = e.currentTarget;
-                      const d = new FormData(form);
-                      setError("");
-                      setResult("");
-                      if (d.get("newPassword") !== d.get("confirmPassword")) {
-                        setError("Новые пароли не совпадают.");
-                        return;
-                      }
-                      void action("change-password", {
-                        currentPassword: d.get("currentPassword"),
-                        newPassword: d.get("newPassword"),
-                      }).then((saved) => {
-                        if (saved) form.reset();
-                      });
-                    }}
-                  >
-                    <fieldset disabled={!!busy}>
-                      <label>
-                        Текущий пароль
-                        <input
-                          name="currentPassword"
-                          maxLength={256}
-                          type="password"
-                          autoComplete="current-password"
-                          required
-                        />
-                      </label>
-                      <label>
-                        Новый пароль
-                        <input
-                          name="newPassword"
-                          aria-label="Новый пароль"
-                          aria-describedby="settings-password-hint"
-                          type="password"
-                          autoComplete="new-password"
-                          minLength={12}
-                          maxLength={256}
-                          required
-                        />
-                        <small id="settings-password-hint">
-                          От 12 до 256 символов.
-                        </small>
-                      </label>
-                      <label>
-                        Повторите пароль
-                        <input
-                          name="confirmPassword"
-                          type="password"
-                          autoComplete="new-password"
-                          minLength={12}
-                          maxLength={256}
-                          required
-                        />
-                      </label>
-                      <button>Изменить пароль</button>
-                    </fieldset>
-                  </form>
+                        Подключение GitHub
+                      </PageLink>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="setting-row">
+                        <div>
+                          <strong>{user.email}</strong>
+                          <p className="product-muted">
+                            {user.emailVerified
+                              ? "Почта подтверждена"
+                              : "Почта не подтверждена"}
+                          </p>
+                        </div>
+                        {!user.emailVerified && (
+                          <button
+                            disabled={!!busy}
+                            onClick={() =>
+                              void action("resend-verification", {})
+                            }
+                          >
+                            Отправить письмо
+                          </button>
+                        )}
+                      </div>
+                      {!user.emailVerified &&
+                        session?.capabilities.emailDelivery === false && (
+                          <p className="product-muted">
+                            Отправка почты пока не настроена на сервере.
+                          </p>
+                        )}
+                      <form
+                        onChange={() => {
+                          setError("");
+                          setResult("");
+                        }}
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const form = e.currentTarget;
+                          const d = new FormData(form);
+                          setError("");
+                          setResult("");
+                          if (
+                            d.get("newPassword") !== d.get("confirmPassword")
+                          ) {
+                            setError("Новые пароли не совпадают.");
+                            return;
+                          }
+                          void action("change-password", {
+                            currentPassword: d.get("currentPassword"),
+                            newPassword: d.get("newPassword"),
+                          }).then((saved) => {
+                            if (saved) form.reset();
+                          });
+                        }}
+                      >
+                        <fieldset disabled={!!busy}>
+                          <label>
+                            Текущий пароль
+                            <input
+                              name="currentPassword"
+                              maxLength={256}
+                              type="password"
+                              autoComplete="current-password"
+                              required
+                            />
+                          </label>
+                          <label>
+                            Новый пароль
+                            <input
+                              name="newPassword"
+                              aria-label="Новый пароль"
+                              aria-describedby="settings-password-hint"
+                              type="password"
+                              autoComplete="new-password"
+                              minLength={12}
+                              maxLength={256}
+                              required
+                            />
+                            <small id="settings-password-hint">
+                              От 12 до 256 символов.
+                            </small>
+                          </label>
+                          <label>
+                            Повторите пароль
+                            <input
+                              name="confirmPassword"
+                              type="password"
+                              autoComplete="new-password"
+                              minLength={12}
+                              maxLength={256}
+                              required
+                            />
+                          </label>
+                          <button>Изменить пароль</button>
+                        </fieldset>
+                      </form>
+                    </>
+                  )}
                 </section>
               )}
               {section === "friends" && <FriendsContent />}

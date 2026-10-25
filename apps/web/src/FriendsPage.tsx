@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, Users } from "lucide-react";
+import Avatar from "./Avatar";
 import { api } from "./api";
 import {
   accountError,
@@ -113,9 +114,7 @@ function FriendsManager() {
   function row(user: AccountUser, action?: React.ReactNode) {
     return (
       <div className="person-row" key={user.id}>
-        <span className="person-avatar">
-          {(user.displayName || user.username).slice(0, 1).toUpperCase()}
-        </span>
+        <Avatar user={user} className="person-avatar" />
         <PageLink
           className="person-details"
           to={"/u/" + encodeURIComponent(user.username)}
@@ -377,9 +376,7 @@ function PublicFriends({ username }: { username: string }) {
           <section className="product-card">
             {data.items.map((u) => (
               <div className="person-row" key={u.id}>
-                <span className="person-avatar">
-                  {(u.displayName || u.username).slice(0, 1).toUpperCase()}
-                </span>
+                <Avatar user={u} className="person-avatar" />
                 <PageLink
                   className="person-details"
                   to={"/u/" + encodeURIComponent(u.username)}

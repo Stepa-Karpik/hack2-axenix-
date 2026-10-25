@@ -99,7 +99,9 @@ export async function api<T>(
       json.error?.message ?? `HTTP ${response.status}`,
     );
   if (
-    (path === "/auth/login" || path === "/auth/logout") &&
+    (path === "/auth/login" ||
+      path === "/auth/logout" ||
+      path === "/github/signup") &&
     typeof json.data?.csrfToken === "string"
   )
     setSessionCsrf(json.data.csrfToken);

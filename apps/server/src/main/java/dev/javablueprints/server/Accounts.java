@@ -70,8 +70,9 @@ class Accounts {
   Map<String, Object> user(String id, boolean own) {
     var rows =
         w.db.queryForList(
-            "SELECT id::text,username,email,email_verified,display_name,bio FROM accounts WHERE"
-                + " id=?",
+            "SELECT a.id::text,a.username,a.email,a.email_verified,a.display_name,a.bio,a.auth_method,"
+                + " av.version AS avatar_version FROM accounts a LEFT JOIN account_avatars av"
+                + " ON av.account_id=a.id WHERE a.id=?",
             uuid(id));
     if (rows.isEmpty()) throw missing();
     var r = rows.getFirst();
@@ -84,8 +85,12 @@ class Accounts {
             "displayName",
             r.get("display_name"),
             "bio",
-            r.get("bio"));
+            r.get("bio"),
+            "avatarUrl",
+            r.get("avatar_version") == null ? null
+                : "/api/v1/users/" + r.get("username") + "/avatar?v=" + r.get("avatar_version"));
     if (own) {
+      result.put("authMethod", r.get("auth_method"));
       result.put("email", r.get("email"));
       result.put("emailVerified", r.get("email_verified"));
     }
@@ -193,9 +198,10 @@ class Accounts {
             identifier,
             identifier);
     String encoded =
-        rows.isEmpty() ? DUMMY_PASSWORD : rows.getFirst().get("password_hash").toString();
+        rows.isEmpty() || rows.getFirst().get("password_hash") == null
+            ? DUMMY_PASSWORD : rows.getFirst().get("password_hash").toString();
     boolean valid = AccountPasswords.matches(str(b, "password"), encoded);
-    if (rows.isEmpty() || !valid)
+    if (rows.isEmpty() || rows.getFirst().get("password_hash") == null || !valid)
       throw new ApiError(401, "INVALID_CREDENTIALS", "Invalid username/email or password");
     signIn(
         req,
@@ -206,7 +212,13 @@ class Accounts {
 
   private static final String DUMMY_PASSWORD = AccountPasswords.encode(AccountPasswords.token());
 
+  void requirePasswordAccount(String account) {
+    if ("github".equals(w.db.queryForObject("SELECT auth_method FROM accounts WHERE id=?", String.class, uuid(account))))
+      throw new ApiError(409, "GITHUB_ONLY_ACCOUNT", "This account signs in through GitHub only");
+  }
+
   void issue(String account, String kind) {
+    requirePasswordAccount(account);
     if (!mail.available()) throw AccountMail.unavailable();
     String token = AccountPasswords.token();
     var own = user(account, true);
@@ -252,6 +264,7 @@ class Accounts {
           if (candidates.isEmpty())
             throw new ApiError(400, "TOKEN_INVALID", "Link is invalid or expired");
           String account = candidates.getFirst().get("account_id").toString();
+          requirePasswordAccount(account);
           // Use the same account-then-token lock order as issuance and password changes.
           w.db.queryForObject(
               "SELECT auth_version FROM accounts WHERE id=? FOR UPDATE",
@@ -279,6 +292,7 @@ class Accounts {
 
   void changePassword(Map<String, Object> b, HttpServletRequest req) {
     String account = require(req);
+    requirePasswordAccount(account);
     throttle("change-password", account, 15);
     String encoded = AccountPasswords.encode(str(b, "newPassword"));
     Integer changedVersion =

@@ -6,8 +6,15 @@ import org.springframework.web.bind.annotation.GetMapping;
 
 @Controller
 class WebRoutes {
+  @GetMapping(value = "/", produces = MediaType.TEXT_HTML_VALUE)
+  String landing() {
+    return "forward:/landing/index.html";
+  }
+
   @GetMapping(
       value = {
+        "/projects",
+        "/github/complete",
         "/projects/{projectId}",
         "/projects/{projectId}/runs/{runId}",
         "/login",

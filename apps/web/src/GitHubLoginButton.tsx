@@ -3,6 +3,8 @@ import {
   useGitHubStatus,
   githubCallbackMessage,
 } from "./github";
+import GitHubIcon from "./GitHubIcon";
+import { rememberAuthReturn } from "./authNavigation";
 export default function GitHubLoginButton() {
   const { status, error } = useGitHubStatus();
   const redirect = useGitHubRedirect();
@@ -13,13 +15,14 @@ export default function GitHubLoginButton() {
         type="button"
         className="github-login"
         disabled={!status?.configured || redirect.busy}
-        onClick={() => void redirect.start("login")}
+        onClick={() => {
+          rememberAuthReturn();
+          void redirect.start("login");
+        }}
       >
-        Войти через GitHub
+        <GitHubIcon />
+        {redirect.busy ? "Переходим в GitHub…" : "Продолжить с GitHub"}
       </button>
-      <p className="quiet small">
-        Для GitHub, ранее привязанного к вашему аккаунту.
-      </p>
       {(reason || error || redirect.error || githubCallbackMessage()) && (
         <p role="status" className="quiet small">
           {reason || error || redirect.error || githubCallbackMessage()}

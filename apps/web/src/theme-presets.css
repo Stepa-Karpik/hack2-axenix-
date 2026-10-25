@@ -4,7 +4,11 @@
   --product-text: var(--theme-text);
   --product-muted: var(--theme-muted);
   --product-accent: var(--theme-accent);
-  --product-border: var(--theme-muted);
+  --product-border: color-mix(
+    in srgb,
+    var(--theme-muted) 32%,
+    var(--theme-surface)
+  );
   --bg: var(--theme-background);
   --panel: var(--theme-surface);
   --text: var(--theme-text);

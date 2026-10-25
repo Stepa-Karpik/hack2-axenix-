@@ -67,7 +67,7 @@ class AccountController {
     a.throttle("forgot", r.getRemoteAddr(), 10);
     String email = str(b, "email").strip().toLowerCase(Locale.ROOT);
     if (!a.mail.available()) throw AccountMail.unavailable();
-    var rows = w.db.queryForList("SELECT id::text FROM accounts WHERE lower(email)=?", email);
+    var rows = w.db.queryForList("SELECT id::text FROM accounts WHERE lower(email)=? AND auth_method='password'", email);
     if (!rows.isEmpty()) a.issue(rows.getFirst().get("id").toString(), "reset");
     return ok(
         map(
@@ -352,6 +352,11 @@ class AccountController {
 
 @RestControllerAdvice
 class AccountErrors {
+  @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+  ResponseEntity<?> uploadSize(Exception e) {
+    return error(new ApiError(413, "UPLOAD_TOO_LARGE", "Uploaded file exceeds the size limit"));
+  }
+
   @ExceptionHandler(ApiError.class)
   ResponseEntity<?> error(ApiError e) {
     return ResponseEntity.status(e.status)

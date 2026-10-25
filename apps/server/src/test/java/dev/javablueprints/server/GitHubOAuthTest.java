@@ -50,7 +50,7 @@ class GitHubOAuthTest {
     when(db.queryForList(eq("SELECT account_id::text FROM github_links WHERE github_id=?"),eq("111"))).thenReturn(List.of(map("account_id",account)));
     when(db.queryForObject(eq("SELECT auth_version FROM accounts WHERE id=? FOR UPDATE"),eq(Integer.class),eq(uuid(account)))).thenReturn(7);
     when(db.queryForList(eq("SELECT github_id FROM github_links WHERE account_id=? FOR UPDATE"),eq(uuid(account)))).thenReturn(List.of(map("github_id","111")));
-    assertEquals("/?github=login_success",service.callback(request,state,"code",null));
+    assertEquals("/projects?github=login_success",service.callback(request,state,"code",null));
     verify(accounts).signIn(request,account,7);
   }
   @Test void missingMismatchedOrReplayedStateNeverExchangesAnotherCode(){
@@ -59,9 +59,12 @@ class GitHubOAuthTest {
     assertEquals("GITHUB_STATE_INVALID",assertThrows(ApiError.class,()->service.callback(request,state,"code",null)).code);
     assertTrue(outgoing.isEmpty());
   }
-  @Test void unlinkedStableIdentityNeverAutoMatchesEmailOrUsernameAndStateIsOneUse(){
+  @Test void unlinkedIdentityStoresPendingSignupWithoutEmailMergeAndStateIsOneUse(){
     consumeOnce();when(db.queryForList(eq("SELECT account_id::text FROM github_links WHERE github_id=?"),eq("111"))).thenReturn(List.of());
-    assertEquals("GITHUB_NOT_LINKED",assertThrows(ApiError.class,()->service.callback(request,state,"code",null)).code);
+    when(db.queryForList(startsWith("SELECT state_hash FROM github_oauth_attempts"),anyString(),anyString())).thenReturn(List.of(map("state_hash",hash(state))));
+    when(db.queryForList(startsWith("SELECT github_id,login FROM github_signup_claims"),anyString())).thenReturn(List.of(map("github_id","111","login","same-name")));
+    when(db.update(startsWith("INSERT INTO accounts"),any(Object.class),any(Object.class),any(Object.class))).thenThrow(new org.springframework.dao.DuplicateKeyException("occupied"));
+    assertEquals("/github/complete",service.callback(request,state,"code",null));
     assertEquals(2,outgoing.size());
     assertEquals("GITHUB_STATE_INVALID",assertThrows(ApiError.class,()->service.callback(request,state,"another-code",null)).code);
     assertEquals(2,outgoing.size());verify(accounts,never()).signIn(any(),anyString(),anyInt());

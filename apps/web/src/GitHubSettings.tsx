@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { useAccount } from "./Account";
+import { ArrowUpRight, Check, Unplug } from "lucide-react";
+import GitHubIcon from "./GitHubIcon";
+import { PageLink, useAccount } from "./Account";
 import {
   githubCallbackMessage,
   githubMessage,
@@ -11,8 +13,7 @@ export default function GitHubSettings() {
   const { session } = useAccount();
   const { status, error, refresh } = useGitHubStatus();
   const redirect = useGitHubRedirect();
-  const [consent, setConsent] = useState(false),
-    [confirm, setConfirm] = useState(false),
+  const [confirm, setConfirm] = useState(false),
     [busy, setBusy] = useState(false),
     [actionError, setActionError] = useState(""),
     [result, setResult] = useState("");
@@ -33,7 +34,6 @@ export default function GitHubSettings() {
     locked.current = false;
     setBusy(false);
     setConfirm(false);
-    setConsent(false);
     setResult("");
     setActionError("");
   }, [session?.user?.id]);
@@ -49,10 +49,7 @@ export default function GitHubSettings() {
       await api("/github/link", { method: "DELETE", signal: current.signal });
       if (mounted.current && ticket === epoch.current) {
         setConfirm(false);
-        setConsent(false);
-        setResult(
-          "Связь удалена из приложения. Разрешение OAuth App можно отдельно отозвать в настройках GitHub.",
-        );
+        setResult("GitHub отключён.");
         refresh();
       }
     } catch (error) {
@@ -66,108 +63,134 @@ export default function GitHubSettings() {
     }
   }
   if (!session?.user) return <p>Войдите в аккаунт, чтобы подключить GitHub.</p>;
+  const connected = !!status?.linked && status.repositoryAccess;
+  const callback = new URLSearchParams(location.search).get("github");
+  const feedback =
+    result || (callback?.endsWith("_success") ? "" : githubCallbackMessage());
   return (
     <section
-      className="github-settings"
+      className="github-settings integration-card"
       aria-labelledby="github-settings-title"
     >
-      <h2 id="github-settings-title">GitHub</h2>
-      {!status && !error && <p role="status">Проверяем подключение…</p>}
-      {status && !status.configured && (
-        <p role="status">{status.unavailableReason}</p>
-      )}
+      <div className="integration-heading">
+        <span className="integration-logo">
+          <GitHubIcon size={28} />
+        </span>
+        <div className="integration-title">
+          <h2 id="github-settings-title">GitHub</h2>
+          <p>Репозитории и импорт проектов</p>
+        </div>
+        <span className="integration-status" data-connected={connected}>
+          <i aria-hidden="true" />
+          {connected
+            ? "Подключено"
+            : status?.linked
+              ? "Нужен доступ"
+              : "Не подключено"}
+        </span>
+      </div>
       {status?.linked ? (
-        <>
-          <p>
-            Привязан <strong>{status.linked.login}</strong>{" "}
-            <span className="quiet">· ID {status.linked.githubId}</span>
-          </p>
-          <p className="quiet">
-            {status.repositoryAccess
-              ? "Доступ к репозиториям подключён."
-              : "Доступ к репозиториям ещё не подключён."}
-            {status.expiresAt
-              ? " Срок: " + new Date(status.expiresAt).toLocaleString()
-              : ""}
-          </p>
-          {
-            <>
-              <p className="quiet small">
-                Для приватных репозиториев GitHub OAuth запрашивает широкое
-                разрешение repo, включающее запись. Это приложение использует
-                его для чтения. Доступ организации может потребовать отдельного
-                одобрения.
-              </p>
-              <label className="github-consent">
-                <input
-                  type="checkbox"
-                  checked={consent}
-                  disabled={busy || redirect.busy}
-                  onChange={(event) => setConsent(event.target.checked)}
-                />
-                Разрешить подключение репозиториев с разрешением repo
-              </label>
-              <button
-                type="button"
-                disabled={
-                  !status.configured || !consent || busy || redirect.busy
-                }
-                onClick={() => void redirect.start("repositories")}
-              >
-                {status.repositoryAccess
-                  ? "Переподключить репозитории GitHub"
-                  : "Подключить репозитории GitHub"}
-              </button>
-            </>
-          }
-          {!confirm ? (
-            <button
-              type="button"
-              disabled={busy || redirect.busy}
-              onClick={() => setConfirm(true)}
-            >
-              Отключить GitHub
-            </button>
-          ) : (
-            <div className="github-actions">
-              <span>Отключить вход GitHub и импорт репозиториев?</span>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void unlink()}
-              >
-                Да, отключить
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setConfirm(false)}
-              >
-                Отмена
-              </button>
+        <div className="integration-account">
+          <div>
+            <span className="integration-caption">Аккаунт</span>
+            <strong>@{status.linked.login}</strong>
+          </div>
+          {connected && (
+            <div className="integration-features">
+              <span>
+                <Check size={14} /> Импорт репозиториев
+              </span>
+              <span>
+                <Check size={14} /> Приватные проекты
+              </span>
             </div>
           )}
-        </>
+        </div>
       ) : (
-        <>
-          <p className="quiet">
-            Привяжите GitHub к существующему аккаунту для последующего входа.
-            Почта GitHub не используется для объединения аккаунтов.
-          </p>
+        <p className="integration-description">
+          Подключите GitHub, чтобы импортировать публичные и приватные
+          репозитории.
+        </p>
+      )}
+      <div className="integration-controls">
+        {connected ? (
+          <PageLink to="/projects" className="product-action">
+            Открыть проекты
+            <ArrowUpRight size={16} />
+          </PageLink>
+        ) : (
           <button
+            className="product-action"
             type="button"
-            disabled={!status?.configured || redirect.busy}
-            onClick={() => void redirect.start("link")}
+            disabled={!status?.configured || busy || redirect.busy}
+            onClick={() =>
+              void redirect.start(status?.linked ? "repositories" : "link")
+            }
           >
-            Привязать GitHub
+            {redirect.busy
+              ? "Подключение…"
+              : status?.linked
+                ? "Обновить доступ"
+                : "Подключить GitHub"}
+            <ArrowUpRight size={16} />
           </button>
-        </>
+        )}
+        {status?.linked && session.user.authMethod !== "github" && !confirm && (
+          <button
+            className="integration-disconnect"
+            type="button"
+            disabled={busy || redirect.busy}
+            onClick={() => setConfirm(true)}
+          >
+            <Unplug size={15} />
+            Отключить GitHub
+          </button>
+        )}
+        {status?.linked && session.user.authMethod === "github" && (
+          <span className="integration-login-note">Используется для входа</span>
+        )}
+      </div>
+      {confirm && (
+        <div className="integration-confirm">
+          <p>Отключить GitHub?</p>
+          <div className="github-actions">
+            <button
+              type="button"
+              className="integration-disconnect"
+              disabled={busy}
+              onClick={() => void unlink()}
+            >
+              {busy ? "Отключение…" : "Да, отключить"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirm(false)}
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+      {!status && !error && (
+        <p className="integration-feedback" role="status">
+          Проверяем подключение…
+        </p>
+      )}
+      {status && !status.configured && (
+        <p className="integration-feedback" role="status">
+          Подключение GitHub пока недоступно.
+        </p>
       )}
       {(error || actionError || redirect.error) && (
-        <p role="alert">{error || actionError || redirect.error}</p>
+        <p className="integration-feedback error" role="alert">
+          {error || actionError || redirect.error}
+        </p>
       )}
-      {(result || githubCallbackMessage()) && (
-        <p role="status">{result || githubCallbackMessage()}</p>
+      {feedback && (
+        <p className="integration-feedback" role="status">
+          {feedback}
+        </p>
       )}
     </section>
   );

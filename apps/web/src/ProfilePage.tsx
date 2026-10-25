@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen } from "lucide-react";
+import Avatar from "./Avatar";
 import { api } from "./api";
 import { accountError, PageLink, ProductShell, useAccount } from "./Account";
 import type { AccountUser } from "./Account";
@@ -192,11 +193,7 @@ export default function ProfilePage({ username }: { username: string }) {
         {visible ? (
           <div className="profile-layout">
             <aside className="profile-summary" data-tour="profile">
-              <div className="profile-avatar">
-                {(visible.user.displayName || username)
-                  .slice(0, 1)
-                  .toUpperCase()}
-              </div>
+              <Avatar user={visible.user} className="profile-avatar" />
               <h1>{visible.user.displayName || username}</h1>
               <p className="profile-handle">@{username}</p>
               <p className="profile-bio">{visible.user.bio}</p>

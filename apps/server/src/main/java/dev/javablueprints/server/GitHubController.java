@@ -20,6 +20,8 @@ final class GitHubController {
     try{destination=service.callback(request,state,code,error);}catch(ApiError failure){String prefix=service.accounts.actor(request)==null?"/login":"/settings/integrations";destination=prefix+"?github="+GitHubClient.segment(failure.code);}
     return ResponseEntity.status(303).location(URI.create(destination)).header("Cache-Control","no-store").header("Referrer-Policy","no-referrer").build();
   }
+  @GetMapping("/signup") Object signup(HttpServletRequest request){return ok(service.signup(request));}
+  @PostMapping("/signup") Object signup(@RequestBody Map<String,Object> body,HttpServletRequest request){ApiController.fields(body,"username");service.completeSignup(request,str(body,"username"));return ok(service.accounts.session(request));}
   @DeleteMapping("/link") Object unlink(HttpServletRequest request){service.unlink(request);return ok(map("disconnected",true,"providerGrantRevoked",false));}
   @GetMapping("/repositories") Object repositories(HttpServletRequest request,@RequestParam(defaultValue="1")int page){return ok(repositories.repositories(request,page));}
   @GetMapping("/repositories/{id}/refs") Object refs(HttpServletRequest request,@PathVariable String id,@RequestParam(defaultValue="branches")String kind,@RequestParam(defaultValue="1")int page){return ok(repositories.refs(request,id,kind,page));}

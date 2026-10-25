@@ -6,6 +6,8 @@ import ProjectSearch from "./ProjectSearch";
 import GuidedTour, { TargetSpotlight } from "./Spotlight";
 import GitHubSettings from "./GitHubSettings";
 import GitHubLoginButton from "./GitHubLoginButton";
+import GitHubSignup from "./GitHubSignup";
+import { authReturn, consumeAuthReturn } from "./authNavigation";
 import GitHubImport from "./GitHubImport";
 import type { SearchHit } from "./searchIndex";
 import "./workspaceUX.css";
@@ -20,6 +22,7 @@ import {
   canExportProjects,
 } from "./Account";
 import AccountAuth from "./AccountAuth";
+import Avatar from "./Avatar";
 import ProfilePage from "./ProfilePage";
 import SettingsPage from "./SettingsPage";
 import FriendsPage from "./FriendsPage";
@@ -197,10 +200,10 @@ function Brand() {
   return (
     <a
       className="brand"
-      href="/"
+      href="/projects"
       onClick={(e) => {
         e.preventDefault();
-        navigate("/");
+        navigate("/projects");
       }}
     >
       <span className="brand-mark">
@@ -229,11 +232,15 @@ function AppRoutes() {
   return (
     <>
       <RouteContent path={path} />
-      <GuidedTour path={path} />
+      {!/^\/(?:auth\/)?(?:login|register|forgot-password|reset-password|verify-email)\/?$/.test(
+        path,
+      ) &&
+        path !== "/github/complete" && <GuidedTour path={path} />}
     </>
   );
 }
 function RouteContent({ path }: { path: string }) {
+  const { session, loading, error, refresh } = useAccount();
   const match = path.match(/^\/projects\/([^/]+)(?:\/runs\/([^/]+))?\/?$/);
   const authModes = [
     "login",
@@ -245,12 +252,81 @@ function RouteContent({ path }: { path: string }) {
   const authMode = authModes.find(
     (mode) => path === "/" + mode || path === "/auth/" + mode,
   );
+  const signup = path === "/github/complete";
+  const isAuth = !!authMode || signup;
+  const publicProfile = /^\/(?:u|profile)\/[^/]+(?:\/friends)?\/?$/.test(path);
+  const needsLogin = !isAuth && !match && !publicProfile && !session?.user;
+  const signedInAuth =
+    !!session?.user &&
+    (signup || authMode === "login" || authMode === "register");
+  useEffect(() => {
+    if (loading || error) return;
+    let destination: string | undefined;
+    if (needsLogin)
+      destination =
+        "/login" +
+        (path === "/"
+          ? ""
+          : "?next=" + encodeURIComponent(path + location.search));
+    else if (signedInAuth)
+      destination = signup ? consumeAuthReturn() : authReturn();
+    else if (
+      session?.user &&
+      path === "/projects" &&
+      ["login_success", "signup_success"].includes(
+        new URLSearchParams(location.search).get("github") ?? "",
+      )
+    )
+      destination = consumeAuthReturn();
+    if (destination !== undefined) {
+      if (destination === "/" || destination.startsWith("/?")) {
+        location.replace(destination);
+        return;
+      }
+      history.replaceState({}, "", destination);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  }, [
+    loading,
+    error,
+    needsLogin,
+    signedInAuth,
+    path,
+    signup,
+    session?.user?.id,
+  ]);
+  if ((loading && !isAuth) || needsLogin || signedInAuth)
+    return (
+      <div className="auth-entry-status" role="status">
+        {error ? (
+          <>
+            <p>{error}</p>
+            <button onClick={() => void refresh()}>Повторить</button>
+          </>
+        ) : (
+          "Загрузка…"
+        )}
+      </div>
+    );
+  if (signup) return <GitHubSignup />;
+  if (match && !session?.user)
+    return (
+      <PublicProjectEntry
+        key={match[1]}
+        projectId={match[1]}
+        runId={match[2]}
+      />
+    );
   if (authMode)
     return (
       <AccountAuth
         key={authMode}
         mode={authMode}
-        githubLogin={authMode === "login" ? <GitHubLoginButton /> : undefined}
+        githubLogin={
+          authMode === "login" || authMode === "register" ? (
+            <GitHubLoginButton />
+          ) : undefined
+        }
       />
     );
   const section = path.match(
@@ -287,6 +363,58 @@ function RouteContent({ path }: { path: string }) {
     <Workbench key={match[1]} projectId={match[1]} runId={match[2]} />
   ) : (
     <Projects />
+  );
+}
+function PublicProjectEntry({
+  projectId,
+  runId,
+}: {
+  projectId: string;
+  runId?: string;
+}) {
+  const [allowed, setAllowed] = useState(false);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    const requireLogin = () => {
+      history.replaceState(
+        {},
+        "",
+        "/login?next=" +
+          encodeURIComponent(location.pathname + location.search),
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    };
+    setError("");
+    api<Project>(projectPath(projectId), { signal: controller.signal })
+      .then((project) => {
+        if (controller.signal.aborted) return;
+        if (project.visibility === "public") setAllowed(true);
+        else requireLogin();
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted) return;
+        if (cause instanceof ApiError && [401, 403, 404].includes(cause.status))
+          requireLogin();
+        else setError(message(cause));
+      });
+    return () => controller.abort();
+  }, [projectId, retry]);
+  if (allowed) return <Workbench projectId={projectId} runId={runId} />;
+  return (
+    <div className="auth-entry-status" role="status">
+      {error ? (
+        <>
+          <p>{error}</p>
+          <button onClick={() => setRetry((value) => value + 1)}>
+            Повторить
+          </button>
+        </>
+      ) : (
+        "Открываем проект…"
+      )}
+    </div>
   );
 }
 function Projects() {
@@ -445,7 +573,7 @@ function Projects() {
   if (session && !mayCreate)
     return (
       <div className="projects-page">
-        <ProductSidebar active="/" />
+        <ProductSidebar active="/projects" />
         <header className="home-header">
           <Brand />
           <AccountNav />
@@ -471,7 +599,7 @@ function Projects() {
     );
   return (
     <div className="projects-page">
-      <ProductSidebar active="/" />
+      <ProductSidebar active="/projects" />
       <header className="home-header">
         <Brand />
         <AccountNav />
@@ -2273,7 +2401,7 @@ function Workbench({
         className="workspace-navigation-content"
         aria-label="Навигация проекта"
       >
-        <button onClick={() => navigate("/")}>
+        <button onClick={() => navigate("/projects")}>
           <House size={17} />
           Проекты
         </button>
@@ -3660,7 +3788,7 @@ function Workbench({
               save: () => void save(),
               import: () => setImportChooser(true),
               export: () => void exportRevision(),
-              projects: () => navigate("/"),
+              projects: () => navigate("/projects"),
               run: () => setDialog("run"),
               compare: () => setDialog("compare"),
               stop: stopJob,
@@ -3691,7 +3819,11 @@ function Workbench({
           aria-label="Открыть настройки аккаунта"
           onClick={() => navigate("/settings/profile")}
         >
-          <CircleUserRound size={23} />
+          {accountSession?.user ? (
+            <Avatar user={accountSession.user} />
+          ) : (
+            <CircleUserRound size={23} />
+          )}
         </button>
         <button
           className="share-button"

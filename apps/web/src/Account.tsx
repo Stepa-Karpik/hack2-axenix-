@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode, MouseEvent } from "react";
 import { api, ApiError, setSessionCsrf } from "./api";
 import "./account-pages.css";
+import Avatar from "./Avatar";
 export interface AccountUser {
   id: string;
   username: string;
@@ -9,6 +10,8 @@ export interface AccountUser {
   bio: string;
   email?: string;
   emailVerified?: boolean;
+  authMethod?: "password" | "github";
+  avatarUrl?: string | null;
 }
 export interface AccountSession {
   mode: string;
@@ -96,6 +99,15 @@ const accountMessages: Record<string, string> = {
   NOT_FOUND: "Запрошенные данные не найдены.",
   INVALID_REQUEST: "Проверьте введённые данные.",
   CSRF_INVALID: "Обновите страницу и повторите действие.",
+  GITHUB_SIGNUP_INVALID:
+    "Регистрация истекла или уже завершена. Начните вход через GitHub заново.",
+  GITHUB_SESSION_CHANGED:
+    "Сессия изменилась. Начните вход через GitHub заново.",
+  GITHUB_ONLY_ACCOUNT: "Этот аккаунт использует вход через GitHub.",
+  INVALID_AVATAR:
+    "Не удалось прочитать фото. Выберите PNG или JPEG размером до 4096 × 4096 пикселей.",
+  AVATAR_TOO_LARGE: "Фото должно быть не больше 2 МБ.",
+  UPLOAD_TOO_LARGE: "Файл слишком большой. Максимальный размер фото — 2 МБ.",
 };
 export const accountError = (e: unknown) =>
   e instanceof ApiError && accountMessages[e.code]
@@ -104,6 +116,10 @@ export const accountError = (e: unknown) =>
       ? e.message
       : "Не удалось выполнить действие";
 export function go(path: string) {
+  if (path === "/" || path.startsWith("/?") || path.startsWith("/#")) {
+    location.assign(path);
+    return;
+  }
   history.pushState({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
@@ -133,14 +149,14 @@ export function PageLink({
 }
 export function ProductBrand() {
   return (
-    <PageLink to="/" className="product-brand">
+    <a href="/" className="product-brand">
       <span className="product-brand-mark">
         <img src="/brand-lockup.png" alt="JB" />
       </span>
       <span>
         Java<span>Blueprints</span>
       </span>
-    </PageLink>
+    </a>
   );
 }
 export function AccountNav() {
@@ -155,11 +171,7 @@ export function AccountNav() {
             className="account-avatar-link"
             to={"/u/" + encodeURIComponent(session.user.username)}
           >
-            <span className="mini-avatar">
-              {(session.user.displayName || session.user.username)
-                .slice(0, 1)
-                .toUpperCase()}
-            </span>
+            <Avatar user={session.user} />
             <span>{session.user.username}</span>
           </PageLink>
         </>
@@ -206,9 +218,10 @@ export function SignedInRequired() {
 
 export function ProductSidebar({ active }: { active?: string }) {
   const { session } = useAccount();
+  if (!session?.user) return null;
   const path = active ?? location.pathname;
   const links = [
-    ["/", "Проекты"],
+    ["/projects", "Проекты"],
     ...(session?.user
       ? [["/u/" + encodeURIComponent(session.user.username), "Мой профиль"]]
       : []),

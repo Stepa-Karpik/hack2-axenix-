@@ -176,6 +176,7 @@
   padding: 8px 20px;
 }
 .product-page .product-action,
+.projects-page .product-action,
 .projects-page button.primary {
   background: var(--product-text);
   color: var(--product-bg);
@@ -190,6 +191,7 @@
   padding: 11px 18px;
 }
 .product-page .product-action:hover:not(:disabled),
+.projects-page .product-action:hover,
 .projects-page button.primary:hover:not(:disabled) {
   background: var(--product-text);
   color: var(--product-bg);

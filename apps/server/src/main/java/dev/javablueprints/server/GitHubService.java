@@ -54,6 +54,7 @@ final class GitHubService {
         int current=w.db.queryForObject("SELECT auth_version FROM accounts WHERE id=? FOR UPDATE",Integer.class,uuid(actor));
         if(current!=version||!actor.equals(accounts.actor(request)))throw error(409,"GITHUB_SESSION_CHANGED","Account credentials changed; start again");
       }
+      w.db.update("DELETE FROM github_signup_claims WHERE expires_at<now() OR session_hash=?",binding);
       w.db.update("DELETE FROM github_oauth_attempts WHERE expires_at<now() OR (session_hash=? AND purpose=?)",binding,purpose);
       Integer total=w.db.queryForObject("SELECT count(*) FROM github_oauth_attempts",Integer.class);
       if(total>=10000)throw error(429,"GITHUB_RATE_LIMITED","Too many pending GitHub authorizations");
@@ -63,7 +64,7 @@ final class GitHubService {
     String challenge;
     try{challenge=Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));}
     catch(Exception ignored){throw error(503,"GITHUB_UNAVAILABLE","PKCE is unavailable");}
-    String url="https://github.com/login/oauth/authorize?client_id="+segment(config.clientId)+"&redirect_uri="+segment(config.callback)+"&state="+segment(state)+"&code_challenge="+segment(challenge)+"&code_challenge_method=S256&allow_signup=false&prompt=select_account&scope="+(purpose.equals("repositories")?"repo":"");
+    String url="https://github.com/login/oauth/authorize?client_id="+segment(config.clientId)+"&redirect_uri="+segment(config.callback)+"&state="+segment(state)+"&code_challenge="+segment(challenge)+"&code_challenge_method=S256&allow_signup=false&prompt=select_account&scope="+(purpose.equals("login")?"":"repo");
     return map("authorizationUrl",url);
   }
   String callback(HttpServletRequest request,String state,String code,String denial){
@@ -83,7 +84,21 @@ final class GitHubService {
     checkActor(request,actor,attempt.get("auth_version"));
     if(purpose.equals("login")){
       var links=w.db.queryForList("SELECT account_id::text FROM github_links WHERE github_id=?",githubId);
-      if(links.isEmpty())throw error(401,"GITHUB_NOT_LINKED","This GitHub identity is not linked to an existing account");
+      if(links.isEmpty()){
+        w.tx.executeWithoutResult(tx->{
+          checkActor(request,null,null);
+          if(!binding.equals(correlation(request,false)))throw error(400,"GITHUB_STATE_INVALID","GitHub authorization session changed; start again");
+          var active=w.db.queryForList("SELECT state_hash FROM github_oauth_attempts WHERE state_hash=? AND session_hash=? AND consumed_at IS NOT NULL AND expires_at>now() FOR UPDATE",stateHash,binding);
+          if(active.size()!=1)throw error(400,"GITHUB_STATE_INVALID","GitHub authorization expired; start again");
+          w.db.update("DELETE FROM github_signup_claims WHERE expires_at<now()");
+          w.db.update("INSERT INTO github_signup_claims(session_hash,github_id,login,expires_at) VALUES(?,?,?,now()+interval '10 minutes') ON CONFLICT(session_hash) DO UPDATE SET github_id=EXCLUDED.github_id,login=EXCLUDED.login,expires_at=EXCLUDED.expires_at",binding,githubId,login);
+        });
+        if(validSignupUsername(login)){
+          try{completeSignup(request,login);return "/projects?github=signup_success";}
+          catch(ApiError failure){if(!failure.code.equals("ACCOUNT_CONFLICT"))throw failure;}
+        }
+        return "/github/complete";
+      }
       String account=links.getFirst().get("account_id").toString();
       w.tx.executeWithoutResult(tx->{
         int current=w.db.queryForObject("SELECT auth_version FROM accounts WHERE id=? FOR UPDATE",Integer.class,uuid(account));
@@ -92,7 +107,7 @@ final class GitHubService {
         if(accounts.actor(request)!=null)throw error(409,"GITHUB_SESSION_CHANGED","Account session changed; start again");
         accounts.signIn(request,account,current);
       });
-      return "/?github=login_success";
+      return "/projects?github=login_success";
     }
     try {
       w.tx.executeWithoutResult(tx->{
@@ -102,19 +117,20 @@ final class GitHubService {
         requireActiveAttempt(request,stateHash,binding,purpose,actor,current);
         var links=w.db.queryForList("SELECT github_id FROM github_links WHERE account_id=? FOR UPDATE",uuid(actor));
         if(!links.isEmpty()&&!githubId.equals(links.getFirst().get("github_id")))throw error(409,"GITHUB_ACCOUNT_MISMATCH","GitHub account differs from the linked identity; unlink explicitly first");
+        if(!scopes(token.get("scope")).contains("repo"))throw error(403,"GITHUB_SCOPE_REQUIRED","GitHub repository access was not granted");
+        var pair=tokenPair(token,false);
         if(purpose.equals("link")){
           w.db.update("INSERT INTO github_links(account_id,github_id,login) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET login=EXCLUDED.login",uuid(actor),githubId,login);
-        }else{
-          if(links.isEmpty())throw error(409,"GITHUB_LINK_REQUIRED","GitHub link changed; reconnect from profile");
-          if(!scopes(token.get("scope")).contains("repo"))throw error(403,"GITHUB_SCOPE_REQUIRED","GitHub repository access was not granted");
-          var pair=tokenPair(token,false);
-          w.db.update("INSERT INTO github_credentials(account_id,token_ciphertext,granted_scopes,grant_version,expires_at,refresh_ciphertext,refresh_expires_at,token_version) VALUES(?,?,?,?::uuid,?,?,?,?::uuid) ON CONFLICT(account_id) DO UPDATE SET token_ciphertext=EXCLUDED.token_ciphertext,granted_scopes=EXCLUDED.granted_scopes,grant_version=EXCLUDED.grant_version,expires_at=EXCLUDED.expires_at,refresh_ciphertext=EXCLUDED.refresh_ciphertext,refresh_expires_at=EXCLUDED.refresh_expires_at,token_version=EXCLUDED.token_version,refresh_owner=NULL,refresh_lease_until=NULL,refresh_reconnect=false,updated_at=now()",
-              uuid(actor),crypto().seal(pair.access(),"repository|"+actor+"|"+githubId),pair.scope(),id(),GitHubRefresh.timestamp(pair.expires()),
-              pair.refresh()==null?null:crypto().seal(pair.refresh(),"repository-refresh|"+actor+"|"+githubId),GitHubRefresh.timestamp(pair.refreshExpires()),id());
-        }
+        }else if(links.isEmpty())throw error(409,"GITHUB_LINK_REQUIRED","GitHub link changed; reconnect from profile");
+        persistRepositoryGrant(actor,githubId,pair);
       });
     }catch(DuplicateKeyException ignored){throw error(409,"GITHUB_LINK_CONFLICT","This GitHub identity is already linked to another account");}
     return "/settings/integrations?github="+(purpose.equals("link")?"link_success":"repositories_success");
+  }
+  private void persistRepositoryGrant(String actor,String githubId,TokenPair pair){
+    w.db.update("INSERT INTO github_credentials(account_id,token_ciphertext,granted_scopes,grant_version,expires_at,refresh_ciphertext,refresh_expires_at,token_version) VALUES(?,?,?,?::uuid,?,?,?,?::uuid) ON CONFLICT(account_id) DO UPDATE SET token_ciphertext=EXCLUDED.token_ciphertext,granted_scopes=EXCLUDED.granted_scopes,grant_version=EXCLUDED.grant_version,expires_at=EXCLUDED.expires_at,refresh_ciphertext=EXCLUDED.refresh_ciphertext,refresh_expires_at=EXCLUDED.refresh_expires_at,token_version=EXCLUDED.token_version,refresh_owner=NULL,refresh_lease_until=NULL,refresh_reconnect=false,updated_at=now()",
+        uuid(actor),crypto().seal(pair.access(),"repository|"+actor+"|"+githubId),pair.scope(),id(),GitHubRefresh.timestamp(pair.expires()),
+        pair.refresh()==null?null:crypto().seal(pair.refresh(),"repository-refresh|"+actor+"|"+githubId),GitHubRefresh.timestamp(pair.refreshExpires()),id());
   }
   private void requireActiveAttempt(HttpServletRequest request,String stateHash,String binding,String purpose,String actor,int version){
     // The provider request runs outside our transaction. Unlink may cancel the consumed attempt
@@ -131,9 +147,38 @@ final class GitHubService {
     String actor=accounts.require(request);
     w.tx.executeWithoutResult(tx->{
       w.db.queryForObject("SELECT id FROM accounts WHERE id=? FOR UPDATE",UUID.class,uuid(actor));
+      accounts.requirePasswordAccount(actor);
       w.db.update("DELETE FROM github_links WHERE account_id=?",uuid(actor));
       w.db.update("DELETE FROM github_oauth_attempts WHERE account_id=?",uuid(actor));
     });
+  }
+  static boolean validSignupUsername(String name){return name.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,38}");}
+  Map<String,Object> signup(HttpServletRequest request){
+    if(accounts.actor(request)!=null)throw error(409,"GITHUB_SESSION_CHANGED","Sign out before completing GitHub signup");
+    String binding=correlation(request,false);
+    var rows=w.db.queryForList("SELECT github_id,login,expires_at FROM github_signup_claims WHERE session_hash=? AND expires_at>now()",binding);
+    if(rows.size()!=1)throw error(400,"GITHUB_SIGNUP_INVALID","GitHub signup expired or was already completed; start again");
+    var row=rows.getFirst();String login=row.get("login").toString();
+    return map("githubLogin",login,"suggestedUsername",login,"expiresAt",((Timestamp)row.get("expires_at")).toInstant().toString());
+  }
+  void completeSignup(HttpServletRequest request,String username){
+    accounts.throttle("github-signup",request.getRemoteAddr(),30);
+    String name=username.strip(),binding=correlation(request,false);
+    if(!validSignupUsername(name))throw error(400,"INVALID_USERNAME","Username must contain 1..39 letters, digits, underscores or hyphens and start with a letter or digit");
+    try{
+      w.tx.executeWithoutResult(tx->{
+        if(accounts.actor(request)!=null)throw error(409,"GITHUB_SESSION_CHANGED","Account session changed; start again");
+        var rows=w.db.queryForList("SELECT github_id,login FROM github_signup_claims WHERE session_hash=? AND expires_at>now() FOR UPDATE",binding);
+        if(rows.size()!=1)throw error(400,"GITHUB_SIGNUP_INVALID","GitHub signup expired or was already completed; start again");
+        if(!binding.equals(correlation(request,false))||accounts.actor(request)!=null)throw error(409,"GITHUB_SESSION_CHANGED","Account session changed; start again");
+        var row=rows.getFirst();String account=id();
+        // Unique identity and username indexes settle races atomically. Never merge by email/name.
+        w.db.update("INSERT INTO accounts(id,username,auth_method,display_name) VALUES(?,?,'github',?)",uuid(account),name,name);
+        w.db.update("INSERT INTO github_links(account_id,github_id,login) VALUES(?,?,?)",uuid(account),row.get("github_id"),row.get("login"));
+        w.db.update("DELETE FROM github_signup_claims WHERE session_hash=?",binding);
+        accounts.signIn(request,account,1);
+      });
+    }catch(DuplicateKeyException failure){throw error(409,"ACCOUNT_CONFLICT","Username or GitHub identity is already registered; choose another username or restart GitHub login");}
   }
   Credential credential(HttpServletRequest request){
     return new GitHubRefresh(w,accounts,config,client).credential(request);

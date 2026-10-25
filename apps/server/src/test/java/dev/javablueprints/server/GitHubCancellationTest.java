@@ -12,7 +12,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.transaction.PlatformTransactionManager;
 
 class GitHubCancellationTest {
-  @Test void unchangedConsumedAttemptStillCompletesIdentityLink() {
+  @Test void unchangedConsumedAttemptAtomicallyLinksIdentityAndRepositoryGrant() {
     var db=mock(JdbcTemplate.class);var accounts=mock(Accounts.class);
     var request=new MockHttpServletRequest();request.getSession(true).setAttribute("githubCorrelation","browser-fixture");
     String account=id(),state=AccountPasswords.token();var config=GitHubClientTest.config();
@@ -23,10 +23,11 @@ class GitHubCancellationTest {
         .thenReturn(List.of(map("purpose","link","account_id",account,"auth_version",3,"verifier_ciphertext",new GitHubCrypto(config.key).seal("verifier","pkce|"+hash(state)))));
     when(db.queryForList(startsWith("SELECT state_hash FROM github_oauth_attempts"),eq(hash(state)),eq(hash("browser-fixture")),eq("link"),eq(uuid(account)),eq(3)))
         .thenReturn(List.of(map("state_hash",hash(state))));
-    var client=new GitHubClient((method,uri,headers,body,limit)->GitHubClientTest.json(200,method.equals("POST")?map("access_token","fixture","scope",""):map("id",111,"login","same-name")));
+    var client=new GitHubClient((method,uri,headers,body,limit)->GitHubClientTest.json(200,method.equals("POST")?map("access_token","fixture","scope","repo"):map("id",111,"login","same-name")));
     var service=new GitHubService(new Workspace(db,mock(PlatformTransactionManager.class)),accounts,config,client);
     assertEquals("/settings/integrations?github=link_success",service.callback(request,state,"code",null));
     verify(db).update(startsWith("INSERT INTO github_links"),eq(uuid(account)),eq("111"),eq("same-name"));
+    assertTrue(mockingDetails(db).getInvocations().stream().anyMatch(call->call.getMethod().getName().equals("update")&&call.getArguments()[0].toString().startsWith("INSERT INTO github_credentials")));
   }
   @Test void explicitUnlinkDuringProviderExchangeCancelsBothLinkAndRepositoryCallbacks(){
     for(String purpose:List.of("link","repositories")) {

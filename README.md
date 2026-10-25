@@ -1,207 +1,353 @@
-# Java Blueprints
+<div align="center">
 
-A Java workbench that connects source code to a structured control-flow graph and source symbol bindings. Import a program, navigate to declarations, edit expressions or statements, review the generated diff, and compile or compare immutable revisions in isolated Java containers.
+<img src="apps/web/public/landing/assets/logo.png" alt="JavaBlueprints" width="88">
 
-## Preview
+# JavaBlueprints
 
-| Light | Dark |
+**Читайте код. Исследуйте структуру. Проверяйте изменения.**
+
+**Русский** · [English](README.en.md)
+
+[![Java 21](https://img.shields.io/badge/Java-21-ED8B00?style=flat-square&logo=openjdk&logoColor=white)](pom.xml)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-4.0.9-6DB33F?style=flat-square&logo=springboot&logoColor=white)](apps/server/pom.xml)
+[![React](https://img.shields.io/badge/React-19.3-61DAFB?style=flat-square&logo=react&logoColor=black)](apps/web/package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript&logoColor=white)](apps/web/package.json)
+[![Vite](https://img.shields.io/badge/Vite-8.3-646CFF?style=flat-square&logo=vite&logoColor=white)](apps/web/vite.config.ts)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](infra/compose.yaml)
+[![Docker](https://img.shields.io/badge/Execution-Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](infra/runner/README.md)
+[![Проверки](https://github.com/Stepa-Karpik/hack2-axenix-/actions/workflows/checks.yml/badge.svg)](https://github.com/Stepa-Karpik/hack2-axenix-/actions/workflows/checks.yml)
+
+[Открыть приложение](https://java-blueprints.karpovprod.ru) · [Запуск](#быстрый-запуск) · [Архитектура](#архитектура) · [Тестирование](#тестирование) · [Ограничения](#границы-возможностей)
+
+</div>
+
+JavaBlueprints — рабочая среда для Java 21, которая связывает исходный код, граф потока управления и воспроизводимые проверки. Исследуйте метод, переходите к объявлениям, готовьте изменения с проверкой компиляции и сравнивайте неизменяемые версии в изолированных контейнерах перед применением.
+
+![Рабочая среда JavaBlueprints: исходный код, граф, анализ и консоль](apps/web/public/landing/assets/workspace.png)
+
+| Исследовать | Изменять | Проверять | Сохранять контекст |
+| --- | --- | --- | --- |
+| Графы методов с привязкой к коду и разрешением символов | Выражения, блоки, извлечение метода и локальное переименование | Компиляция кандидата и сравнение точных версий на выбранных входах | Панели, черновики, история, профили и импорт из GitHub |
+
+## Содержание
+
+- [Сценарий работы](#сценарий-работы) и [рабочее пространство](#рабочее-пространство)
+- [Файлы и импорт](#файлы-и-импорт), [граф и исключения](#граф-и-исключения), [консоль и тесты](#консоль-и-тестовые-наборы)
+- [Анализ и рефакторинг](#анализ-и-рефакторинг), [архивы проектов](#архивы-проектов)
+- [Аккаунты](#аккаунты-и-доступ), [GitHub](#интеграция-с-github), [фотография профиля](#фотография-профиля)
+- [Архитектура](#архитектура), [запуск](#быстрый-запуск), [конфигурация](#конфигурация)
+- [Тестирование](#тестирование), [API](#api-и-данные), [развёртывание](#развёртывание-и-доставка)
+- [Лимиты](#фиксированные-лимиты) и [границы возможностей](#границы-возможностей)
+
+## Сценарий работы
+
+1. Откройте главную страницу `/`, перейдите в `/projects` и войдите или зарегистрируйтесь. Создайте проект, добавьте файлы вручную либо импортируйте ZIP, каталог или выбранные файлы из GitHub. Перед добавлением проверьте состав импорта.
+2. Редактируйте код. Черновик сохраняется в браузере при каждом изменении; через восемь секунд без ввода сервер сохраняет и анализирует текст. **Ctrl+S** сохраняет немедленно, в том числе с русской раскладкой, без диалога сохранения страницы. Повторное сохранение того же текста не создаёт версию.
+3. Выберите метод или узел графа. Узел показывает точный участок исходника и поддерживаемые операции. Поставьте курсор на ссылку в редакторе, чтобы проверить её привязку и перейти к объявлению, в том числе в другом файле.
+4. Откройте палитру кнопкой **+** в нижней панели. Верхняя половина узла вставляет блок перед ним, нижняя — после. Предпросмотр временно освобождает место; **Escape** отменяет его без изменения кода и сохранённых позиций. В пустом методе вставка доступна у входного узла. Двойной щелчок открывает инспектор редактируемого блока.
+5. Подготовьте изменение и изучите diff. Исходная версия остаётся прежней, пока кандидат компилируется. Семантическое изменение применяется явно после успешной компиляции; изменение с намерением **сохранить поведение** дополнительно требует совпавшего сравнения именно этих двух версий.
+6. Запустите сохранённую программу, отвечайте через консоль или сравните версии на версионируемом наборе тестов. **Запустить снова** повторяет записанную версию и параметры, включая пару версий и набор сравнения. Ответы интерактивной сессии вводятся заново.
+7. Скачайте файл с исходным именем, каталог или проект в ZIP. Отчёты доступны отдельно в JSON и CSV. Для возврата к истории сначала сохраните или отбросьте черновик: восстановление создаёт новую версию, сохраняя прежние.
+
+Синтаксическая ошибка не уничтожает черновик. Анализ показывает ошибку, а предыдущий граф не выдаётся за синхронизированный с новым текстом. Раскладка графа хранится отдельно от исходного кода.
+
+Список проектов ищет по всем сохранённым именам и загружает старые проекты страницами. Знаки пунктуации обрабатываются буквально; новый запрос отменяет предыдущий. Поиск и открытие не меняют версии.
+
+## Рабочее пространство
+
+Граф служит постоянным холстом под полупрозрачными панелями. Тёмный режим использует чёрный холст и плоские почти чёрные поверхности с размытием фона; светлый сохраняет ту же структуру. Для нижней панели выделена отдельная строка, поэтому она не перекрывает окна.
+
+| Светлая тема | Тёмная тема |
 | --- | --- |
-| ![Java Blueprints light workbench](.github/assets/workbench-light.png) | ![Java Blueprints dark workbench](.github/assets/workbench-dark.png) |
+| ![Светлая рабочая среда](.github/assets/workbench-light.png) | ![Тёмная рабочая среда](.github/assets/workbench-dark.png) |
 
-## Workflow
+- Перетаскивайте окно за ручку из шести точек. Центр меняет окна местами, край делит область. Соседи показывают будущую раскладку до отпускания указателя. **Escape** отменяет перенос; у ручки есть доступное с клавиатуры меню перемещения.
+- Меняйте размеры разделителями или стрелками, скрывайте и разворачивайте окна. Нижняя панель переключает код, консоль и тесты; меню **Окна** возвращает остальные панели и сбрасывает раскладку. История и навигация — отдельные окна; навигация сворачивается до заголовка.
+- Скрытая панель сохраняет место, пропорции, редактор, курсор, текущую историю отмены и вывод. Раскладка, вкладки и видимость сохраняются для каждого проекта в браузере. Старые раскладки мигрируют без сброса геометрии.
+- Перезагрузка восстанавливает раскладку и черновики. Состояние редактора и камера графа хранятся локально; история отмены действует в текущей сессии проекта. На узком экране используется переключатель панелей с сохранением настольной раскладки.
+- Последнее подготовленное изменение восстанавливается, если его база совпадает с чистой текущей версией. Браузер хранит только идентификатор; diff, компиляция и сравнение приходят с сервера. Применение и отклонение явные, а несохранённый или конфликтующий черновик имеет приоритет.
+- **Ctrl+K** открывает поиск по тексту файлов, именам методов, выражениям и смысловым названиям блоков: например, `условие` или `цикл`. Результат открывает код и соответствующий узел.
+- Запуск и остановка находятся в нижней панели. Файловые команды, редактирование, вид и экспорт расположены рядом с поиском; на узком экране они сворачиваются в меню проекта.
+- При первом входе доступно обучение, которое можно пропустить и повторить в **Настройки → Оформление**. Системное уменьшение анимации отключает движения раскладки; без backdrop-filter панели получают сплошной фон.
 
-1. Create a project, then create files and folders or import text files from a ZIP archive, directory or connected GitHub repository. Review the file selection before adding it to the project. GitHub permissions are configured under Settings → Integrations.
-2. Edit the source. Drafts persist locally on each edit; the server saves and analyzes after an eight-second idle pause. **Ctrl+S** saves immediately without opening the browser's page-save dialog, including with a Russian keyboard layout. Unchanged saves do not add revisions. Selecting a graph node reveals its exact source range and supported edit fields. Place the editor cursor on a reference to inspect its binding and navigate to a declaration, including one in another project file.
-   Compound conditions show the evaluation order of `&&`, `||` and `!`, including branches that skip the right operand. Select an individual test to inspect its source, or its enclosing condition to edit the whole expression.
-   Traditional `switch` statements show selector evaluation, case selection, fallthrough and the destination of `break` or an enclosing loop's `continue`.
-   Enhanced `for` loops show the source evaluated once, followed by element checks, binding and body repetition. Synthetic iteration steps do not expose source-edit controls.
-3. Open the block palette with **+** in the dock, then drag a block onto a graph node: its upper half inserts before it, its lower half inserts after it. A provisional shape opens space in the diagram; nearby method groups move temporarily when needed. **Escape** cancels the preview without changing code or saved positions. Empty methods accept an insertion at their entry node. Double-click an editable block to open its inspector. Edit its Java statement or supported expression, reorder statements within a block, wrap one in `if` or `while`, or add and remove a supported `else` branch. The original head stays intact while the candidate compiles.
-4. Review the diff. A semantic change can be applied explicitly after compilation. A change marked as preserving behavior additionally requires a matching comparison for the exact two revisions.
-5. Run the saved program and answer it in the live Console. Send additional lines while it runs, close standard input with **EOF**, or stop execution from the dock. Compare immutable revisions using a versioned test suite. Use **Run again** (`Запустить снова`) to repeat the recorded revision and parameters, including the exact version pair and suite for comparisons. Interactive replies are entered again. Download an individual source file with its original name and extension, or a folder/project as ZIP. Reports have separate JSON and CSV downloads.
-6. Restore a historical snapshot from the history panel. Restoration creates a new revision with its source revision recorded; previous revisions remain intact. Save or discard an unsaved draft before restoring.
+Перестановка окон не создаёт версии, предложения изменений, задачи исполнения или серверные записи раскладки графа. Каждый метод отдельно запоминает масштаб, сдвиг и однозначно сопоставленные вручную перемещённые узлы. Автоматические узлы перестраиваются вокруг сохранённых позиций.
 
-A saved syntax error remains a valid draft. Its analysis reports the error; an older graph is never treated as synchronized with that draft. Graph layout is stored separately from program text.
+Файл открывает обзор графов всех методов; выбор метода фокусирует его граф с фиолетовой пунктирной границей. **Ctrl/Meta + щелчок** или рамка с **Shift** выбирает несколько блоков; **Space** перемещает холст. Обзорные позиции групп и камера атомарно сохраняются в браузере, позиции внутри метода — через версионируемый серверный API. Блок открывает собственный файл и анализ.
 
-The project list searches all stored names and loads older projects in pages. Search treats punctuation literally; switching queries cancels the previous list request. Opening or searching for a project does not change its source revisions.
+Консоль и тесты запоминают последние результаты отдельно для каждого запускаемого файла. После смены вкладок и перезагрузки видны файл, запускаемый класс и версия источника. Браузер хранит ID результатов и проверяет их неизменяемую привязку через API. Неоднозначный запускаемый класс оставляет отчёт отдельно, без назначения открытому файлу. Устаревший относительно редактора вывод явно обозначается.
 
-## Workspace
+## Файлы и импорт
 
-The graph is a permanent canvas beneath translucent panels. The dark theme uses a black canvas and flat near-black surfaces with backdrop blur; the light theme uses the same layout with light surfaces. The compact bottom dock has its own reserved row and never overlaps the tiled windows.
+Проводник поддерживает вложенные и пустые каталоги, создание, переименование и перенос файлов или поддеревьев. **Enter** или щелчок вне поля подтверждает имя, **Escape** отменяет создание. Значок и подсветка зависят от расширения. Для переноса перетащите элемент на каталог либо введите целевой путь через соответствующую команду.
 
-- Drag a panel by its six-dot handle. Nearby windows animate into the preview arrangement before you release the pointer. Drop in the center to swap windows, or near an edge to split the area. Press **Escape** to cancel. The handle also opens a keyboard-accessible move menu.
-- Resize separators with the pointer or arrow keys. Hide or maximize a window from its header. The dock toggles Code, Console and Tests; **Windows** (`Окна`) restores other panels and resets the arrangement.
-- Hidden windows keep their original slot and split ratios. Reopening a window retains its live editor, caret, undo history and output. Layout, visibility, active tabs and maximized state are saved separately for each project in the current browser.
-- Reload restores the workspace and saved drafts. Editor view state and the graph camera are stored locally; editor undo history lasts for the current project session. Narrow screens use a panel selector while retaining the desktop layout.
-- The last prepared change is recovered after reload when its base still matches the clean project head. Only its identifier is stored locally; the diff, compilation status and comparison result come from the server. Hidden panels stay hidden. Apply and dismiss remain explicit, and an unsaved or conflicting source draft takes priority.
-- **Ctrl+K** focuses project search: file contents, method names, expressions and semantic block names such as `условие` or `цикл`. Select a result or press Enter to reveal its source and graph node.
-- The sole Run control is in the bottom dock, alongside its options and the stop action while a job is active. File, edit, view and export commands sit beside search; narrow screens collapse them into the project menu.
-- History and navigation are independent tiles. Navigation can collapse to its header; both tools can be moved, resized, hidden and restored. Existing browser layouts migrate without resetting their saved geometry.
-- The first signed-in visit offers a skippable guided introduction. Replay it from **Settings → Appearance**.
+Смена пути не переписывает `package`, импорты и имена классов: последствия проверяет compiler. Несовпадение имени публичного Java-типа и файла допускает явное исправление имени без перезаписи существующего файла.
 
-Workspace preferences are independent of program revisions and graph-node positions. Rearranging windows does not edit source, compile a program or create a revision. Reduced-motion preferences disable layout animation; browsers without backdrop filtering use solid panel backgrounds.
+Вкладки сохраняют черновик, выделение и историю отмены в текущей сессии. Файловые операции сохраняют полный снимок вместе с ожидающими правками текста. Конкурирующие изменения возвращают конфликт вместо перезаписи чужой версии. Удаление файла или каталога требует подтверждения, сохраняет прочие несохранённые файлы и не уничтожает историю. Отмена и конфликт оставляют черновик и вкладки.
 
-Each method remembers its pan, zoom and unambiguous manually moved nodes across source saves and reanalysis. Automatic nodes reflow around retained positions after structural edits. The graph displays its source revision; the Console identifies output from an older revision even while that run is still waiting for input.
+Предпросмотр принимает строгий UTF-8 и ZIP, позволяет выбрать пути и не перезаписывает существующие файлы молча. ZIP сохраняет пустые каталоги; браузерный выбор каталога передаёт файлы и родительские пути, но не перечисляет пустые папки. Неподдерживаемые бинарные файлы, опасные и слишком большие архивы отклоняются. Скрипты сборки импортированного проекта не запускаются.
 
-Selecting a file opens a project-wide overview of all method graphs; selecting a method focuses its graph. The selected method has a purple dashed boundary. Ctrl/Meta-click or Shift-drag a marquee to select several blocks and move them together; hold Space to pan. Overview group positions and camera are saved atomically in the current browser; focused-method layouts use the versioned server layout API. Picking a block still selects its own file and analysis. The Console and Tests panels retain separate latest results for each launch file; switching tabs or reloading restores the corresponding results. Their file, launch class and source revision remain visible. The browser stores result IDs only and rechecks their immutable source binding through the API. An ambiguous launch class exposes its report separately without assigning it to the open file.
+Текстовые файлы других форматов можно редактировать и экспортировать. Анализируются и передаются Java-runner только `.java`. Проект из текста и каталогов сохраняется без задачи Java-анализа или выполнения.
 
-Profile, security, appearance, friends and integration settings have separate routes and persistent navigation. Profiles show public projects plus private projects the viewer is permitted to access, up to six owned pinned projects, mutual friends and a 365-day activity calendar. Activity records actual authenticated head changes; older unattributed history is not assigned retroactively, and hidden projects do not contribute visible activity. Seven appearance presets include OLED, neutral dark, light, pearl, blue, amber and slate, plus a validated custom palette. Appearance preferences are stored in the current browser and synchronize between its open tabs. Local appearance settings are available before signing in.
+## Граф и исключения
 
-GitHub linking uses the stable provider ID, PKCE and one-use session-bound state. GitHub login is available only after linking to an existing account. Repository access requires separate consent; server tokens are encrypted and imports are pinned to an immutable commit. Missing OAuth configuration leaves local import available. Expiring repository tokens rotate through a persisted single-flight claim; routine rotation preserves the immutable repository grant. An interrupted or uncertain token exchange requires explicit reconnection. Live provider authorization must be validated after the app keys are configured.
+Узлы различаются значками, формой и смысловыми цветами. Рёбра наследуют цвет исходного блока: янтарный для условий, фиолетовый для циклов, красный для возвратов, синий для операций и вызовов. Это структура программы, а не трассировка выполненного запуска.
 
-Java compilation checks the complete source bundle. A compiler error in another file can prevent the selected program and all of its tests from starting; the diagnostic filename identifies the broken source, not the launch class.
+Последовательные шаги идут сверху вниз, ветви занимают отдельные ранги; ручные позиции сохраняются. Условия имеют порты true/false, границы циклов следуют вложенности движка. Если ручная раскладка поместила в контур посторонние узлы, контур не показывается. Скруглённые рёбра сохраняют топологию обхода препятствий; маршрут без найденного безопасного пути помечается. Планарность произвольной схемы не гарантируется.
 
-**Share** opens project access settings and copies its URL. Owners can switch account projects between private and public access and grant friends viewer or editor roles. Collaborator presence and simultaneous collaborative editing are not implemented.
+| Конструкция | Что показывает граф |
+| --- | --- |
+| `if`, `while`, `do`, обычный `for` | Условия, тело, инициализацию, обновление и цели непомеченных переходов |
+| `&&`, `||`, `!` | Порядок проверок и короткое замыкание; предикат редактируется через родительский якорь |
+| Обычный `switch` с `case:` | Однократный селектор, выбор ветви, fallthrough и цели `break`/внешнего `continue` |
+| Enhanced `for` | Однократный источник, синтетические проверки, привязку элемента и повторение |
+| `try` / `catch` / `finally` | Упорядоченный выбор обработчика и раздельные продолжения завершения |
+| Try-with-resources | Приобретение слева направо, закрытие справа налево и подавленные исключения |
 
-Graph nodes use distinct icons, shapes and restrained semantic colors. Connections inherit the source block's color: amber for conditions, violet for loops, red for returns, and blue for operations and calls. These colors describe the program structure; they are not a runtime execution trace. Sequential steps stay in a top-to-bottom lane; branches use separate ranks and saved manual positions remain unchanged. Conditions expose labeled true/false ports; loop regions follow the engine's ancestry. A loop outline is omitted when a manually arranged graph would visually enclose unrelated nodes. Rounded routes preserve the obstacle-aware polyline's topology and mark routes whose safe path could not be found; arbitrary diagrams are not guaranteed to be planar.
+В обычном `try` обработчики и multi-catch проверяют ожидающее исключение в порядке кода. Исключение из обработчика или очистки обходит соседние `catch` этого же `try`. Нормальное завершение, возврат, исключение, `break` и `continue` имеют разные продолжения после `finally`. Выражение `return` вычисляется до очистки; резкое завершение в `finally` заменяет ожидавшее. Вложенная очистка идёт изнутри наружу; переход внутри области `try` не запускает её преждевременно. Копии путей finalizer исключают невозможные соединения и ведут к одному исходному коду.
 
-## Files and folders
+Try-with-resources закрывает только приобретённый префикс, пропускает null и сохраняет порядок очистки. Ошибка закрытия заменяет нормальный возврат или переход; при ожидающем исключении следующие ошибки поступают в `addSuppressed`. Граф учитывает самоподавление и ошибку самого `addSuppressed`; при отключённом подавлении сохраняется первичное исключение. Затем выполняются связанные `catch` и явный `finally`. Синтетическая очистка доступна только для чтения, инициализаторы ведут к коду.
 
-The project explorer supports nested folders, empty directories, file creation, renaming and moving a file or an entire subtree. Enter a new file or folder name and press **Enter** or click elsewhere to create it; **Escape** cancels. Its icon follows the filename extension. Drag an item onto a folder, or use the move action to enter its destination. A path change does not rewrite Java packages, imports or class names; compilation reports any resulting Java errors. A mismatched public Java type offers an explicit filename correction.
+Вызовы и прочие выражения атомарны. В методах с `try` пунктирные исключительные рёбра консервативно показывают возможные сбои, включая unboxing, `close` и `addSuppressed`. Они не устанавливают единственный фактический тип исключения и не раскрывают реализации ресурсов. Метаданные содержат причину, степень определённости и контекст завершения.
 
-Open files appear as tabs with language-specific icons and editor highlighting. Switching, closing and reopening tabs retains the current file's draft, selection and undo history during the project session. File operations save a complete snapshot together with pending text edits. Concurrent changes produce a conflict instead of replacing another saved version.
+## Консоль и тестовые наборы
 
-Select a file or folder and use the trash action to delete it after confirmation. Folder deletion includes its subtree and retains other unsaved files in the new snapshot. Cancellation or a revision conflict preserves the current draft and tabs. Previous snapshots remain recoverable through history.
+**Отправить** передаёт строку работающей программе. **Завершить ввод (EOF)** закрывает stdin, позволяя завершиться `Scanner.hasNextLine()` и `readAllBytes()`. Остановка сохраняет полученный вывод. Скрытие консоли не прерывает задачу, перезагрузка восстанавливает подключение. Перезапуск сервера или контроллера прерывает процесс; продолжить его невозможно.
 
-Import previews support strict UTF-8 text and ZIP archives, with selection before commit and no silent overwrite of existing paths. Archives preserve empty folders; a browser directory picker supplies files and their parent directories, but cannot enumerate empty folders. Unsupported binary files and unsafe or oversized archives are rejected. Build scripts from imported projects are never executed.
+Компиляция проверяет все Java-файлы. Ошибка в другом файле может остановить выбранный класс и все тесты: имя в диагностике указывает на сломанный исходник, а не обязательно на запускаемый класс.
 
-Non-Java text files can be edited and exported. Only `.java` files are analyzed and passed to the isolated Java runner. A project containing only text files or folders can be saved without scheduling a Java analysis or execution.
+Диалоги заранее выявляют известные несовпадения имени файла и публичного типа. Прочие ошибки определяет compiler. Предлагаемый запускаемый класс следует открытому файлу. Без подготовленного изменения при подходящей подсказке предлагается исходный снимок; иначе текущая версия выбрана с обеих сторон. Исходный снимок доступен и за пределами последней страницы истории. Ошибочный отчёт сохраняет прежнюю диагностику, переход к исходнику и повтор; редактирование не переписывает прошлый результат.
 
-## Exception flow
+Набор редактируется формой: добавляйте и именуйте случаи, задавайте stdin и аргументы отдельными строковыми значениями. Пустой аргумент остаётся настоящим. Можно включить ожидаемые stdout, stderr и код выхода; включённое пустое ожидание требует ровно пустой вывод. JSON-режим сохраняет ID, Unicode, пробелы, аргументы и поддерживаемые метаданные. Ошибки и лимиты видны до отправки; при отправке поля блокируются. На узком экране действия остаются видимыми, поля прокручиваются.
 
-Ordinary `try`, ordered `catch` clauses, multi-catch and `finally` are shown as executable control flow. Handler tests match the pending exception in source order. A throw from a handler or cleanup bypasses the sibling catches of that same `try`.
+Панель тестов показывает этап компиляции, текущий случай, завершённые и совпавшие проверки и время. Каждый случай выполняет **по три независимых запуска каждой версии**. Случаи идут последовательно; завершение наблюдений и совпадение — разные статусы. Прогресс закреплён за точными версиями кода и набора. Скрытие панели не прерывает задачу, перезагрузка подключается к ней же. Остановка сохраняет вердикты и частичные счётчики, остальные случаи помечаются невыполненными. Прерванное сравнение не разрешает применение сохраняющего поведение изменения.
 
-Cleanup has a separate continuation for normal completion, return, exception, break and continue. A return expression is evaluated before cleanup; an abrupt completion inside `finally` replaces the pending completion. Nested cleanup runs from the inside out, while a loop or switch jump that stays inside the `try` does not prematurely execute its finalizer. Separate copies of finalizer paths prevent impossible connections between unrelated completions; each copy navigates to the same original source.
+Время случая включает шесть запусков и подготовку контейнеров, общее — также компиляцию. Worker имеет общий десятиминутный бюджет помимо лимитов отдельных исполнений. Незавершённый набор остаётся неопределённым. Прогресс хранится для конкретной попытки задачи и lease; перезапуск сохраняет записи, но не возобновляет процессы.
 
-Try-with-resources evaluates resource initializers or captured variable references from left to right and closes acquired resources in reverse order. Null resources skip closing; failed initialization closes only the acquired prefix. A close failure replaces a pending normal return or jump. When an exception is already pending, later close failures pass to `addSuppressed` in cleanup order. The graph shows self-suppression and failures of the suppression call; normal completion preserves the primary exception even when suppression is disabled. Associated catches and explicit `finally` run after resource cleanup. Generated cleanup nodes are read-only; initializer nodes navigate to the original source.
+Отчёт хранит версию, исходный ввод, принятые интерактивные сообщения, аргументы, вывод и статус завершения. Новые завершённые исполнения содержат wall time и, при доступности, пиковую память cgroup контейнера. Время включает Docker exec и дочитывание потоков; память — подготовку контейнера и измерение, а не только Java heap. Отсутствующие измерения не подменяются нулями. Сравнения используют фиксированный ввод и независимые пятисекундные исполнения без live input.
 
-Calls and other expressions remain atomic. In methods containing `try`, dashed exceptional edges conservatively show possible failures, including unboxing, `close` and `addSuppressed`; they do not infer a unique runtime exception type or expand resource implementations. Edge metadata records certainty, reason and completion context. Expansion is bounded to 64 resources per `try`, 8192 flow nodes and 24576 edges per method; exceeding a limit preserves the method as read-only opaque source.
+**Совпадение на записанных тестах не доказывает эквивалентность программ.** Нужны непустой набор, полные наблюдения и стабильное точное совпадение stdout, stderr и exit code. Одинаковые timeout, OOM, обрезанный вывод, отмена и недоступное выполнение совпадением не считаются. Отдельный запуск не заменяет сравнение для сохраняющего поведение изменения.
 
-## Console
+## Анализ и рефакторинг
 
-The Console displays standard output and errors during execution. **Send** delivers one line to the running program; **End input** (`Завершить ввод`, EOF) closes its input, allowing programs using `Scanner.hasNextLine()` or `readAllBytes()` to finish. The stop action retains captured output in the run report. Hiding the Console keeps the run active, and reloading its URL reconnects to the current job.
+Панель анализа разделяет редактирование узла, ошибки разбора и покрытия, рекомендации и метрики метода. Блок открывает свой редактор; рекомендации ведут к привязанному коду. Несохранённый текст отключает навигацию по устаревшему анализу.
 
-Interactive runs have a 120-second runtime limit, a 1 MiB combined output limit and a 1 MiB input budget including initial input. Each submitted input frame is limited to 8 KiB, with at most 1,024 frames. Compilation remains limited to 20 seconds. The elapsed time includes compilation and execution setup. Repeated input requests with the same idempotency key and body are delivered once.
+Метрики: физические строки и строки с токенами тела, узлы операторов, вложенность управления, циклы и места вызовов. Вложенные объявления и лямбды не входят в метрики внешнего метода. Синтаксический показатель ветвления — единица плюс `if`, циклы, тернарные и short-circuit operators, недефолтные группы `switch` и `catch`; это не полная CFG complexity и не время выполнения. Определения доступны в подсказках.
 
-The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. New completed executions also record command wall time and, when available, the kernel cgroup peak memory for that disposable container. Time includes Docker exec and stream draining; peak memory includes container preparation and the measurement probe, and is not Java heap usage. Older reports and unavailable measurements retain an absent value rather than a fabricated zero. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
+Рекомендации отмечают методы от 40 строк с токенами, вложенность от четырёх конструкций, вложенные циклы и показатель ветвления от десяти. Каждая содержит значение, порог и исходную позицию; максимум 400 замечаний на анализ. Эвристика не доказывает дефект, не разрешает рефакторинг и не обещает ускорение. Асимптотика неизвестна без границ и стоимости вызовов.
 
-## Test inputs
+### Структурные правки
 
-Run and comparison dialogs check the selected snapshots for known public-type/filename mismatches before submitting a job. Open the reported file to rename it explicitly; existing files are never overwritten. Compilation remains authoritative for other Java errors. Failed comparison reports retain their original diagnostics and provide source navigation and a retry action; editing the project does not rewrite an old result.
+Инспектор показывает доступные операции: замена выражения или оператора, вставка, удаление, перестановка соседей внутри одного блока, оборачивание одного оператора в `if` или `while`, добавление и удаление поддерживаемой `else`.
 
-The launch-class suggestion follows the open Java file. Without a prepared change, the original snapshot is suggested when its loaded sources have a matching launch hint; otherwise the current revision is used on both sides. Add expected outputs to check its results, or select distinct snapshots to compare behavior between versions. The original revision remains selectable outside the recent history page.
+Правки могут менять поведение; компиляция проверяет типы, scope, definite assignment и reachability. Новая обёртка-цикл не может перехватить внешний `break`/`continue`. Для добавления `else` нужны блоки с фигурными скобками; удаление требует также участка без теряемых комментариев. Внутренние комментарии идут с оператором, внешние остаются на месте, удаление не отбрасывает комментарии. Непрозрачные конструкции и фрагменты выражений не являются структурными якорями.
 
-The comparison dialog opens with a form editor. Add, name or remove cases, enter standard input, and add arguments as separate strings. An empty argument remains a real argument. Enable expected stdout, stderr or an exit code when a case has a known result; an enabled empty output expectation checks for exactly empty output.
+### Извлечение, переименование и декомпозиция
 
-The optional JSON mode retains case IDs, Unicode, whitespace, argument values and supported metadata when switching views. Invalid drafts and input limits are reported before submission. Fields freeze while the request is sent, so the created immutable suite uses the reviewed values. The dialog keeps its action buttons visible on narrow screens while the case fields scroll.
+Выделите целые соседние операторы в коде либо задайте начало и конец через граф. **Извлечь метод** показывает diff, выведенные параметры, тип результата и замену у вызывающей стороны. Кандидат компилируется отдельно; для применения нужны **сохранение поведения** и совпавшее сравнение.
 
-## Test progress
+Извлечение переносит до 256 операторов одного блока в private-метод того же класса, сохраняет static/instance-контекст, передаёт нужные переменные и возвращает не более одного локального значения либо выбранный хвостовой `return`. Записи, нужные на следующих итерациях цикла, присваиваются обратно вызывающему коду; checked exceptions входят в объявление helper. Уходящие переходы, несколько живых выходных переменных, неоднозначные привязки, неподдерживаемые captures, наблюдаемые при исключении записи локальных значений и опасное изменение вычисления локальных констант отклоняются. Стек и время могут измениться.
 
-The Tests panel shows compilation stages, the active case, completed and matched counts, and measured time for each case. Each case compares three independent executions of each revision. Cases run sequentially; the completion bar advances when their planned observations finish. Completion and a matching verdict are separate results.
+**Переименовать локальную переменную** меняет одиночное объявление и точные связанные ссылки; у входа метода можно переименовать его единственный параметр. Одноимённые поля и другие перегрузки остаются. Коллизии, возможный захват и unresolved references отклоняются; нужны компиляция и сравнение.
 
-Progress records the exact source revisions and suite version. Reloading reconnects to the same job; hiding its panel keeps verification running. Stopping retains completed case verdicts and partial observation counts, while remaining cases are marked unrun. An interrupted comparison does not publish a verification report that could authorize applying a change.
+**Перенести метод в класс** поддерживает замкнутое static-вычисление: тело уходит в новый класс без полей того же package, исходный метод остаётся обёрткой. Допускаются явные `int`/`boolean` параметры, локальные значения, результат и поддерживаемые ветви/циклы. Вызовы, поля, массивы, наследование, generics и неизвестные зависимости исключают предложение. Проверяются оба файла и сравнение.
 
-Per-case time includes all six executions and their container setup. Total time also includes compilation. The worker has a ten-minute overall job budget in addition to individual execution limits; an unfinished suite remains inconclusive. Progress is persisted under the current job attempt and lease. A restart can retain recorded progress, but cannot resume the interrupted executions.
+### Индекс поиска по коллекции
 
-## Code insights
+Для подходящих повторных `ArrayList<String>.contains` анализ предлагает локальный `HashSet<String>` перед циклом. Исходный список остаётся; меняются только доказанно связанные membership-вызовы в цикле. Порядок вывода, построение списка и вычисление запросов сохраняются.
 
-The Analysis panel separates node editing, parser/coverage problems, recommendations and method metrics. Selecting a graph block opens its editor. Metrics follow the chosen method; recommendation headings navigate to their bound source location. Unsaved changes disable navigation through the older analysis.
+Правило принимает новый стандартный JDK-список прямо в теле метода, заполненный отдельными добавлениями строковых литералов или null до прямого цикла. Нужны точные локальные привязки всех использований. Алиасы, escape, переприсваивание, последующие мутации, другие операции списка, неизвестные типы запросов, замыкания и неподдерживаемые области управления исключают предложение. Запросы — строковые/null-литералы и простые связанные строковые переменные/параметры; анализ рассматривает до 64 циклов-кандидатов.
 
-Metrics include physical and code-token body lines, statement nodes, control nesting, loops and call sites. Nested declaration and lambda bodies are excluded from the enclosing method. The branching score is syntactic: one plus `if`, loops, conditional expressions, short-circuit operators, non-default switch groups and catch clauses. It is neither a complete CFG complexity measure nor a runtime estimate. Metric labels expose their definitions in tooltips.
+Изучите предположения, скомпилированный diff и независимые случаи сравнения. Применение требует сохранения поведения. Runner-регрессии проверяют пустые коллекции, null, дубликаты, коллизии строковых хешей и порядок запросов. Индекс расходует дополнительную память; ускорение и отсутствие ресурсного исчерпания не доказаны. Общая оптимизация коллекций вне текущих возможностей.
 
-Recommendations flag methods with at least 40 code-token lines, nesting of at least four control structures, nested loops, or a branching score of at least ten. They show the observed count, threshold, source location and a suggested review step. At most 400 findings are returned per analysis. These heuristics do not prove a defect, authorize a refactor or predict a speedup. Asymptotic time remains unknown until bounds and call costs can be established.
+## Архивы проектов
 
-## Accounts and access
+**Меню проекта → Файл → Скачать архив проекта** создаёт версионируемый `.jbp.json`: история исходников, оригинальные байты импорта, каталоги, исторические анализы, раскладки, наборы и завершённые отчёты с SHA-256. Открытие проверяет архив и создаёт отдельный проект с новыми ID версий без замены существующих.
 
-Register with a username, email and a password of 12–256 characters. Sign in with the username or email. Profile settings save the display name and biography on the server; public profiles list public account projects. Friends can exchange and accept requests. Project owners can grant an existing friend viewer or editor access, change that role, or remove it. Private is the default for new account projects.
+Импортированные отчёты и раскладки остаются историческими материалами в import receipt, а не действующей проверкой или редактируемыми привязками. Текущая версия получает новый анализ; для следующих сохраняющих поведение изменений нужно свежее сравнение. Обычный source ZIP доступен отдельно.
 
-Viewers can browse source, navigate the prepared graph and download snapshots. Read access includes the project's revision history, reports and artifacts. Editing, analysis creation, execution, restoration and persistent graph changes require owner or editor permission. Changing visibility or membership requires the owner. Public projects have the same read-only access without sign-in. The server checks project access before revisions, imports, exports, artifacts and jobs are accessed. Friendships and project roles are separate: revoke a previously granted project role in **Share** when it should end.
+Лимит — 64 версии и 32 MiB с отдельными ограничениями evidence/layout. Превышение отклоняется без усечения. Пути, похожие на хранилища учётных данных, запрещены, но код и записанный ввод могут содержать чувствительные данные: проверьте архив перед передачей.
 
-Earlier projects stay in the explicitly labeled local workspace. They are never assigned to the first registered account. Signed-in users can select **Local workspace** to reach them; this compatibility space remains editable on this local server. It is separate from private account projects.
+## Аккаунты и доступ
 
-**My projects** lists projects you own or have been invited to. Other public projects remain accessible through their author's profile or a direct link; publishing a project does not add it to everyone's personal list.
+Парольная регистрация требует имя, email и пароль длиной 12–256 символов; вход принимает имя или email. Можно также войти и зарегистрироваться через GitHub. Авторизация использует отдельное OLED-оформление независимо от темы. Главная `/` всегда остаётся лендингом; `/projects` открывает личные проекты, а анонимный посетитель проходит через вход.
 
-Email confirmation and password recovery use expiring, single-use links. Passwords are salted and derived with PBKDF2; only token hashes are stored. Password changes and resets revoke previous sessions and pending links. Without SMTP configuration, account work remains available and the interface reports that email delivery is unavailable. Real delivery requires the mailbox settings below.
+В профиле сохраняются отображаемое имя, биография и фото. Профиль, безопасность, оформление, друзья и интеграции имеют отдельные маршруты. Публичный профиль показывает разрешённые посетителю проекты, до шести закреплённых собственных проектов, общих друзей и календарь за 365 дней. Активность учитывает реальные изменения head аутентифицированным участником; старые события без автора не приписываются задним числом. Скрытые проекты не раскрываются в календаре.
 
-## Membership index
+Семь пресетов — OLED, нейтральный тёмный, светлый, жемчужный, синий, янтарный и сланцевый — дополняются проверяемой пользовательской палитрой. Выбор хранится в браузере и синхронизируется между его вкладками.
 
-For eligible repeated `ArrayList<String>.contains` searches, Analysis → Recommendations offers a membership-index change. It retains the original list and inserts one local `HashSet<String>` before the selected loop. Only the proven membership receivers inside that loop change; query evaluation, output order and list construction stay in place.
+Владелец приглашает существующих друзей с ролью viewer/editor, меняет роли и отзывает доступ. Новый аккаунтный проект по умолчанию приватный. **Поделиться** открывает права и копирует ссылку. Дружба и проектные права независимы: ранее выданную роль отзывают отдельно.
 
-The initial rule accepts a fresh standard JDK list declared directly in the method body, populated only by standalone literal-string or null additions before a direct loop. Every use must have an exact local binding. Aliases, escaping references, reassignment, later mutation, other list operations, unknown query types, closures and unsupported control-flow regions make the rule unavailable. Queries are string/null literals or simple bound string locals/parameters. Analysis examines at most 64 loop candidates.
+| Участник | Возможности |
+| --- | --- |
+| Владелец | Управление видимостью и участниками; полный доступ |
+| Редактор | Правки кода, анализ, запуск, восстановление, сохранение раскладки графа |
+| Читатель | Исходники, подготовленный граф, история, отчёты и доступные артефакты |
+| Анонимный посетитель | Чтение публичных профилей и проектов; hosted-запуск и создание требуют входа |
 
-Open the change to review its assumptions, prepare the compiled diff, compare both immutable revisions on independent cases, and apply explicitly. This operation requires **Preserve behavior**; it cannot be applied as an unchecked semantic edit. Empty collections, nulls, duplicates, string hash collisions and query order are covered by the real-runner regression suite.
+Сервер проверяет права при каждом обращении к версиям, импортам, экспортам, артефактам и jobs. **Мои проекты** содержит собственные и приглашённые проекты; чужие публичные открываются по профилю или ссылке. Публикация не добавляет проект во все личные списки. Присутствие участников и одновременное совместное редактирование не реализованы.
 
-The index needs additional memory. Its effect on time and resource exhaustion is not proven, and no benchmark speedup is claimed. A matching report covers its recorded inputs and environment. General collection optimization remains outside the implemented scope.
+Старые проекты остаются в обозначенном локальном пространстве и не назначаются первому аккаунту. В локальном режиме вошедший пользователь может открыть **Локальное пространство**; оно отдельно от приватных аккаунтных проектов. Hosted-режим отключает это гостевое пространство.
 
-## Extract and reorganize code
+Пароли хешируются PBKDF2 с солью; для ссылок подтверждения/восстановления хранятся только хеши. Ссылки одноразовые и срочные. Сброс и смена пароля отзывают старые сессии и ссылки. Без SMTP работа аккаунтов доступна, а интерфейс сообщает о недоступности писем.
 
-Select complete adjacent statements in **Code Java** to open **Extract method** in Analysis, or select a supported statement on the graph and choose the last statement in the inspector. Enter a new method name and prepare the change. The diff shows inferred parameters, the return type and the caller's replacement. The original project stays unchanged while the candidate compiles. Choose **Check on tests**, enter independent expected results, review the comparison, then apply explicitly. Compilation alone cannot authorize extraction.
+## Интеграция с GitHub
 
-Extraction moves at most 256 statements from one block into a private method in the same class. It retains static or instance context, passes required locals and parameters, and returns at most one local value or a selected method-tail return. Writes used on later loop iterations are assigned back to the caller. Checked exceptions are retained in the helper's declaration. Escaping jumps, multiple live output variables, ambiguous bindings, unsupported captures and caller-observed exceptional local writes are refused. Local constant variables whose compile-time evaluation could change are also refused. Stack frames and timing can change after any method extraction; matching tests cover the recorded observations, not universal equivalence.
+| Действие | Запрашиваемый доступ | Результат |
+| --- | --- | --- |
+| Войти через GitHub | Только идентификация; пустой scope | Вход в связанный аккаунт или создание GitHub-аккаунта |
+| Подключить GitHub в настройках интеграций | `repo` | Связь и зашифрованный доступ к репозиториям за один OAuth-проход |
+| Переподключить старую связь без repository grant | `repo` | Выдача или обновление доступа того же GitHub-пользователя |
 
-**Rename local variable** changes the selected single-variable declaration and its exact bound references. A method entry can rename its sole parameter. Other overloads and same-named fields stay unchanged. Name collisions, possible capture and unresolved references are refused. This operation uses the same compiled-candidate and comparison gate.
+Доступное имя GitHub сохраняется, включая дефисы и имена до 39 символов. При занятом без учёта регистра имени открывается `/github/complete`: другое корректное имя выбирается до завершения входа. Заявка привязана к сессии, действует десять минут и используется однократно. Аккаунты не объединяются по email провайдера.
 
-For a closed static computation, select its entry and choose **Move method to class**. The original method remains as a wrapper while its body moves to a new fieldless class in the same package. The initial rule accepts explicit `int`/`boolean` parameters, locals and results with supported branches and loops. Calls, fields, arrays, inheritance, generics and unknown dependencies make the rule unavailable. Review both files and compare behavior before applying; this is a bounded decomposition tool.
+У созданного через GitHub аккаунта нет локального пароля и email-учётных данных. Парольный вход, сброс, смена пароля и отвязка единственной идентичности заблокированы. Парольный аккаунт сохраняет обычный вход и может привязать или отвязать GitHub.
 
-## Project archives
+Интеграция проверяет фактически выданный `repo`, затем в одной транзакции сохраняет связь и зашифрованную пару access/refresh-токенов, если refresh выдан. Отказ или отсутствие scope не создаёт частичную связь; ошибка переподключения не заменяет старый grant. PKCE, одноразовый state с привязкой к сессии, блокировки аккаунта и проверка поколения credentials защищают от повторного и отменённого callback.
 
-**Project menu → File → Download project archive** saves a versioned `.jbp.json` archive containing source history, original import bytes, directory trees, historical analyses, layouts, suites and completed reports, with SHA-256 integrity checks. **Open project archive** validates it and creates a separate project with fresh revision IDs. Existing projects are never replaced.
+Импорт закреплён за неизменяемым commit. Временные токены обновляются через сохранённое в БД единственное право на refresh; ротация сохраняет логический grant. Прерванный или неоднозначный обмен требует переподключения. Без OAuth-конфигурации доступен локальный импорт. Реальные разрешения и ограничения организации проверяются после настройки приложения; провайдер сохраняет собственный экран авторизации.
 
-Imported reports and layouts remain historical evidence in the import receipt. They do not become current verification or editable graph bindings. The head receives a fresh analysis; run a fresh comparison before applying further preserving changes. Source ZIP export remains available for ordinary Java tools. Archives are bounded to 64 revisions and 32 MiB, with explicit evidence/layout limits; over-limit archives are rejected rather than truncated. Credential-like paths are rejected, but source text and recorded inputs can contain sensitive information, so review an archive before sharing it.
+## Фотография профиля
 
-## Architecture
+Загрузите PNG/JPEG до **2 MiB** либо удалите фото, чтобы вернуть инициалы. Сервер проверяет реальные данные вместо расширения или MIME, проверяет размеры до декодирования, вырезает центральный квадрат и кодирует PNG не более **512 × 512** без увеличения маленьких изображений.
+
+Вход ограничен 4096 пикселями по стороне и восемью миллионами пикселей. Нормализованные байты сохраняются в PostgreSQL. Публичный URL содержит версию и поддерживает ETag; фото доступно после перезапуска и с другого устройства.
+
+## Архитектура
 
 ```mermaid
 flowchart LR
-    Browser[React workbench] --> API[Spring Boot API]
-    API --> Engine[JavaParser analysis and edits]
+    Browser[Лендинг и React workspace] --> API[Spring Boot API]
+    API --> Engine[JavaParser: анализ и правки]
     API --> DB[(PostgreSQL)]
-    Worker[Durable job worker] --> DB
-    Worker --> Controller[Private runner controller]
-    Controller --> Compiler[Disposable compiler container]
-    Controller --> Runtime[Disposable runtime container]
+    Worker[Worker постоянных задач] --> DB
+    Worker --> Controller[Приватный runner controller]
+    Controller --> Compiler[Одноразовый compiler container]
+    Controller --> Runtime[Одноразовый runtime container]
 ```
 
-| Component | Location | Responsibility |
+| Компонент | Каталог | Ответственность |
 | --- | --- | --- |
-| Web | `apps/web` | Configurable panel workspace, Monaco editor, React Flow graph, proposals and reports |
-| API | `apps/server` | Account sessions, profiles, friends, project access, revision history, CAS, artifacts and durable jobs |
-| Program engine | `modules/program-engine` | Parsing, source/JDK symbol resolution, graph construction and typed edits |
-| Verification | `modules/verification` | Runner protocol and repeated comparison |
-| Runner controller | `apps/runner-controller` | Bounded compiler/runtime containers and cleanup |
-| Deployment | `infra` | Pinned base images and Compose networks |
+| Web | [`apps/web`](apps/web) | Лендинг, аккаунты, Monaco, React Flow, панели, diff, отчёты |
+| API | [`apps/server`](apps/server) | Сессии, профили, аватары, друзья, права, версии, CAS, артефакты, jobs |
+| Program engine | [`modules/program-engine`](modules/program-engine) | Разбор, source/JDK-привязки, граф, типизированные правки |
+| Verification | [`modules/verification`](modules/verification) | Протокол runner, повторное сравнение |
+| Runner controller | [`apps/runner-controller`](apps/runner-controller) | Ограниченные контейнеры компиляции/выполнения, очистка |
+| Инфраструктура | [`infra`](infra) | Образы с закреплёнными digest, сети Compose, доставка |
 
-Java source is never compiled or executed by the API JVM. Only the trusted controller receives the Docker socket. Compiler and runtime containers have no network, no host mounts, a read-only root, a non-root user, dropped capabilities and enforced resource limits.
+Исходники проектов не компилируются и не выполняются внутри API JVM. Docker socket получает только доверенный контроллер. Контейнеры Java не имеют сети, host mounts и Docker socket, работают без root, со сброшенными capabilities, read-only корнем и ресурсными ограничениями.
 
-## Requirements
+Лендинг `/` самостоятелен: шрифты, изображения и Three.js локальны в `apps/web/public/landing`, стили отделены от workspace. `/projects`, авторизация, `/github/complete`, настройки, профили и project URLs открывают React. В production UI и API имеют один origin; Vite проксирует `/api` на native API.
 
-- JDK 21; Maven 3.9.16 is provided through the checksum-pinned Maven Wrapper.
-- Node.js 24 and pnpm 11.25.0 on `PATH`, or portable directories configured with `JB_NODE_HOME` and `JB_PNPM_HOME` in `.env`.
-- Windows PowerShell 7 and a WSL2 distribution named `JavaBlueprints`, with Docker Engine and Compose installed and running inside that distribution.
-- Access to Maven Central, the pnpm registry and the pinned container images on the first build.
+### Технологии
 
-The supplied Windows launcher uses the dedicated `JavaBlueprints` distribution. It does not change the system `PATH`, other WSL distributions or global networking settings. Caches are kept under the repository's ignored `.local` directory. On Linux, the same Maven/pnpm builds and `infra/compose.yaml` can be used with a native Docker Engine.
+| Слой | Стек |
+| --- | --- |
+| Интерфейс | React 19.3.1, TypeScript 5.9.3, Vite 8.3.5, Monaco 0.57, React Flow 12.12 |
+| Сервер | Java 21, Spring Boot 4.0.9, JDBC, Flyway |
+| Анализ | JavaParser 3.28.2, исходники в памяти, ограниченное JDK-разрешение |
+| Данные | PostgreSQL 17: снимки, задачи, отчёты, аккаунты, аватары, зашифрованные grants |
+| Выполнение | Linux Docker Engine, одноразовые Java 21 контейнеры |
+| Инструменты | Maven Wrapper 3.9.16, Node.js 24, pnpm 11.25.0, JUnit, Playwright, GitHub Actions |
 
-## Start
+## Быстрый запуск
 
-From the repository root:
+### Требования
+
+- JDK 21; Maven 3.9.16 загружается Wrapper с проверкой SHA-256.
+- Node.js 24 и pnpm 11.25.0 в `PATH` либо portable-каталоги `JB_NODE_HOME`/`JB_PNPM_HOME` в `.env`.
+- Windows: PowerShell 7 и WSL2-дистрибутив `JavaBlueprints` с Docker Engine и Compose.
+- Доступ к Maven Central, pnpm registry и закреплённым образам для первой сборки.
+
+### Windows / WSL2
+
+Из корня репозитория:
 
 ```powershell
 ./scripts/start.ps1
 ```
 
-The launcher creates `.env` from `.env.example` when needed, generates missing local database and controller secrets, builds Java and the frontend, starts Compose, and waits for HTTP readiness. Open **http://127.0.0.1:5174**. The terminal reports whether the isolated runner is available.
+Launcher создаёт `.env` из шаблона, генерирует недостающие локальные секреты БД/контроллера, собирает Java и frontend, запускает Compose и ждёт HTTP-readiness. Откройте **http://127.0.0.1:5174**. Терминал показывает доступность изолированного runner.
 
-The workbench and API share one origin. PostgreSQL is bound to `127.0.0.1:55433`; the runner has no published port and is reachable only on its private control network. Stop the services while retaining database data:
+| Адрес | Назначение |
+| --- | --- |
+| `http://127.0.0.1:5174/` | Главная страница |
+| `http://127.0.0.1:5174/projects` | Личные проекты |
+| `127.0.0.1:55433` | Локальная PostgreSQL |
+| Приватная control-сеть | Runner без опубликованного host-порта |
 
 ```powershell
+# Остановка с сохранением базы данных
 ./scripts/stop.ps1
+
+# Повторное использование артефактов и пересборка контейнерных образов
+./scripts/start.ps1 -SkipBuild
 ```
 
-After a successful build, `./scripts/start.ps1 -SkipBuild` reuses the generated application artifacts and rebuilds their container images. Do not run the Vite development server and the Compose workbench on port 5174 at the same time.
+Windows launcher использует выделенный WSL-дистрибутив, не меняя системный `PATH`, другие дистрибутивы и глобальную сеть. Кэши находятся в игнорируемом `.local`. Не запускайте Compose UI и Vite одновременно на порту 5174.
 
-### Email configuration
+### Разработка с Vite
 
-Set these fields in the ignored `.env`, then restart the stack:
+Сначала запустите БД через Compose. Затем в разных терминалах:
+
+```powershell
+./scripts/start-server.ps1 -Build
+```
+
+```powershell
+# Node.js и pnpm должны быть доступны в этом терминале
+pnpm dev
+```
+
+Native API слушает `127.0.0.1:8081`. Выполнение недоступно без явно настроенного доверенного Linux-контроллера и токена; fallback на host JVM отсутствует.
+
+### Linux
+
+Требуются JDK 21, Node.js 24, pnpm 11.25.0, Docker Engine, Compose и curl:
+
+```bash
+bash scripts/start.sh
+# http://127.0.0.1:5174
+```
+
+Скрипт создаёт локальные секреты, собирает закреплённые зависимости и запускает тот же Compose stack. Отдельные проверки:
+
+```bash
+# Передать настройки БД процессам текущего shell
+set -a; source .env; set +a
+
+docker compose --env-file .env -f infra/compose.yaml up -d db
+MAVEN_USER_HOME="$PWD/.local/cache/maven-wrapper" bash ./mvnw -B -ntp test
+pnpm typecheck && pnpm test:web && pnpm build
+```
+
+Windows/WSL-путь проверен в подготовленной среде. Linux launcher использует те же сборку и Compose, но отдельный запуск на чистой Linux-машине пока не подтверждён.
+
+## Конфигурация
+
+Рабочий `.env` приватный и игнорируется Git; [`.env.example`](.env.example) содержит шаблон. Секреты сервера не должны попадать в `VITE_*`, frontend bundle или репозиторий.
+
+| Переменные | Назначение |
+| --- | --- |
+| `JB_BIND_HOST`, `JB_API_PORT` | Адрес и порт native API |
+| `JB_DB_HOST`, `JB_DB_PORT`, `JB_DB_NAME`, `JB_DB_USER`, `JB_DB_PASSWORD` | PostgreSQL |
+| `JB_ALLOWED_ORIGINS`, `JB_PUBLIC_URL` | Допустимые origins и базовый адрес приложения |
+| `JB_RUNNER_ENABLED`, `JB_RUNNER_CONTROLLER_URL`, `JB_RUNNER_CONTROLLER_TOKEN` | Доверенный Linux runner; Compose задаёт внутренний адрес |
+| `JB_SMTP_*` | Подтверждение email и восстановление пароля |
+| `JB_GITHUB_*` | OAuth App и ключ шифрования grants |
+| `JB_HOSTING_ENABLED`, `JB_SESSION_COOKIE_SECURE` | Hosted-режим и Secure-cookie |
+
+### GitHub OAuth App
+
+```dotenv
+JB_GITHUB_CLIENT_ID=
+JB_GITHUB_CLIENT_SECRET=
+JB_GITHUB_TOKEN_KEY=
+JB_GITHUB_CALLBACK_URL=http://127.0.0.1:5174/api/v1/github/oauth/callback
+```
+
+Callback провайдера должен точно совпадать с адресом приложения. `JB_GITHUB_TOKEN_KEY` — Base64 от 32 случайных байт. Сохраняйте ключ между перезапусками и развёртываниями: замена не позволяет расшифровать старые grants. Реальный provider consent требует настроенных ключей и отдельной проверки.
+
+### Электронная почта
 
 ```dotenv
 JB_SMTP_HOST=smtp.yandex.ru
@@ -212,40 +358,9 @@ JB_SMTP_FROM=
 JB_PUBLIC_URL=http://127.0.0.1:5174
 ```
 
-Use the full mailbox address for username and sender, and a Yandex application password for `JB_SMTP_PASSWORD`. SMTP uses implicit TLS with certificate and hostname verification. Follow [Yandex's mail-client setup](https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others.html). `JB_PUBLIC_URL` supplies the origin of confirmation and reset links. Keep mailbox credentials out of frontend variables and Git. Verification links expire after 24 hours; reset links expire after one hour. SMTP transport and delivery errors are reported explicitly; local tests do not claim real Yandex delivery.
+В username/From указывается один полный адрес Yandex-ящика, в password — пароль приложения. SMTP использует implicit TLS с проверкой сертификата и имени сервера: [инструкция Yandex](https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others.html). `JB_PUBLIC_URL` задаёт origin ссылок. Подтверждение email действует 24 часа, восстановление — один час. Ошибки SMTP отображаются явно; mock-проверки не доказывают реальную доставку.
 
-To use a native API process during frontend development:
-
-```powershell
-./scripts/start-server.ps1 -Build
-# In another terminal with Node/pnpm configured:
-pnpm dev
-```
-
-The native API binds to `127.0.0.1:8081`. Start the database first with Compose. Native execution features remain unavailable unless a trusted Linux runner URL and token are explicitly configured; the application never falls back to host execution.
-
-## Native Linux
-
-With JDK 21, Node 24, pnpm 11.25.0, Docker Engine, Compose and curl installed:
-
-```bash
-bash scripts/start.sh
-# Open http://127.0.0.1:5174
-```
-
-The script creates local secrets, builds from the checked-in dependency versions and starts the same Compose stack. Java and frontend checks can be run separately:
-
-```bash
-# Export the private database values for the native integration test process.
-set -a; source .env; set +a
-docker compose --env-file .env -f infra/compose.yaml up -d db
-MAVEN_USER_HOME="$PWD/.local/cache/maven-wrapper" bash ./mvnw -B -ntp test
-pnpm typecheck && pnpm test:web && pnpm build
-```
-
-The Windows launcher and test command are verified in the prepared Windows/WSL environment. The native Linux launcher uses the same build and Compose commands; a separate clean Linux-host run has not yet been validated.
-
-## Checks
+## Тестирование
 
 ```powershell
 ./scripts/test.ps1
@@ -254,11 +369,13 @@ pnpm test:web
 pnpm build
 ```
 
-The Java command runs parser/graph/edit tests, semantic binding tests, comparison tests and real PostgreSQL HTTP integration tests. Each backend integration run creates its own randomly named schema and removes that schema afterward. It checks lexical scope and shadowing, bounded overload resolution, source/JDK targets, analysis environment invalidation, structural edit anchors and source preservation, concurrent head updates, idempotent restoration and replay, immutable storage, invalid drafts, strict import normalization, original artifact bytes, ZIP export content, scoped IDs, CSRF/origin checks, layout bindings and fenced job publication.
+Java-проверки включают parser/graph/edit, семантические привязки, сравнения и реальные HTTP/PostgreSQL integration tests. Backend integration tests создают случайно именованную отдельную схему и удаляют именно её. Проверяются scope/shadowing, ограниченные overloads, source/JDK targets, инвалидирование среды анализа, структурные anchors, сохранение исходников, конкурентная смена head, восстановление/idempotency, неизменяемые данные, неверные черновики, нормализация импорта, оригинальные байты, ZIP, project-scoped IDs, CSRF/origin, раскладка и fenced-публикация jobs.
 
-Docker execution integration tests are opt-in through `JB_RUNNER_INTEGRATION=true` and require a Linux controller. A Windows API/client can call that controller over authenticated HTTP; the controller's Docker subprocesses must run on Linux. Tests cover actual compilation, exact UTF-8 streams, three observations per side, intentional mismatches, compilation errors, timeout, output limits, cancellation and sandbox boundaries. Ordinary `test.ps1` does not claim to run those opt-in checks. See [the runner integration commands](infra/runner/README.md#repeat-the-execution-integration-checks) for the complete controller setup and invocation.
+GitHub-тесты проверяют signup, срок и одноразовость заявки, коллизии имён, отсутствие email merge, парольные обходы, атомарную выдачу repository grant, откат при ошибке записи, refresh и отмену. Проверки аватаров покрывают нормализацию, лимиты, права и хранение. Используются фиксированный provider transport и mock-почта, без настоящих OAuth-разрешений и писем.
 
-To repeat the browser checks, start the complete stack first, then install Chromium and run Playwright:
+### Браузер
+
+После запуска полного stack установите Chromium и выполните Playwright:
 
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH="$PWD/.local/cache/playwright"
@@ -266,94 +383,100 @@ pnpm --filter @java-blueprints/web exec playwright install chromium
 pnpm --filter @java-blueprints/web exec playwright test
 ```
 
-These browser tests create synthetic projects in the local database. They exercise session recovery, concurrent edits, source bindings, declaration navigation across files, stale semantic bindings, invalid drafts, responsive light/dark layouts, structural insert/delete proposals, historical restoration and actual candidate verification.
+Сценарии создают синтетические проекты в локальной БД. Они проверяют восстановление сессий, конкурирующие правки, source bindings, переходы между файлами, устаревшие привязки, неверные черновики, адаптивные темы, структурные предложения, историю и настоящую проверку кандидатов. Аккаунтные browser tests требуют отключённой SMTP-доставки и пропускаются при live mailbox; серверные account tests используют mock transport.
 
-Synthetic account browser tests require SMTP delivery to be disabled and skip when a live mailbox is configured. Server account tests use a mocked mail transport.
+Workspace-проверки охватывают drag-and-drop, вкладки, размеры, восстановление настроек, состояния редактора и графа. Pure frontend tests проверяют инварианты дерева окон и геометрию. UI-раскладка не должна создавать версии, предложения, jobs или серверные graph-layout writes.
 
-Workspace checks cover drag-and-drop arrangements, tab groups, resizing, local preference recovery and preservation of editor and graph state. Pure frontend tests validate layout-tree invariants and graph presentation geometry. UI layout actions must not create source revisions, proposals, jobs or graph-layout writes.
+### Реальное выполнение в контейнерах
 
-### Large project fixture
+Опциональные runner integration tests требуют `JB_RUNNER_INTEGRATION=true` и Linux-контроллер. Windows API/client обращается к нему по authenticated HTTP, но Docker subprocesses работают на Linux. Проверяются компиляция, точный UTF-8, три наблюдения с каждой стороны, намеренные расхождения, compile errors, timeout, output limits, отмена и sandbox boundaries.
 
-The versioned example in [fixtures/synthetic/large](fixtures/synthetic/large) contains 1100 source lines, ten classes and fifty methods. Import that directory, choose `demo.Main`, and provide a count followed by that many integers on standard input. The browser check imports the complete ZIP, verifies every source hash, navigates across files, exports the unchanged snapshot, and compares a compiled candidate on twenty deterministic inputs with independent expected output and three observations per side.
+Обычный `test.ps1` не включает opt-in проверки. Полная настройка и команды повторения — в [документации runner](infra/runner/README.md#repeat-the-execution-integration-checks). Unit tests не заменяют проверку настоящих runner, SMTP, OAuth и hosted-приложения.
+
+### Большой проект и измерения
+
+[Синтетический пример](fixtures/synthetic/large) содержит 1100 строк, десять классов и 50 методов. Импортируйте каталог, выберите `demo.Main`, передайте количество чисел и сами числа через stdin. Browser-проверка импортирует ZIP, сверяет хеш каждого исходника, навигацию, экспорт неизменённого снимка и сравнение кандидата на 20 детерминированных входах с независимыми ожидаемыми ответами.
 
 ```powershell
 pnpm --filter @java-blueprints/web exec playwright test tests/largeProject.spec.ts
 ./mvnw.cmd -B -ntp -pl modules/program-engine '-Djb.engine.perf=true' '-Dtest=EnginePerformanceTest' test
 ```
 
-The optional engine benchmark parses and analyzes the fixture without compiling or executing its Java code on the host. It writes `modules/program-engine/target/engine-benchmark.json`: the first analysis in a fresh test JVM, five warmups, thirty warm samples, median, p95, maximum and the exact bundle hash. These measurements cover source analysis. Program execution remains isolated in Docker; browser timings include their stated automation and rendering overhead. This fixture does not establish complete Java language coverage or a performance guarantee.
+Benchmark разбирает и анализирует текст без компиляции и выполнения Java примера на host. `modules/program-engine/target/engine-benchmark.json` содержит первый анализ в свежем JVM, пять прогревов, 30 тёплых измерений, median, p95, maximum и bundle hash. Это измерения анализа; исполнение остаётся в Docker, browser timings включают указанную автоматизацию и rendering overhead. Пример не устанавливает полноту Java или общую гарантию производительности.
 
-## Data and API
+## API и данные
 
-The API lives under `/api/v1`. `GET /session` establishes a local cookie and returns a session-bound CSRF token. Mutations require the token and an idempotency UUID. Head mutations also require `If-Match` with the current revision UUID, or `empty` for a project without a head. A concurrent change returns a conflict instead of overwriting another save.
+База API — `/api/v1`. `GET /session` создаёт cookie-сессию и возвращает связанный CSRF-token. Изменяющие запросы требуют токен и разрешённый `Origin`; проектные mutations также используют UUID idempotency. Смена head требует `If-Match` с текущим UUID версии либо `empty`. Конкурирующая запись возвращает конфликт.
 
-`GET /projects` accepts `limit` (default 20, maximum 100), optional `q` (literal case-insensitive name substring, maximum 120 characters), and optional `before` (an existing project UUID). Pages use descending creation time with UUID as the stable tie-breaker; the next cursor is the last displayed project. The response keeps its project array shape.
+`GET /projects` принимает `limit` (по умолчанию 20, максимум 100), `q` (буквальная подстрока имени без учёта регистра до 120 символов) и `before` (UUID существующего проекта). Порядок — время создания по убыванию и UUID при равенстве; cursor — последний показанный проект. Ответ остаётся массивом проектов.
 
-Revisions retain canonical UTF-8 text with LF line endings, directory entries and a SHA-256 tree hash. The separate bundle hash covers the Java subset and is absent when there are no Java sources. Imports also retain original bytes and normalization metadata. Analyses carry their own version and source-map identity; node IDs are valid only in that analysis. Candidates, suites and reports retain their exact input references. Artifacts are retrieved by project-scoped IDs rather than host paths.
+Версии хранят канонический UTF-8 с LF, каталоги и SHA-256 дерева. Отдельный bundle hash относится к Java и отсутствует без Java-исходников. Импорт хранит оригинальные байты и метаданные нормализации. Анализ имеет версию и source-map identity; node IDs действуют только в конкретном анализе. Кандидаты, suites и отчёты привязаны к точным входам. Артефакты извлекаются по project-scoped IDs, а не host paths.
 
-Graph nodes advertise `allowedOperations` and `insertionPositions`. The change endpoint accepts `replace_expression`, `replace_statement`, `insert_statement`, `delete_statement`, `move_statement`, `wrap_if`, `wrap_while`, `add_else`, `remove_else` and the restricted `optimize_membership` operation with operation-specific payloads. Insertions and structural edits use bound statements or method entries, never client-supplied source offsets. Membership indexing uses an empty payload and requires preservation intent. Compilation validates the complete candidate before it becomes applicable. `POST /projects/{p}/revisions/{r}/restore` creates a new revision with `sourceRevisionId`, checks the current head, and starts a fresh analysis. Restoration does not inherit a previous revision's verification result.
+Узлы объявляют `allowedOperations` и `insertionPositions`. Change endpoint поддерживает `replace_expression`, `replace_statement`, `insert_statement`, `delete_statement`, `move_statement`, `wrap_if`, `wrap_while`, `add_else`, `remove_else`, `optimize_membership`. Структурные операции привязаны к оператору или method entry; сырые клиентские offsets не принимаются. Membership требует пустой payload и preservation intent.
 
-The same change endpoint accepts `extract_method` with `{methodName,endNodeId}`, `decompose_class` with `{className}`, and `rename_local` with `{newName}`. These commands require `preserve_behavior` and an exact current node binding. They cannot accept raw source offsets or bypass the comparison gate. Project archives use `POST /projects/{p}/archives`; `POST /archive-previews` validates a file before creating a destination, and `POST /projects/{p}/archive-imports` requires an empty target and `If-Match: empty`.
+`extract_method` принимает `{methodName,endNodeId}`, `decompose_class` — `{className}`, `rename_local` — `{newName}`. Нужны `preserve_behavior`, актуальная привязка и совпавшее сравнение. `POST /projects/{p}/revisions/{r}/restore` создаёт версию с `sourceRevisionId`, проверяет head и запускает новый анализ, не наследуя прежнюю верификацию.
 
-Analyses include a `semantics` model with analysis-scoped symbols and references, plus a `symbolEnvironmentHash` identifying the resolver configuration and JDK runtime. Source targets carry declaration-name ranges; JDK targets carry external keys without fabricated source locations. Each reference records an exact compile-time target, bounded candidates, or an unresolved reason. Virtual calls do not claim a unique runtime target. Updating the engine or resolver environment requires a fresh analysis for new edits; historical analysis and accepted idempotent responses remain readable.
+`POST /projects/{p}/archives` создаёт архив; `POST /archive-previews` проверяет до создания назначения; `POST /projects/{p}/archive-imports` требует пустой проект и `If-Match: empty`.
 
-Graph nodes carry an `executionRole` that distinguishes statements and condition tests from structural anchors, source expression projections and synthetic flow nodes. Short-circuit tests have source ranges but do not add edit operations. Enclosing condition anchors retain their existing edit controls. Older analyses without this field retain an unknown role.
+`semantics` содержит scoped symbols/references и `symbolEnvironmentHash` resolver/JDK. Source targets имеют диапазоны имён объявлений; JDK targets — external keys без вымышленных позиций. Ссылка содержит точную compile-time цель, ограниченные candidates либо причину unresolved. Виртуальный вызов не обещает единственную runtime-цель. После смены engine/resolver новые правки требуют нового анализа; история и принятые idempotent-ответы читаются.
 
-A comparison means **matched on the recorded tests**, not a proof of equivalence. It requires a nonempty suite, complete observations and stable exact stdout/stderr/exit results. Equal timeouts, OOM, truncated output, cancellation or unavailable execution never count as a match. A standalone run does not satisfy the verification gate for a behavior-preserving change.
+`executionRole` различает операторы и condition tests, структурные anchors, expression projections и synthetic flow. Short-circuit tests имеют ranges без собственных edit-операций; родительское условие сохраняет controls. У старых анализов без поля роль неизвестна.
 
-## Hosted deployment and delivery
+## Развёртывание и доставка
 
-The hosted workbench uses **https://java-blueprints.karpovprod.ru**. Development and hosting have separate databases and Docker engines.
+Hosted-приложение: **https://java-blueprints.karpovprod.ru**. Локальная и опубликованная среды используют разные БД и Docker engines.
 
-`infra/compose.production.yaml` runs the API, PostgreSQL and private runner in a dedicated rootless Docker engine. Only the API is published, on loopback port18684 behind the HTTPS proxy. PostgreSQL and the controller have no public ports. The controller receives only that dedicated engine's socket; the web application and Java sandboxes receive no Docker socket. Per-container limits operate under the application user's aggregate cgroup limits.
+[`infra/compose.production.yaml`](infra/compose.production.yaml) запускает API, PostgreSQL и приватный runner в выделенном rootless Docker engine. Опубликован только API на loopback-порту 18684 за HTTPS proxy. БД и контроллер не имеют публичных портов. Контроллер получает socket только этого engine; web/API и Java sandboxes его не получают. Контейнерные лимиты дополняются общими cgroup-лимитами application user.
 
-Hosting requires `JB_HOSTING_ENABLED=true`, `JB_SESSION_COOKIE_SECURE=true` and the canonical `JB_PUBLIC_URL`. The proxy must replace client forwarding headers, and Tomcat must trust only its actual internal proxy peers. Keep session cookies HttpOnly and SameSite=Lax. Public project source remains readable; creating projects, running programs and materializing ZIP/archive exports require an authenticated account and the appropriate project role. Exact source-file downloads are read operations.
+Нужны `JB_HOSTING_ENABLED=true`, `JB_SESSION_COOKIE_SECURE=true` и канонический HTTPS `JB_PUBLIC_URL`. Proxy заменяет клиентские forwarding headers, Tomcat доверяет только реальным внутренним proxy peers. Cookie остаются HttpOnly и SameSite=Lax. Публичные исходники читаются без входа; создание, выполнение и материализация ZIP/архивов требуют аккаунта и роли. Скачивание точного source-файла — read operation.
 
-GitHub uses server-only `JB_GITHUB_CLIENT_ID`, `JB_GITHUB_CLIENT_SECRET`, `JB_GITHUB_TOKEN_KEY` and `JB_GITHUB_CALLBACK_URL`. The production callback is `https://java-blueprints.karpovprod.ru/api/v1/github/oauth/callback`. The encryption key is Base64 of32 random bytes and must persist across deployments. Provider consent, account linking and repository access remain explicit user actions; secrets never enter the frontend build.
+Production GitHub callback: `https://java-blueprints.karpovprod.ru/api/v1/github/oauth/callback`. Credentials и постоянный ключ шифрования остаются на сервере, вне frontend build.
 
-The `checks` workflow builds and tests each revision. A successful push to this repository's `main` additionally builds commit-labeled images from those exact Java/frontend artifacts, uploads a checksummed release and deploys it through a dedicated restricted SSH key. Pull requests cannot deploy. The deployment is serialized, verifies the current main revision, pins the SSH host key, checks the image IDs and commit labels, and uses the owned rootless engine only. GitHub Actions stores the four `JB_DEPLOY_*` connection secrets; application credentials remain on the server.
+Workflow [`checks`](.github/workflows/checks.yml) собирает и проверяет ревизии. Успешный push в `main` дополнительно создаёт образы из точных артефактов с commit labels, загружает checksummed release и развёртывает через ограниченный SSH-ключ. Pull requests не выполняют deploy. Процесс сериализован, сверяет актуальную main-ревизию, pinned host key, image IDs и labels и использует свой rootless engine. В Actions хранятся четыре `JB_DEPLOY_*` connection secrets; application credentials остаются на сервере.
 
-`scripts/deploy-release.py` accepts only `status` and `deploy <commit> <checksum>`, rejects unsafe archive members, verifies the running image IDs, checks API/runner/hosted-policy readiness and public HTTPS assets, and publishes the current-release pointer after those checks. Subsequent deployments first save a database snapshot; a failed application update attempts to restore the previous images. A failed first deployment stops its API and runner while retaining the database. Database rollback is a separate operator action: schema changes must remain compatible with the previous release. The receiver retains the latest three release records plus an older current/previous release when needed, and ten database snapshots. It does not prune other applications or their Docker engine.
+[`scripts/deploy-release.py`](scripts/deploy-release.py) принимает только `status` и `deploy <commit> <checksum>`, отклоняет опасные archive members, проверяет образы, readiness API/runner/hosted-policy и публичные HTTPS assets. Current-release pointer обновляется после проверок. До обновления сохраняется БД; при сбое пытаются вернуть предыдущие образы. Первая неудачная установка останавливает API/runner, сохраняя БД. Откат схемы — отдельная операторская операция; миграции должны сохранять совместимость с предыдущим релизом.
 
-Deployment recreates this application's singleton services and can interrupt active executions. Schedule updates outside a live demonstration; uninterrupted job migration is not provided.
+Хранятся три последних release records плюс более старые current/previous при необходимости и десять снимков БД. Другие приложения и engines не очищаются. Обновление пересоздаёт singleton-сервисы и может прервать исполнения; миграции live jobs без остановки нет.
 
-Deployment receiver tests run on Linux with `python3 -m unittest discover -s tests/deploy -v`. TLS setup, provider consent and actual hosted execution are separate deployment checks; unit tests do not establish them.
+```bash
+python3 -m unittest discover -s tests/deploy -v
+```
 
-## Fixed execution limits
+Receiver tests выполняются на Linux. TLS, provider consent и реальное hosted-выполнение проверяются отдельно.
 
-The `java21-v1` execution limits are fixed and cannot be changed through environment variables. Reports also retain the profile hash: changes to input delivery or measurement semantics produce a different hash, and an older report cannot verify a change in the new environment.
+## Фиксированные лимиты
 
-| Limit | Value |
+Профиль `java21-v1` фиксирован, его лимиты не меняются через env. Отчёты хранят hash профиля: смена семантики ввода или измерений меняет hash; старый отчёт не подтверждает изменение в новой среде.
+
+| Ограничение | Значение |
 | --- | --- |
-| Project tree | 100 entries including directories, 1 MiB UTF-8 text |
-| ZIP import | 1 MiB compressed input and 1 MiB total expanded content |
-| Console input | 1 MiB |
-| Arguments | 100, 8 KiB each, 64 KiB combined UTF-8; no NUL |
-| Test suite | 100 cases; three independent runs per version and case |
+| Дерево проекта | 100 записей с каталогами; 1 MiB UTF-8 текста |
+| ZIP | 1 MiB сжатого входа и 1 MiB всего распакованного текста |
+| Консольный ввод | 1 MiB с исходным stdin; кадр до 8 KiB, до 1024 кадров |
+| Аргументы | 100; 8 KiB на аргумент, 64 KiB суммарно; без NUL |
+| Набор сравнения | 100 случаев; по три независимых запуска версии на случай |
 | Sandbox | 512 MiB RAM, 1 CPU, 128 PIDs |
-| Compilation / runtime | 20 seconds / 5 seconds per execution |
-| Combined stdout and stderr | 1 MiB per execution |
-| Controller retention | 1024 handles, 64 MiB aggregate, ten minutes |
-| Backend job deadline | Ten minutes; incomplete work cannot verify preservation |
+| Компиляция / comparison / interactive run | 20 секунд / 5 секунд / 120 секунд |
+| stdout + stderr | 1 MiB на исполнение |
+| Runner handles | 1024; 64 MiB суммарно; retention десять минут |
+| Backend job | Десять минут; неполная работа не подтверждает сохранение поведения |
+| Архив | 64 версии и 32 MiB с отдельными лимитами evidence/layout |
+| Фото | PNG/JPEG до 2 MiB; до 4096 px по стороне и 8 000 000 px; PNG-результат до 512 × 512 |
 
-Java source paths and case identifiers follow the shared runner policy. Java paths use relative ASCII Java identifiers, with `package-info.java` and `module-info.java` also accepted. Other text paths may contain Unicode and spaces; all paths must be relative and cannot contain traversal components. A test case's separate display name may contain Unicode.
+Java paths — относительные ASCII Java-идентификаторы; также разрешены `package-info.java` и `module-info.java`. Другие текстовые пути допускают Unicode и пробелы. Все пути относительные, без traversal. Отображаемое имя test case может содержать Unicode.
 
-## Current scope
+## Границы возможностей
 
-The implemented slice supports source import/save/history/restore, JavaParser-backed method graphs, source navigation, typed expression/condition replacement and statement insertion/deletion, separate layout persistence, detached proposals with diff and explicit apply, console runs, versioned console suites, repeated comparison and source export.
+Реализованы импорт, сохранение, история и восстановление исходников, методные графы, source navigation, поддерживаемые типизированные/структурные правки, отдельная раскладка, compiled candidates с diff и явным применением, консоль, версионируемые наборы, повторное сравнение и экспорт. Неподдерживаемый метод сохраняется как непрозрачный исходный код с диагностикой.
 
-Structural edits are limited to supported methods and actual block statement lists. Reordering moves one statement before or after a sibling in the same block. Wrapping creates a braced `if` or `while` around one statement; a new loop cannot capture an existing outer `break` or `continue`. Adding `else` requires a braced `then` branch and a braced new body; removing `else` requires braced branches and a comment-free removal span. The inspector exposes only the operations available for the selected node.
+- **Условия.** Раскрывается нормальное завершение `&&`, `||`, `!` и скобок в поддерживаемых `if`, `while`, `do`, `for`. Вызовы, eager operators, ternary и unboxing не становятся полным expression/exception graph. Более 4096 condition tests дают opaque.
+- **Switch.** Поддерживаются colon cases с однократным selector, default, fallthrough и непомеченными jumps. Case types/constants проверяет compiler. Прямые case lists не становятся insertion/deletion anchors, настоящие вложенные блоки — становятся. Лимиты: 1024 entries/4096 labels на метод. Arrow rules, switch expressions, patterns, `case null` и labeled jumps opaque. В `try` selector получает консервативное exceptional edge.
+- **Enhanced for.** Общая абстракция array/Iterable без разложения iterator protocols, conversions и исключений. `break`/`continue` сохраняют цели через вложенные switches. Источник редактируется через expression projection; synthetic steps read-only. Более 1024 enhanced loops дают opaque с диагностикой.
+- **Исключения.** До 64 ресурсов на `try`, 8192 flow nodes и 24576 edges на метод; превышение сохраняет read-only opaque-исходник.
+- **Структурные правки.** Перенос между блоками, обёртка нескольких операторов и общий structural undo/redo не реализованы; восстановление истории явное. Используются только разрешённые anchors.
+- **Символы.** Ограниченный набор source classes/interfaces, fields, parameters, locals, methods, constructors и JDK references. Только исходники в памяти и platform classloader, без application dependencies и filesystem classpaths. Local/anonymous classes, lambdas, неподдерживаемые типы и отсутствующие зависимости дают partial results; overload inference ограничен.
+- **Статические доказательства.** Общего access-control, alias, escape, effect и dominance analysis нет; membership rule использует свои замкнутые проверки. Analysis budgets отклоняют слишком большие/глубокие AST с сохранением кода. Найденная привязка не доказывает компиляцию или сохранение поведения.
+- **Сборка и производительность.** Внешние зависимости не импортируются, build scripts не выполняются; runner компилирует ограниченный bundle против фиксированного JDK 21. Общий project-wide rename, произвольная миграция зависимостей, оптимизации за пределами membership rule и method harnesses вне scope. Асимптотика и общий выигрыш времени не заявляются.
+- **Эксплуатация.** По умолчанию localhost. Hosted-режим требует HTTPS и Secure cookies, отключает legacy guest и анонимное создание, сохраняя разрешённые public reads. Runner singleton; handles ограничены и временны, завершённые отчёты и артефакты постоянны. Перезапуск контроллера делает in-flight handles недоступными.
 
-These are explicit semantic edits: changed order or repetition can change program behavior. Compilation checks types, scope, definite assignment and reachability before apply; preservation still requires a matching recorded comparison. Internal comments move with the statement, while comments outside its token span remain at their original positions. Deletions cannot discard comments. Opaque constructs and expression fragments are not structural edit anchors. Cross-block moves, multi-statement wrapping and a general structural undo/redo stack remain outside this scope; historical restoration is explicit.
-
-Condition flow covers normal completion of `&&`, `||`, `!` and parentheses in supported `if`, `while`, `do` and `for` conditions. Other expression subtrees remain atomic tests; calls, eager operators, ternaries and unboxing are not expanded into a complete expression or exception graph. Loop initialization, updates and unlabeled jump targets remain explicit. A method exceeding 4096 condition tests is preserved as opaque with a diagnostic.
-
-Traditional colon-style `switch` statements evaluate the selector once and dispatch to a case or default, with explicit fallthrough and unlabeled jump targets. Selector and case nodes support source navigation; separate expression projections retain their existing edit controls. Case-label type and constant validity are checked by the isolated compiler. Direct case statement lists do not become insertion or deletion anchors; actual nested blocks retain those operations. The method-wide limits are 1024 switch entries and 4096 labels. Arrow rules, switch expressions, patterns, `case null` and labeled jumps remain outside this control-flow subset and preserve the method as opaque. In try-containing methods, a conservative selector-exception edge reaches the active handler; expression internals are not expanded.
-
-Enhanced `for` uses a normal iteration abstraction for arrays and `Iterable`: a source expression is evaluated once, then synthetic check, element-binding and continuation steps surround the body. This does not expand the distinct array and iterator protocols, conversions or exceptional paths into individual Java operations. `break` and `continue` retain their enclosing-loop targets, including through nested switches. Existing expression projections support changing the source through the compile-gated proposal workflow; synthetic steps are read-only and have no invented source range. Methods exceeding 1024 enhanced loops are preserved as opaque with a diagnostic.
-
-The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution covers a bounded subset of source classes/interfaces, fields, parameters, local variables, methods, constructors and platform JDK references. It uses only the in-memory source bundle and the platform classloader; application dependencies and filesystem classpaths are not searched. Local/anonymous classes, lambdas, unsupported type domains and unresolved dependencies can produce partial results. Overload inference is bounded. General access-control, alias, escape, effect and dominance analysis is not provided; the membership rule performs its own closed local checks. Analysis budgets can reject oversized or deeply nested ASTs while retaining the source.
-
-Asymptotic complexity remains unknown. Renaming, extraction and class decomposition cover the explicit bounded rules above. General whole-project renaming, arbitrary dependency migration, optimization beyond the membership rule and method harnesses remain outside this scope. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
-
-The default development deployment remains bound to localhost. The explicit hosted mode requires a canonical HTTPS origin and Secure cookies, disables the legacy guest workspace and anonymous project creation, and retains permission-filtered public reads. Account sessions and project permissions remain enforced on every project operation. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.
+Полное покрытие Java, широкие обещания производительности и готовность публичного deployment к любому окружению требуют дополнительной проверки. Результаты тестов относятся к конкретным сценариям, версиям и среде.

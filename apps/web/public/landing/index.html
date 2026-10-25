@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="JavaBlueprints — код, граф и проверка в одном рабочем пространстве. От строки к структуре. От структуры к пониманию.">
+  <title>JavaBlueprints — у кода есть другая сторона</title>
+  <link rel="icon" href="/landing/assets/logo.png" type="image/png">
+  <link rel="stylesheet" href="/landing/styles.css">
+  <script src="/landing/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Перейти к содержимому</a>
+  <div class="page">
+    <header class="header shell">
+      <a class="brand" href="#top" aria-label="JavaBlueprints — в начало">
+        <span class="brand-mark"><img src="/landing/assets/logo.png" alt="" width="1254" height="1254"></span>
+        <span>JavaBlueprints</span>
+      </a>
+      <nav aria-label="Основная навигация">
+        <a href="#features">Возможности</a>
+        <a href="#workflow">Как это работает</a>
+        <a href="#workspace">Рабочая среда</a>
+      </nav>
+      <a class="login" href="/login" data-action="login">Войти</a>
+    </header>
+
+    <main id="top">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <h1 id="hero-title">У кода есть<br>другая сторона.</h1>
+        <div class="hero-stage">
+          <div class="hero-caption hero-caption--left">
+            <p class="eyebrow accent">Смените ракурс</p>
+            <p class="caption-title">Не просто читать.<br>Видеть связи.</p>
+            <p class="caption-description">Код, граф и проверка —<br>в одном рабочем пространстве.</p>
+          </div>
+          <div class="sculpture" aria-hidden="true">
+            <img class="sculpture-image" src="/landing/assets/hero.png" alt="" width="1024" height="1024" fetchpriority="high">
+          </div>
+          <div class="hero-caption hero-caption--right">
+            <p class="eyebrow">Java 21 в браузере</p>
+            <p class="caption-title">От строки к структуре.<br>От структуры к пониманию.</p>
+            <p class="caption-description">Исследуйте логику проекта<br>в своём темпе.</p>
+          </div>
+        </div>
+        <a class="primary-action" href="/projects" data-action="workspace">
+          <span>Открыть пространство</span><img src="/landing/assets/arrow.svg" alt="" width="24" height="24">
+        </a>
+      </section>
+
+      <section class="workspace shell" id="workspace" aria-labelledby="workspace-title">
+        <div class="workspace-heading">
+          <h2 id="workspace-title">Вся логика.<br>В поле зрения.</h2>
+          <p>Перейдите от исходного кода к наглядному графу.<br class="desktop-break"> Откройте метод, проследите ветвление и вернитесь<br class="desktop-break"> к нужной строке — не теряя контекст.</p>
+        </div>
+        <figure class="workspace-preview">
+          <img src="/landing/assets/workspace.png" alt="Рабочее пространство JavaBlueprints: дерево проекта слева, граф выполнения метода в центре, анализ справа, код и консоль внизу." width="2544" height="1304" loading="lazy">
+          <button class="preview-open" type="button" aria-haspopup="dialog"><span>Рассмотреть</span><img src="/landing/assets/arrow.svg" alt="" width="24" height="24"></button>
+        </figure>
+        <div class="workspace-caption" aria-hidden="true">
+          <span>Исходный код</span><img src="/landing/assets/exchange.svg" alt="" width="24" height="24"><span>Живая структура</span>
+        </div>
+      </section>
+
+      <section class="workflow shell" id="workflow" aria-labelledby="workflow-title">
+        <h2 id="workflow-title">Меньше переключений.<br>Больше ясности.</h2>
+        <div class="steps">
+          <article class="step">
+            <h3>Принесите код</h3>
+            <p>Загрузите .java, импортируйте проект<br>из GitHub или откройте готовый пример.</p>
+            <span class="step-tag">.java &nbsp; / &nbsp; GitHub</span>
+          </article>
+          <article class="step">
+            <h3>Раскройте логику</h3>
+            <p>Выберите метод. Исследуйте узлы,<br>условия и пути выполнения.</p>
+            <span class="step-tag">Код &nbsp; ↔ &nbsp; Граф</span>
+          </article>
+          <article class="step">
+            <h3>Проверьте идею</h3>
+            <p>Запустите код, откройте консоль<br>и работайте с тестами в той же среде.</p>
+            <span class="step-tag">Запуск &nbsp; / &nbsp; Тесты</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="features shell" id="features" aria-labelledby="features-title">
+        <h2 id="features-title">Собрано вокруг<br>вашего мышления.</h2>
+        <div class="feature-grid">
+          <article class="depth-card depth-card--graph" tabindex="0" aria-label="Связи становятся видимыми. Переходите между деталями и общей картиной проекта. Наведите курсор или установите фокус, чтобы рассмотреть граф.">
+            <img class="depth-image" src="/landing/assets/graph.png" alt="Граф ветвлений метода: проверка project == null, возврат и последующие действия." width="1502" height="822" loading="lazy">
+            <div class="depth-shade"></div>
+            <div class="depth-copy">
+              <h3>Связи становятся видимыми.</h3>
+              <p>Переходите между деталями и общей картиной проекта.</p>
+            </div>
+          </article>
+          <article class="depth-card depth-card--context" tabindex="0" aria-label="Контекст рядом. Наведите курсор или установите фокус, чтобы рассмотреть анализ кода.">
+            <img class="depth-image" src="/landing/assets/context.png" alt="Анализ Java-кода: рекомендации по ветвлениям, длине методов и вложенным циклам." width="402" height="585" loading="lazy">
+            <div class="depth-shade"></div>
+            <div class="depth-copy">
+              <img class="feature-icon" src="/landing/assets/feature-arrow.svg" alt="" width="24" height="24">
+              <h3>Контекст рядом.</h3>
+            </div>
+          </article>
+          <article class="depth-card depth-card--projects" tabindex="0" aria-label="Продолжайте с того же места. Наведите курсор или установите фокус, чтобы рассмотреть историю версий.">
+            <img class="depth-image" src="/landing/assets/projects.png" alt="История версий проекта: последняя и исходная версии, возможность восстановления." width="452" height="261" loading="lazy">
+            <div class="depth-shade"></div>
+            <div class="depth-copy">
+              <span class="command-icon" aria-hidden="true">⌘</span>
+              <h3>Продолжайте с того же места.</h3>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing shell" aria-labelledby="closing-title">
+        <p class="eyebrow accent">Следующая строка — ваша.</p>
+        <h2 id="closing-title">Посмотрите на код<br>по-новому.</h2>
+        <a class="primary-action" href="/projects" data-action="workspace">
+          <span>Открыть пространство</span><img src="/landing/assets/arrow.svg" alt="" width="24" height="24">
+        </a>
+      </section>
+    </main>
+    <footer class="footer shell">
+      <a class="brand" href="#top" aria-label="JavaBlueprints — в начало">
+        <span class="brand-mark"><img src="/landing/assets/logo.png" alt="" width="1254" height="1254"></span>
+        <span>JavaBlueprints</span>
+      </a>
+      <p>ООО «Инновиум» 2026</p>
+    </footer>
+  </div>
+  <dialog class="image-viewer" aria-labelledby="viewer-title">
+    <div class="viewer-toolbar">
+      <p id="viewer-title">Рабочее пространство JavaBlueprints</p>
+      <button class="viewer-zoom" type="button" aria-pressed="false">Увеличить</button>
+      <button class="viewer-close" type="button">Закрыть</button>
+    </div>
+    <div class="viewer-body"><img src="/landing/assets/workspace.png" alt="Полный скриншот: граф выполнения, исходный код, анализ и консоль JavaBlueprints." width="2544" height="1304" loading="lazy"></div>
+  </dialog>
+</body>
+</html>
