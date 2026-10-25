@@ -70,6 +70,7 @@ export default function CodeEditor({
   range,
   diagnostics,
   onOffset,
+  onSelectionChange,
   readOnly = false,
   onReady,
 }: {
@@ -81,6 +82,9 @@ export default function CodeEditor({
   range?: SourceRange | null;
   diagnostics: Diagnostic[];
   onOffset: (offset: number) => void;
+  onSelectionChange?: (
+    selection: { startOffset: number; endOffset: number } | null,
+  ) => void;
   readOnly?: boolean;
   onReady?: (commands: {
     undo: () => void;
@@ -102,6 +106,8 @@ export default function CodeEditor({
   );
   const onOffsetRef = useRef(onOffset);
   onOffsetRef.current = onOffset;
+  const onSelectionRef = useRef(onSelectionChange);
+  onSelectionRef.current = onSelectionChange;
   const highlight = useRef(() => {});
   highlight.current = () => {
     decorations.current?.clear();
@@ -285,9 +291,30 @@ export default function CodeEditor({
           cursorListener.dispose();
         });
         highlight.current();
+        instance.onDidChangeCursorSelection((e) => {
+          if (e.source !== "keyboard" && e.source !== "mouse") return;
+          const model = instance.getModel();
+          if (
+            !model ||
+            model.uri.toString() !==
+              monaco.Uri.parse(activeModelPath.current).toString()
+          )
+            return;
+          onSelectionRef.current?.(
+            e.selection.isEmpty()
+              ? null
+              : {
+                  startOffset: model.getOffsetAt(
+                    e.selection.getStartPosition(),
+                  ),
+                  endOffset: model.getOffsetAt(e.selection.getEndPosition()),
+                },
+          );
+        });
         instance.onDidChangeCursorPosition((e) => {
           // Restoring a model or its caret must not change the selected method.
           if (e.source !== "keyboard" && e.source !== "mouse") return;
+          if (!instance.getSelection()?.isEmpty()) return;
           const model = instance.getModel();
           if (model) onOffsetRef.current(model.getOffsetAt(e.position));
         });

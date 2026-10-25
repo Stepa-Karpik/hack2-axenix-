@@ -38,7 +38,7 @@ public final class DockerSandbox {
     }
     public void retryCleanup(){for(String name:List.copyOf(pendingCleanup))remove(name);}
     public boolean cleanupPending(){return !pendingCleanup.isEmpty();}
-    public record Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending) {}
+    public record Result(ExecutionOutcome outcome,Integer exit,Bytes stdout,Bytes stderr,boolean truncated,Map<String,byte[]> classes,boolean cleanupPending,ExecutionMetrics metrics) {}
     public Result execute(Submit submit,Map<String,byte[]> classes,BooleanSupplier cancelled) {
         return execute(submit,classes,cancelled,null);
     }
@@ -48,6 +48,7 @@ public final class DockerSandbox {
         ExecutionOutcome outcome=ExecutionOutcome.sandbox_error; Integer exit=null;
         byte[] stdout=new byte[0],stderr=new byte[0]; boolean truncated=false,clean=true;
         Map<String,byte[]> output=Map.of();
+        ExecutionMetrics metrics=null;
         try {
             Map<String,byte[]> files=new TreeMap<>();
             if(spec.phase()==Phase.compile) spec.sources().forEach((p,b)->files.put(p,b.decode(1024*1024))); else files.putAll(classes);
@@ -55,16 +56,28 @@ public final class DockerSandbox {
             require(command(create,new byte[0],15_000,cancelled));
             require(command(List.of("start",name),new byte[0],10_000,cancelled));
             require(command(List.of("exec","-i",name,"tar","--no-same-owner","--no-same-permissions","-xf","-","-C","/workspace"),ClassArchive.pack(files),10_000,cancelled));
-            List<String> args=new ArrayList<>(List.of("exec","-i","--user","65534:65534",name,"env","-u","JAVA_TOOL_OPTIONS","-u","JDK_JAVA_OPTIONS"));
+            List<String> args=new ArrayList<>(List.of("exec"));
+            // An empty fixed input needs no attached stream. Closing an already
+            // empty CLI pipe can race Docker's attach and leave System.in open.
+            if(spec.interactive() || spec.stdin().length()>0) args.add("-i");
+            args.addAll(List.of("--user","65534:65534",name,"env","-u","JAVA_TOOL_OPTIONS","-u","JDK_JAVA_OPTIONS"));
             long wall;
             if(spec.phase()==Phase.compile) { args.addAll(List.of("javac","-J-Xmx256m","-J-Dfile.encoding=UTF-8","-proc:none","--release","21","-encoding","UTF-8","-d","/workspace/classes")); args.addAll(spec.sources().keySet()); wall=20_000; }
             else { args.addAll(List.of("java","-Xmx256m","-Xss512k","-XX:ActiveProcessorCount=1","-Dfile.encoding=UTF-8","-Duser.language=en","-Duser.country=US","-Duser.timezone=UTC","-cp","/workspace",spec.mainClass())); args.addAll(spec.args()); wall=spec.interactive()?120_000:5_000; }
             long remaining=Duration.between(Instant.now(),Instant.parse(submit.leaseExpiresAt())).toMillis();
+            long executionStarted=System.nanoTime();
             var r=command(args,spec.stdin().decode(1024*1024),spec.interactive()?wall:Math.max(1,Math.min(wall,remaining)),cancelled,MAX_OUTPUT,live);
+            long executionWallMs=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-executionStarted);
             stdout=r.stdout(); stderr=r.stderr(); truncated=r.limit(); exit=r.exit();
             if(r.timeout()||r.limit()||cancelled.getAsBoolean()) command(List.of("kill",name),new byte[0],3000,()->false);
             var state=command(List.of("inspect","--format","{{.State.OOMKilled}}",name),new byte[0],5000,()->false);
             boolean oom=new String(state.stdout()).trim().equals("true");
+            Long peak=null;
+            if(!cancelled.getAsBoolean() && !r.timeout() && !r.limit() && !oom) try {
+                var measured=command(List.of("exec",name,"/usr/bin/cat","/sys/fs/cgroup/memory.peak"),new byte[0],3000,()->false,128);
+                if(measured.exit()==0 && !measured.limit() && !measured.timeout()) peak=peakBytes(new String(measured.stdout(),java.nio.charset.StandardCharsets.US_ASCII));
+            } catch(Exception ignored) { /* Missing metrics must never turn a run into a false match or failure. */ }
+            metrics=new ExecutionMetrics(executionWallMs,peak,"cgroup-v2-container-lifetime-including-setup-and-probe");
             outcome=cancelled.getAsBoolean()?ExecutionOutcome.cancelled:r.limit()?ExecutionOutcome.output_limit:r.timeout()?ExecutionOutcome.timeout:oom?ExecutionOutcome.oom:r.exit()==0?ExecutionOutcome.exited:spec.phase()==Phase.compile?ExecutionOutcome.compile_error:ExecutionOutcome.exited;
             if(outcome!=ExecutionOutcome.exited && outcome!=ExecutionOutcome.compile_error) exit=null;
             if(spec.phase()==Phase.compile && outcome==ExecutionOutcome.exited) {
@@ -76,7 +89,12 @@ public final class DockerSandbox {
             clean=remove(name);
 
         }
-        return new Result(outcome,exit,Bytes.of(stdout),Bytes.of(stderr),truncated,output,!clean);
+        return new Result(outcome,exit,Bytes.of(stdout),Bytes.of(stderr),truncated,output,!clean,metrics);
+    }
+    static Long peakBytes(String raw) {
+        try { String value=raw.trim(); if(!value.matches("[0-9]{1,18}"))return null;
+            long bytes=Long.parseLong(value);return bytes>0?bytes:null;
+        } catch(RuntimeException failure) { return null; }
     }
     private static void require(Command r) throws IOException { if(r.exit()!=0 || r.timeout() || r.limit()) throw new IOException("Engine operation failed: "+new String(r.stderr(),java.nio.charset.StandardCharsets.UTF_8)); }
     record Command(int exit,byte[] stdout,byte[] stderr,boolean timeout,boolean limit) {}

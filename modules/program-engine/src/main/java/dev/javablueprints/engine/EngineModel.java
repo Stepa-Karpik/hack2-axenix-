@@ -163,7 +163,7 @@ public final class EngineModel {
     public record EditCommand(String baseRevisionId, String analysisId, String methodId, String nodeId,
                               String operation, EditPayload payload, String intent) {}
     public sealed interface EditPayload permits ReplaceExpression, ReplaceStatement, InsertStatement, DeleteStatement,
-            MoveStatement, WrapStatement, AddElse, RemoveElse, OptimizeMembership {}
+            MoveStatement, WrapStatement, AddElse, RemoveElse, OptimizeMembership, ExtractMethod, DecomposeClass, RenameLocal {}
     public record ReplaceExpression(String field, String expression) implements EditPayload {}
     public record ReplaceStatement(String source) implements EditPayload {}
     public record InsertStatement(String position, String source) implements EditPayload {}
@@ -173,10 +173,27 @@ public final class EngineModel {
     public record AddElse(String source) implements EditPayload {}
     public record RemoveElse() implements EditPayload {}
     public record OptimizeMembership() implements EditPayload {}
+    public record ExtractMethod(String methodName, String endNodeId) implements EditPayload {}
+    public record DecomposeClass(String className) implements EditPayload {}
+    public record RenameLocal(String newName) implements EditPayload {}
+    public record DecompositionSummary(String filePath, String className, String originalMethodName) {}
+    public record ExtractionParameter(String name, String type) {}
+    public record ExtractionSummary(String filePath, String methodName, List<ExtractionParameter> parameters,
+                                    String returnType, String returnedVariable, boolean isStatic) {
+        public ExtractionSummary { parameters = List.copyOf(parameters); }
+    }
     public record TextChange(String filePath, int startOffset, int endOffset, String before, String after) {}
     public record Candidate(Map<String, String> files, List<TextChange> changes, String parseStatus,
-                            String compileStatus, String verificationStatus, List<Diagnostic> diagnostics) {
+                            String compileStatus, String verificationStatus, List<Diagnostic> diagnostics, ExtractionSummary extraction, DecompositionSummary decomposition) {
         public Candidate { files = Map.copyOf(files); changes = List.copyOf(changes); diagnostics = List.copyOf(diagnostics); }
+        public Candidate(Map<String, String> files, List<TextChange> changes, String parseStatus,
+                         String compileStatus, String verificationStatus, List<Diagnostic> diagnostics) {
+            this(files, changes, parseStatus, compileStatus, verificationStatus, diagnostics, null, null);
+        }
+        public Candidate(Map<String, String> files, List<TextChange> changes, String parseStatus,
+                         String compileStatus, String verificationStatus, List<Diagnostic> diagnostics, ExtractionSummary extraction) {
+            this(files, changes, parseStatus, compileStatus, verificationStatus, diagnostics, extraction, null);
+        }
     }
     public static final class EngineException extends RuntimeException {
         private final String code;

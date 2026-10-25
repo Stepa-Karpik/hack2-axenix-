@@ -1,0 +1,138 @@
+[
+  {
+    "id": "dispatch",
+    "method": "value",
+    "expression": "x * 2",
+    "argv": ["dispatch"],
+    "stdinUtf8": "",
+    "expectedStdout": "BSbCsD|4:13:4:6\n"
+  },
+  {
+    "id": "numeric",
+    "method": "numeric",
+    "expression": "Integer.MAX_VALUE + 1",
+    "argv": ["numeric"],
+    "stdinUtf8": "",
+    "expectedStdout": "-2147483648:-9223372036854775808:-1:130:Б:-3:NPE\n"
+  },
+  {
+    "id": "arrays",
+    "method": "arrays",
+    "expression": "values[0][1] + values[1][0]",
+    "argv": ["arrays"],
+    "stdinUtf8": "",
+    "expectedStdout": "12:2:1:0:BN\n"
+  },
+  {
+    "id": "conditions-true",
+    "method": "conditions",
+    "expression": "first ? effects++ : ++effects",
+    "argv": ["conditions", "true"],
+    "stdinUtf8": "",
+    "expectedStdout": "T|true:true:1:2\n"
+  },
+  {
+    "id": "conditions-false",
+    "method": "conditions",
+    "expression": "first ? effects++ : ++effects",
+    "argv": ["conditions", "false"],
+    "stdinUtf8": "",
+    "expectedStdout": "T|false:true:2:2\n"
+  },
+  {
+    "id": "strings",
+    "method": "strings",
+    "expression": "Integer.parseInt(\"12\") + Math.abs(-3)",
+    "argv": ["strings"],
+    "stdinUtf8": "",
+    "expectedStdout": "Привет:15:6:true:65\n"
+  },
+  {
+    "id": "console-utf8",
+    "method": "console",
+    "expression": "scanner.nextInt() + 0",
+    "argv": ["console"],
+    "stdinUtf8": "-1 0 2147483647\nПривет\n",
+    "expectedStdout": "-1:0:2147483647:Привет:false\n"
+  },
+  {
+    "id": "console-empty",
+    "method": "console",
+    "expression": "scanner.nextInt() + 0",
+    "argv": ["console"],
+    "stdinUtf8": "",
+    "expectedStdout": "EOF\n"
+  },
+  {
+    "id": "console-invalid",
+    "method": "console",
+    "expression": "scanner.nextInt() + 0",
+    "argv": ["console", "invalid"],
+    "stdinUtf8": "x\n",
+    "expectedStdout": "MISMATCH\n"
+  },
+  {
+    "id": "format",
+    "method": "formatting",
+    "expression": "1.25",
+    "argv": ["format"],
+    "stdinUtf8": "",
+    "expectedStdout": "Привет 7 1.25\nЯ:0003:2.5\n"
+  },
+  {
+    "id": "collections",
+    "method": "collections",
+    "expression": "new LinkedHashSet<>(list)",
+    "argv": ["collections"],
+    "stdinUtf8": "",
+    "expectedStdout": "[a, a, b]:{x=3, y=2}:[a, b]:C\n"
+  },
+  {
+    "id": "comparator",
+    "method": "compare",
+    "expression": "-primary",
+    "argv": ["comparator"],
+    "stdinUtf8": "",
+    "expectedStdout": "2a:first,2a:second,2b:B,1z:Z,\n"
+  },
+  {
+    "id": "optional-present",
+    "method": "optional",
+    "expression": "optional.orElse(fallback())",
+    "argv": ["optional", "present"],
+    "stdinUtf8": "",
+    "expectedStdout": "V:1:true\n"
+  },
+  {
+    "id": "optional-empty",
+    "method": "optional",
+    "expression": "optional.orElse(fallback())",
+    "argv": ["optional", "empty"],
+    "stdinUtf8": "",
+    "expectedStdout": "F:1:false\n"
+  },
+  {
+    "id": "exceptions-checked",
+    "method": "raising",
+    "expression": "new Checked(\"checked\")",
+    "argv": ["exceptions", "0"],
+    "stdinUtf8": "",
+    "expectedStdout": "TCF\n"
+  },
+  {
+    "id": "exceptions-unchecked",
+    "method": "raising",
+    "expression": "new Checked(\"checked\")",
+    "argv": ["exceptions", "1"],
+    "stdinUtf8": "",
+    "expectedStdout": "TUF\n"
+  },
+  {
+    "id": "exceptions-normal",
+    "method": "raising",
+    "expression": "new Checked(\"checked\")",
+    "argv": ["exceptions", "2"],
+    "stdinUtf8": "",
+    "expectedStdout": "TNF\n"
+  }
+]

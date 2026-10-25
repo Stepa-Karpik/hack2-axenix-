@@ -1,4 +1,9 @@
 import type { Graph, GraphNode } from "./types";
+import {
+  extractionTargets,
+  validMethodName,
+  validClassName,
+} from "./methodExtraction.ts";
 
 export type MovePosition = "before" | "after";
 export interface BlockEditFields {
@@ -9,6 +14,10 @@ export interface BlockEditFields {
   elseSource: string;
   targetNodeId: string;
   movePosition: string;
+  newName?: string;
+  className?: string;
+  methodName?: string;
+  endNodeId?: string;
 }
 
 export function moveTargets(node: GraphNode | null, graph: Graph | null) {
@@ -71,6 +80,22 @@ export function blockEditPayload(
   )
     return null;
   switch (operation) {
+    case "rename_local":
+      return validMethodName(fields.newName ?? "")
+        ? { newName: fields.newName! }
+        : null;
+    case "decompose_class":
+      return validClassName(fields.className ?? "")
+        ? { className: fields.className! }
+        : null;
+    case "extract_method": {
+      const end = extractionTargets(node, graph).find(
+        (n) => n.id === fields.endNodeId,
+      );
+      return end && validMethodName(fields.methodName ?? "")
+        ? { methodName: fields.methodName!, endNodeId: end.id }
+        : null;
+    }
     case "delete_statement":
     case "remove_else":
     case "optimize_membership":

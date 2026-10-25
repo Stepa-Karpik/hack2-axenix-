@@ -5,8 +5,10 @@ import type { WorkspaceController } from "./Workspace";
 export default function WorkspaceMenu({
   workspace: w,
   actions,
+  archiveItems,
 }: {
   workspace: WorkspaceController;
+  archiveItems?: ReactNode;
   actions: {
     save: () => void;
     createFile: () => void;
@@ -105,6 +107,7 @@ export default function WorkspaceMenu({
           {item("Импорт файлов…", actions.import, actions.importDisabled)}
           {item("Сохранить", actions.save, actions.saveDisabled, "Ctrl+S")}
           {item("Экспорт версии", actions.export, actions.exportDisabled)}
+          {archiveItems}
         </>,
       )}
       {menu(

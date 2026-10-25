@@ -55,7 +55,7 @@ public class ApiController {
             "languageProfileId",
             "java21-v1",
             "implementedCommands",
-            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership"),
+            List.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", "extract_method", "decompose_class", "rename_local"),
             "symbols",
             map("status", "partial", "runtimeDispatch", "unknown", "environmentHash",
                 dev.javablueprints.engine.ProgramEngine.currentSymbolEnvironmentHash()),
@@ -69,12 +69,16 @@ public class ApiController {
             map("status", "partial", "scope", "traditional_statement_switch", "exceptionalFlow", "unknown"),
             "enhanced_for_flow",
             map("status", "partial", "scope", "normal_iteration_abstraction", "protocolDetails", "unknown", "exceptionalFlow", "unknown"),
+            "local_rename",
+            map("status", "partial", "scope", "single_local_or_sole_parameter", "references", "exact_name_bindings", "verification", "required_exact_comparison"),
+            "class_decomposition",
+            map("status", "partial", "scope", "closed_static_primitive_method", "callers", "retained_wrapper", "verification", "required_exact_comparison"),
             "runner",
             map("available", worker.available(), "profileId", "java21-v1"),
             "limits",
             map("maxProjectBytes", 1048576, "maxProjectFiles", 100, "maxTestCases", 100),
             "unsupported",
-            List.of("method_harness", "benchmark", "llm", "class_decomposition")));
+            List.of("method_harness", "benchmark", "llm")));
   }
 
   @GetMapping("/session")
@@ -790,6 +794,38 @@ public class ApiController {
             throw new ApiError(400,"INVALID_REQUEST","Optimization requires preserve_behavior");
           yield new OptimizeMembership();
         }
+      case "rename_local" -> {
+        fields(payload, "newName");
+        if (!"preserve_behavior".equals(command.get("intent")))
+          throw new ApiError(400, "INVALID_REQUEST", "Local rename requires preserve_behavior");
+        String name = str(payload, "newName");
+        if (name.length()>100 || !javax.lang.model.SourceVersion.isIdentifier(name) || javax.lang.model.SourceVersion.isKeyword(name)
+            || Set.of("var", "yield", "record", "sealed", "permits").contains(name))
+          throw new ApiError(400, "INVALID_REQUEST", "Invalid local name");
+        yield new RenameLocal(name);
+      }
+      case "decompose_class" -> {
+        fields(payload, "className");
+        if (!"preserve_behavior".equals(command.get("intent")))
+          throw new ApiError(400, "INVALID_REQUEST", "Class decomposition requires preserve_behavior");
+        String className = str(payload, "className");
+        if (!className.matches("[A-Za-z_$][A-Za-z0-9_$]{0,79}") || !javax.lang.model.SourceVersion.isIdentifier(className)
+            || javax.lang.model.SourceVersion.isKeyword(className)
+            || Set.of("var", "yield", "record", "sealed", "permits").contains(className))
+          throw new ApiError(400, "INVALID_REQUEST", "Invalid extracted class name");
+        yield new DecomposeClass(className);
+      }
+      case "extract_method" -> {
+        fields(payload, "methodName", "endNodeId");
+        if (!"preserve_behavior".equals(command.get("intent")))
+          throw new ApiError(400, "INVALID_REQUEST", "Method extraction requires preserve_behavior");
+        String methodName = str(payload, "methodName");
+        if (methodName.length()>100 || !javax.lang.model.SourceVersion.isIdentifier(methodName)
+            || javax.lang.model.SourceVersion.isKeyword(methodName)
+            || Set.of("var", "yield", "record", "sealed", "permits").contains(methodName))
+          throw new ApiError(400, "INVALID_REQUEST", "Invalid extracted method name");
+        yield new ExtractMethod(methodName, str(payload, "endNodeId"));
+      }
       default -> throw new ApiError(400, "INVALID_REQUEST", "Unsupported graph operation");
     };
   }

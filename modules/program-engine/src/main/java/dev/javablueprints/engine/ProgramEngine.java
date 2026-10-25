@@ -25,7 +25,7 @@ import java.util.function.Supplier;
 public final class ProgramEngine {
     // Runtime read prevents javac inlining an older engine version into incremental server builds.
     public static final String VERSION = analyzerVersion();
-    private static String analyzerVersion() { return "engine-0.12.0"; }
+    private static String analyzerVersion() { return "engine-0.13.0"; }
     public static final String SOURCE_MAP_VERSION = "utf16-token-v1";
     private static final int MAX_CONDITION_TESTS_PER_METHOD = 4096;
     private static final int MAX_SWITCH_ENTRIES_PER_METHOD = 1024;
@@ -60,7 +60,7 @@ public final class ProgramEngine {
         if (!"valid".equals(analysis.parseStatus())) throw failure("INVALID_EDIT", "A parse-valid analysis is required");
         Parsed parsed = analyze(bundle, analysis.id());
         if (!analysis.graph().equals(parsed.analysis().graph())) throw failure("ANALYSIS_CONFLICT", "Graph binding differs from source");
-        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership").contains(command.operation())) {
+        if (!Set.of("replace_expression", "replace_statement", "insert_statement", "delete_statement", "move_statement", "wrap_if", "wrap_while", "add_else", "remove_else", "optimize_membership", "extract_method", "decompose_class", "rename_local").contains(command.operation())) {
             throw failure("UNSUPPORTED_OPERATION", "Operation is not implemented");
         }
         if (!Set.of("semantic_edit", "preserve_behavior").contains(command.intent())) throw failure("INVALID_EDIT", "Unknown intent");
@@ -68,8 +68,40 @@ public final class ProgramEngine {
                 .orElseThrow(() -> failure("ANALYSIS_CONFLICT", "Node does not belong to this analysis"));
         if (!selected.methodId().equals(command.methodId())) throw failure("ANALYSIS_CONFLICT", "Node does not belong to the selected method");
         Node target = parsed.bindings().get(selected.id());
+        if ("rename_local".equals(command.operation())) {
+            if (!(command.payload() instanceof RenameLocal payload)) throw failure("INVALID_EDIT","Expected new local name");
+            if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT","Local rename requires exact behavior comparison");
+            requireOperation(selected,"rename_local");
+            var rewrite=LocalRename.rewrite(bundle,analysis,selected,target,
+                node->parsed.maps().get(selected.sourceRange().filePath()).range(node),payload.newName());
+            Analysis checked=inspect(new SourceBundle(UUID.randomUUID().toString(),rewrite.files()));
+            return new Candidate(rewrite.files(),rewrite.changes(),"valid","not_requested","unverified",checked.diagnostics());
+        }
+        if ("decompose_class".equals(command.operation())) {
+            if (!(command.payload() instanceof DecomposeClass payload)) throw failure("INVALID_EDIT","Expected new class name");
+            if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT","Class decomposition requires exact behavior comparison");
+            requireOperation(selected,"decompose_class");
+            var rewrite=ClassDecomposition.rewrite(bundle,analysis,selected,target,
+                node->parsed.maps().get(selected.sourceRange().filePath()).range(node),payload.className());
+            Analysis checked=inspect(new SourceBundle(UUID.randomUUID().toString(),rewrite.files()));
+            if(!"valid".equals(checked.parseStatus()))throw failure("INVALID_EDIT","Decomposed candidate does not parse");
+            return new Candidate(rewrite.files(),rewrite.changes(),"valid","not_requested","unverified",checked.diagnostics(),null,
+                new DecompositionSummary(rewrite.filePath(),rewrite.className(),rewrite.originalMethodName()));
+        }
         MembershipOptimization.Rewrite membership = null;
+        MethodExtraction.Rewrite extraction = null;
         TextChange change = switch (command.operation()) {
+            case "extract_method" -> {
+                if (!(command.payload() instanceof ExtractMethod payload)) throw failure("INVALID_EDIT", "Expected extraction name and final statement");
+                if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT", "Extraction requires preserve_behavior and exact comparison before apply");
+                requireOperation(selected,"extract_method");
+                GraphNode end = analysis.graph().nodes().stream().filter(n->n.id().equals(payload.endNodeId())).findFirst()
+                    .orElseThrow(()->failure("ANALYSIS_CONFLICT","Final statement does not belong to this analysis"));
+                requireOperation(end,"extract_method");
+                extraction = MethodExtraction.rewrite(bundle,analysis,selected,target,end,parsed.bindings().get(end.id()),
+                    node->parsed.maps().get(selected.sourceRange().filePath()).range(node),payload.methodName());
+                yield extraction.change();
+            }
             case "optimize_membership" -> {
                 if (!(command.payload() instanceof OptimizeMembership)) throw failure("INVALID_EDIT", "Expected empty optimization payload");
                 if (!"preserve_behavior".equals(command.intent())) throw failure("INVALID_EDIT", "Optimization requires preserve_behavior and exact comparison before apply");
@@ -119,7 +151,7 @@ public final class ProgramEngine {
         Analysis candidate = inspect(new SourceBundle(UUID.randomUUID().toString(), files));
         if (!"valid".equals(candidate.parseStatus())) throw failure("INVALID_EDIT", "Candidate does not parse in its project context");
         if (membership!=null&&!MembershipOptimization.validCandidate(candidate,membership)) throw failure("UNSUPPORTED_OPERATION","Generated index must resolve to the standard JDK HashSet<String>");
-        return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics());
+        return new Candidate(files, List.of(change), "valid", "not_requested", "unverified", candidate.diagnostics(),extraction==null?null:extraction.summary());
     }
 
     private TextChange replaceExpression(SourceBundle bundle, Parsed parsed, GraphNode selected, Node target, ReplaceExpression payload) {
@@ -535,6 +567,8 @@ public final class ProgramEngine {
                 new Capability("replace_statement", "partial", "One comment-free supported block statement; exact source replacement and isolated compilation required"),
                 new Capability("insert_statement", "partial", "One supported statement before/after a block element or at a callable body boundary; isolated compilation required"),
                 new Capability("delete_statement", "partial", "Supported block statement elements without internal comments; isolated compilation required"),
+                new Capability("decompose_class", builder.invalid ? "not_requested" : "partial", "Closed static int/boolean helper moved into a fresh package-private utility type; original declaration remains a forwarding wrapper. No state/calls/inheritance/unknown flow; isolated compilation and exact comparison required"),
+                new Capability("extract_method", builder.invalid ? "not_requested" : "partial", "Bound contiguous statements in one class method; inferred typed parameters, at most one live local result or tail return; rejects escaping jumps, captures, unresolved names and unsafe exception-observed local writes. Detached compilation and exact comparison required"),
                 new Capability("symbols", builder.invalid ? "not_requested" : "partial", "Bounded source-bundle and platform JDK bindings; unknown or unsupported domains remain explicit"),
                 new Capability("complexity", "unknown", "No asymptotic guarantee without bounds and resolved calls"),
                 new Capability("code_insights", builder.invalid ? "not_requested" : "passed", "Lexical body lines, structural statements/nesting/branching/calls; bounded recommendations are heuristic reading aids, not runtime cost or safe automatic refactoring"),
@@ -687,18 +721,22 @@ public final class ProgramEngine {
             if (!fields.isEmpty()) operations.add("replace_expression");
             if (!opaqueMethod && "entry".equals(kind) && ast instanceof BlockStmt) {
                 operations.add("insert_statement");
+                if (ast.getParentNode().orElse(null) instanceof MethodDeclaration method && method.isStatic()
+                        && Set.of("int","boolean").contains(method.getTypeAsString())) operations.add("decompose_class");
                 positions = List.of("body_start", "body_end");
             } else if (!opaqueMethod && !"expression".equals(kind) && statementContainer(ast) != null) {
                 if (!containsComment(ast)) operations.add("replace_statement");
                 operations.add("insert_statement");
                 if (!containsComment(ast)) operations.add("delete_statement");
                 operations.add("move_statement");
+                if (MethodExtraction.eligible(ast)) operations.add("extract_method");
                 operations.add("wrap_if");
                 if (!capturesJump(ast)) operations.add("wrap_while");
                 if (canAddElse(ast)) operations.add("add_else");
                 if (canRemoveElse(ast)) operations.add("remove_else");
                 positions = List.of("before", "after");
             }
+            if (!opaqueMethod && !readOnly && ("entry".equals(kind) || ast instanceof ExpressionStmt) && LocalRename.eligible(ast)) operations.add("rename_local");
             String text = caption != null ? caption : ast == null || "entry".equals(kind) ? kind : raw(ast);
             if (text.length() > 180) text = text.substring(0, 177) + "...";
             nodes.add(new GraphNode(id, bundle.revisionId(), analysisId, methodId, kind, text,

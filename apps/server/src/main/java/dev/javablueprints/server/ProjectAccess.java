@@ -57,7 +57,8 @@ class ProjectAccess implements HandlerInterceptor, WebMvcConfigurer {
     // Source export only materializes an artifact from already-readable snapshots. It cannot run
     // code or modify source/head; every other POST still requires owner/editor permission.
     boolean sourceExport =
-        req.getMethod().equals("POST") && path.equals(prefix + project + "/exports");
+        req.getMethod().equals("POST") && (path.equals(prefix + project + "/exports")
+            || path.equals(prefix + project + "/archives"));
     if (sourceExport && (owner || role != null || row.get("visibility").equals("public")))
       return true;
     if (read && (owner || role != null || row.get("visibility").equals("public"))) return true;

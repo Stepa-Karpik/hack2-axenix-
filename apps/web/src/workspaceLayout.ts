@@ -204,6 +204,8 @@ export function validateLayout(value: unknown): value is WorkspaceLayout {
   const l = value as WorkspaceLayout;
   return (
     valid(l.root, 0) &&
+    panels.size === panelIds.length &&
+    panelIds.every((panel) => panels.has(panel)) &&
     (l.hidden === undefined ||
       (Array.isArray(l.hidden) &&
         new Set(l.hidden).size === l.hidden.length &&

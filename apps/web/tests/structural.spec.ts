@@ -36,7 +36,12 @@ test("structural edits and historical restore use explicit compiled proposals", 
   await expect(page.getByLabel("Позиция")).toHaveValue("body_start");
   await expect(
     page.getByLabel("Действие", { exact: true }).locator("option"),
-  ).toHaveCount(1);
+  ).toHaveCount(2);
+  await expect(
+    page
+      .getByLabel("Действие", { exact: true })
+      .locator('option[value="rename_local"]'),
+  ).toHaveText("Переименовать локальную переменную");
   await page.getByLabel("Шаблон").selectOption("condition");
   await expect(page.getByLabel("Java оператор")).toHaveValue(
     'if (true) {\n    System.out.println("value");\n}',

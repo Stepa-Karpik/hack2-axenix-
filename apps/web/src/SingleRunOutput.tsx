@@ -1,4 +1,5 @@
 import type { Report } from "./types";
+import ExecutionResources from "./ExecutionResources";
 
 export default function SingleRunOutput({
   report,
@@ -74,6 +75,7 @@ export default function SingleRunOutput({
         </span>
         {sourceHash && <code>SHA-256 {sourceHash}</code>}
         <span>Код завершения: {runtime?.exitCode ?? "—"}</span>
+        <ExecutionResources execution={runtime} />
       </details>
     </section>
   );

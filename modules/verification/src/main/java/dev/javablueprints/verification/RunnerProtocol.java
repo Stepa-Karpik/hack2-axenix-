@@ -13,7 +13,7 @@ public final class RunnerProtocol {
     public static final String PROFILE = "java21-v1";
     public static final String IMAGE = "eclipse-temurin@sha256:742daacb9316be4b6fc60258f6e4ac2a11882f6c597373c92290a57bfad0d2e0";
     public static final int MAX_OUTPUT = 1024 * 1024;
-    public static final String PROFILE_HASH = hash(("runner-transport-v1-ustar1|"+PROFILE+"|"+IMAGE+"|uid65534|readonly|caps:none|seccomp:builtin|network:none|memory512m|cpu1|pids128|workspace64m|tmp16m|compile20s|runtime5s|interactive120s-input1m-frames1024|output1m|javac-proc:none-release21|env-unset-javaoptions|java-Xmx256m-Xss512k-utf8-en-US-UTC").getBytes(StandardCharsets.UTF_8));
+    public static final String PROFILE_HASH = hash(("runner-transport-v1-ustar1|"+PROFILE+"|"+IMAGE+"|uid65534|readonly|caps:none|seccomp:builtin|network:none|memory512m|cpu1|pids128|workspace64m|tmp16m|compile20s|runtime5s|interactive120s-input1m-frames1024|output1m|javac-proc:none-release21|env-unset-javaoptions|java-Xmx256m-Xss512k-utf8-en-US-UTC|stdin-empty-noattach-v1|metrics-cgroup-peak-execwall-v1").getBytes(StandardCharsets.UTF_8));
     public enum Phase { compile, runtime }
     public enum ExecutionOutcome { exited, timeout, oom, output_limit, compile_error, cancelled, sandbox_error }
     public enum ComparisonOutcome { matched_on_tests, mismatch, compile_error, inconclusive, unavailable }
@@ -39,9 +39,23 @@ public final class RunnerProtocol {
     public record Submit(String projectId, String jobId, String attemptId, String executionId, String specHash,
                          long fencingToken, String leaseExpiresAt, Spec executionSpec) {}
     public record InputFrame(String id, Bytes data, boolean eof) {}
+    public record ExecutionMetrics(long executionWallMs, Long containerPeakMemoryBytes, String memoryScope) {
+        public ExecutionMetrics {
+            if(executionWallMs<0 || containerPeakMemoryBytes!=null && containerPeakMemoryBytes<1)
+                throw new IllegalArgumentException("Invalid measured resource values");
+            if(!"cgroup-v2-container-lifetime-including-setup-and-probe".equals(memoryScope))
+                throw new IllegalArgumentException("Unknown memory measurement scope");
+        }
+    }
     public record Observation(String projectId, String jobId, String attemptId, String executionId, String specHash,
                               Phase phase, String status, ExecutionOutcome outcome, Integer exitCode, Bytes stdout,
-                              Bytes stderr, boolean truncated, String compileArtifactId, boolean cleanupPending) {}
+                              Bytes stderr, boolean truncated, String compileArtifactId, boolean cleanupPending, ExecutionMetrics metrics) {
+        public Observation(String projectId,String jobId,String attemptId,String executionId,String specHash,
+                           Phase phase,String status,ExecutionOutcome outcome,Integer exitCode,Bytes stdout,
+                           Bytes stderr,boolean truncated,String compileArtifactId,boolean cleanupPending) {
+            this(projectId,jobId,attemptId,executionId,specHash,phase,status,outcome,exitCode,stdout,stderr,truncated,compileArtifactId,cleanupPending,null);
+        }
+    }
     public record TestCase(String id, String stdin, List<String> args, Integer expectedExitCode, String expectedStdout, String expectedStderr) {
         public TestCase { args = args == null ? List.of() : List.copyOf(args); }
     }

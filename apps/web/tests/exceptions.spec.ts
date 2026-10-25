@@ -63,7 +63,7 @@ async function fixture(request: APIRequestContext, text = source) {
       await request.get(base + "/revisions/" + original.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.12.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
   return { base, projectId, original, analysis };
 }
 function methodNodes(graph: any, name: string) {

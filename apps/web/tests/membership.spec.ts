@@ -122,7 +122,7 @@ async function fixture(page: Page, text = source) {
       await page.request.get(base + "/revisions/" + original.id + "/analysis")
     ).json()
   ).data;
-  expect(analysis.analyzerVersion).toBe("engine-0.12.0");
+  expect(analysis.analyzerVersion).toBe("engine-0.13.0");
   return { id, base, original, analysis };
 }
 async function done(request: APIRequestContext, base: string, id: string) {
@@ -148,6 +148,11 @@ test("membership recommendation compiles a detached index and applies only after
   await page.getByRole("button", { name: "Helper.java", exact: true }).click();
   await revealPanel(page, "analysis", "Анализ");
   const panel = page.locator('[data-panel-id="analysis"]');
+  await panel.getByRole("tab", { name: /^Рекомендации/ }).click();
+  await expect(
+    panel.locator('[data-optimization="OPT-MEMBERSHIP-001"]'),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Main.java", exact: true }).click();
   await panel.getByRole("tab", { name: /^Рекомендации/ }).click();
   await panel
     .locator('[data-optimization="OPT-MEMBERSHIP-001"]')

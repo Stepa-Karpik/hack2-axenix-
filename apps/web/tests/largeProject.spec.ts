@@ -8,7 +8,10 @@ const summarize = (samples: number[]) => {
   const sorted = [...samples].sort((a, b) => a - b);
   return {
     samples,
-    median: (sorted[14] + sorted[15]) / 2,
+    median:
+      (sorted[Math.floor((sorted.length - 1) / 2)] +
+        sorted[Math.floor(sorted.length / 2)]) /
+      2,
     p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
     max: sorted.at(-1),
   };
@@ -241,6 +244,11 @@ test("1100-line hierarchy imports without loss, remains navigable and verifies t
       expect(execution.stdoutUtf8).toBe(expected.expectedStdout);
       expect(execution.stderrUtf8).toBe("");
       expect(execution.truncated).toBe(false);
+      expect(execution.metrics.executionWallMs).toBeGreaterThanOrEqual(0);
+      expect(execution.metrics.containerPeakMemoryBytes).toBeGreaterThan(0);
+      expect(execution.metrics.memoryScope).toBe(
+        "cgroup-v2-container-lifetime-including-setup-and-probe",
+      );
     }
   }
   expect((await head(page.request, base)).id).toBe(original.id);
@@ -276,13 +284,27 @@ test("1100-line hierarchy imports without loss, remains navigable and verifies t
         visibleNodes,
         importToGraphMs,
         selectionAutomationInclusiveMs: summarize(selectionSamples),
+        executionWallMs: summarize(
+          report.testResults.flatMap((r: any) =>
+            [...r.baseExecutions, ...r.candidateExecutions].map(
+              (e: any) => e.metrics.executionWallMs,
+            ),
+          ),
+        ),
+        containerPeakMemoryBytes: summarize(
+          report.testResults.flatMap((r: any) =>
+            [...r.baseExecutions, ...r.candidateExecutions].map(
+              (e: any) => e.metrics.containerPeakMemoryBytes,
+            ),
+          ),
+        ),
         hardware,
         cases,
         report,
         limitations: [
           "Single import sample includes queue/poll/layout; no cold/warm distribution claimed",
           "Selection includes automation and two animation frames; no bare application latency claim",
-          "No pan FPS/edit latency/resource peak measured here",
+          "No pan FPS/edit latency measured here; execution wall includes docker exec and stream draining; cgroup peak includes container setup and the read probe, not isolated JVM heap",
           "This fixture does not cover every mandatory Java feature; T61-T63 remain partial",
         ],
       },

@@ -362,6 +362,8 @@ public class JobWorker {
     proposal.put("checks", checks);
     proposal.put("status", checks.get("compileStatus").equals("passed") ? "ready" : "rejected");
     proposal.put("diff", candidate.changes());
+    if (candidate.extraction() != null) proposal.put("extraction", candidate.extraction());
+    if (candidate.decomposition() != null) proposal.put("decomposition", candidate.decomposition());
     proposal.put("compileExecution", compiled);
     w.updateResource(p, proposalId, "proposal", proposal);
     return map(
@@ -608,6 +610,8 @@ public class JobWorker {
         o.truncated(),
         "cleanupPending",
         o.cleanupPending(),
+        "metrics",
+        o.metrics(),
         "specHash",
         o.specHash());
   }

@@ -75,7 +75,7 @@ The Console displays standard output and errors during execution. **Send** deliv
 
 Interactive runs have a 120-second runtime limit, a 1 MiB combined output limit and a 1 MiB input budget including initial input. Each submitted input frame is limited to 8 KiB, with at most 1,024 frames. Compilation remains limited to 20 seconds. The elapsed time includes compilation and execution setup. Repeated input requests with the same idempotency key and body are delivered once.
 
-The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
+The report records the immutable revision, initial input, accepted interactive input, arguments, output and termination status. New completed executions also record command wall time and, when available, the kernel cgroup peak memory for that disposable container. Time includes Docker exec and stream draining; peak memory includes container preparation and the measurement probe, and is not Java heap usage. Older reports and unavailable measurements retain an absent value rather than a fabricated zero. Comparison tests use fixed input and independent five-second executions; they do not accept live input. A server or controller restart interrupts a live session; its process cannot be resumed.
 
 ## Test inputs
 
@@ -123,7 +123,23 @@ The initial rule accepts a fresh standard JDK list declared directly in the meth
 
 Open the change to review its assumptions, prepare the compiled diff, compare both immutable revisions on independent cases, and apply explicitly. This operation requires **Preserve behavior**; it cannot be applied as an unchecked semantic edit. Empty collections, nulls, duplicates, string hash collisions and query order are covered by the real-runner regression suite.
 
-The index needs additional memory. Its effect on time and resource exhaustion is not proven, and no benchmark speedup is claimed. A matching report covers its recorded inputs and environment. General collection optimization and automatic class decomposition remain outside the implemented scope.
+The index needs additional memory. Its effect on time and resource exhaustion is not proven, and no benchmark speedup is claimed. A matching report covers its recorded inputs and environment. General collection optimization remains outside the implemented scope.
+
+## Extract and reorganize code
+
+Select complete adjacent statements in **Code Java** to open **Extract method** in Analysis, or select a supported statement on the graph and choose the last statement in the inspector. Enter a new method name and prepare the change. The diff shows inferred parameters, the return type and the caller's replacement. The original project stays unchanged while the candidate compiles. Choose **Check on tests**, enter independent expected results, review the comparison, then apply explicitly. Compilation alone cannot authorize extraction.
+
+Extraction moves at most 256 statements from one block into a private method in the same class. It retains static or instance context, passes required locals and parameters, and returns at most one local value or a selected method-tail return. Writes used on later loop iterations are assigned back to the caller. Checked exceptions are retained in the helper's declaration. Escaping jumps, multiple live output variables, ambiguous bindings, unsupported captures and caller-observed exceptional local writes are refused. Local constant variables whose compile-time evaluation could change are also refused. Stack frames and timing can change after any method extraction; matching tests cover the recorded observations, not universal equivalence.
+
+**Rename local variable** changes the selected single-variable declaration and its exact bound references. A method entry can rename its sole parameter. Other overloads and same-named fields stay unchanged. Name collisions, possible capture and unresolved references are refused. This operation uses the same compiled-candidate and comparison gate.
+
+For a closed static computation, select its entry and choose **Move method to class**. The original method remains as a wrapper while its body moves to a new fieldless class in the same package. The initial rule accepts explicit `int`/`boolean` parameters, locals and results with supported branches and loops. Calls, fields, arrays, inheritance, generics and unknown dependencies make the rule unavailable. Review both files and compare behavior before applying; this is a bounded decomposition tool.
+
+## Project archives
+
+**Project menu → File → Download project archive** saves a versioned `.jbp.json` archive containing source history, original import bytes, directory trees, historical analyses, layouts, suites and completed reports, with SHA-256 integrity checks. **Open project archive** validates it and creates a separate project with fresh revision IDs. Existing projects are never replaced.
+
+Imported reports and layouts remain historical evidence in the import receipt. They do not become current verification or editable graph bindings. The head receives a fresh analysis; run a fresh comparison before applying further preserving changes. Source ZIP export remains available for ordinary Java tools. Archives are bounded to 64 revisions and 32 MiB, with explicit evidence/layout limits; over-limit archives are rejected rather than truncated. Credential-like paths are rejected, but source text and recorded inputs can contain sensitive information, so review an archive before sharing it.
 
 ## Architecture
 
@@ -270,6 +286,8 @@ Revisions retain canonical UTF-8 text with LF line endings, directory entries an
 
 Graph nodes advertise `allowedOperations` and `insertionPositions`. The change endpoint accepts `replace_expression`, `replace_statement`, `insert_statement`, `delete_statement`, `move_statement`, `wrap_if`, `wrap_while`, `add_else`, `remove_else` and the restricted `optimize_membership` operation with operation-specific payloads. Insertions and structural edits use bound statements or method entries, never client-supplied source offsets. Membership indexing uses an empty payload and requires preservation intent. Compilation validates the complete candidate before it becomes applicable. `POST /projects/{p}/revisions/{r}/restore` creates a new revision with `sourceRevisionId`, checks the current head, and starts a fresh analysis. Restoration does not inherit a previous revision's verification result.
 
+The same change endpoint accepts `extract_method` with `{methodName,endNodeId}`, `decompose_class` with `{className}`, and `rename_local` with `{newName}`. These commands require `preserve_behavior` and an exact current node binding. They cannot accept raw source offsets or bypass the comparison gate. Project archives use `POST /projects/{p}/archives`; `POST /archive-previews` validates a file before creating a destination, and `POST /projects/{p}/archive-imports` requires an empty target and `If-Match: empty`.
+
 Analyses include a `semantics` model with analysis-scoped symbols and references, plus a `symbolEnvironmentHash` identifying the resolver configuration and JDK runtime. Source targets carry declaration-name ranges; JDK targets carry external keys without fabricated source locations. Each reference records an exact compile-time target, bounded candidates, or an unresolved reason. Virtual calls do not claim a unique runtime target. Updating the engine or resolver environment requires a fresh analysis for new edits; historical analysis and accepted idempotent responses remain readable.
 
 Graph nodes carry an `executionRole` that distinguishes statements and condition tests from structural anchors, source expression projections and synthetic flow nodes. Short-circuit tests have source ranges but do not add edit operations. Enclosing condition anchors retain their existing edit controls. Older analyses without this field retain an unknown role.
@@ -278,7 +296,7 @@ A comparison means **matched on the recorded tests**, not a proof of equivalence
 
 ## Fixed execution limits
 
-The initial `java21-v1` execution profile is immutable rather than configurable through environment variables:
+The `java21-v1` execution limits are fixed and cannot be changed through environment variables. Reports also retain the profile hash: changes to input delivery or measurement semantics produce a different hash, and an older report cannot verify a change in the new environment.
 
 | Limit | Value |
 | --- | --- |
@@ -311,6 +329,6 @@ Enhanced `for` uses a normal iteration abstraction for arrays and `Iterable`: a 
 
 The graph/edit support matrix is intentionally conservative: unsupported constructs remain visible as limitations and are preserved in source. Symbol resolution covers a bounded subset of source classes/interfaces, fields, parameters, local variables, methods, constructors and platform JDK references. It uses only the in-memory source bundle and the platform classloader; application dependencies and filesystem classpaths are not searched. Local/anonymous classes, lambdas, unsupported type domains and unresolved dependencies can produce partial results. Overload inference is bounded. General access-control, alias, escape, effect and dominance analysis is not provided; the membership rule performs its own closed local checks. Analysis budgets can reject oversized or deeply nested ASTs while retaining the source.
 
-Asymptotic complexity remains unknown. General symbol renaming, structural extraction, class decomposition, optimization beyond the membership rule, method harnesses and benchmarking are not implemented. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
+Asymptotic complexity remains unknown. Renaming, extraction and class decomposition cover the explicit bounded rules above. General whole-project renaming, arbitrary dependency migration, optimization beyond the membership rule and method harnesses remain outside this scope. A resolved reference does not establish that a program compiles or preserves behavior. External build dependencies are not imported; the runner compiles a bounded Java 21 source bundle against its fixed JDK.
 
 This deployment remains bound to localhost. Account sessions and project permissions coexist with the explicit local guest workspace; adding accounts does not publish the server on the internet. The runner controller is a singleton; its execution handles are bounded and temporary, while completed reports and artifacts are persisted by the API. Controller restart makes in-flight handles unavailable. Full mandatory-language coverage, public deployment hardening and broad performance claims require further validation.

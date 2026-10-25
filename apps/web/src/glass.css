@@ -1,4 +1,24 @@
 /* The canvas is permanent; tile geometry only reserves its usable aperture. */
+.canvas-version {
+  font-size: 11px;
+  pointer-events: auto;
+}
+dialog.project-archive-dialog {
+  margin: auto;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+dialog.project-archive-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+.project-archive-dialog form {
+  display: grid;
+  gap: 12px;
+}
+.project-archive-dialog input {
+  width: 100%;
+}
 .glass-workbench {
   --glass-fill: rgba(255, 255, 255, 0.84);
   --glass-node: rgba(255, 255, 255, 0.94);
@@ -367,6 +387,39 @@
   z-index: 60;
   background: var(--surface);
   box-shadow: none;
+}
+.global-command-menu {
+  position: relative;
+  flex: none;
+  border: 0;
+  padding: 0;
+}
+.global-command-menu > summary {
+  height: 40px;
+  gap: 9px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--glass-fill);
+  backdrop-filter: blur(18px);
+}
+.global-command-menu > .workspace-menubar {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  width: 240px;
+  background: var(--glass-fill);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.global-command-menu .workspace-menu-popup {
+  min-width: 240px;
+  max-width: calc(100vw - 40px);
+  left: 0;
+}
+.glass-workbench:has(.global-command-menu[open]) > .glass-topbar {
+  z-index: 60;
 }
 .glass-workspace .workspace-sidebar-chrome + .workspace-panel-header {
   flex-basis: 38px;

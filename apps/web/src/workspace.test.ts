@@ -223,3 +223,23 @@ test("both pointer and keyboard docking reject a split that cannot hold two usab
     true,
   );
 });
+
+test("external workspace trees cannot omit the permanent canvas or hidden tool slots", () => {
+  assert.equal(
+    validateLayout({
+      version: 1,
+      root: { type: "group", id: "only", tabs: ["code"], active: "code" },
+      hidden: [],
+    }),
+    false,
+  );
+  assert.equal(
+    validateLayout({
+      version: 1,
+      root: { type: "group", id: "only", tabs: ["graph"], active: "graph" },
+      hidden: [],
+    }),
+    false,
+  );
+  assert.equal(validateLayout(defaultLayout()), true);
+});

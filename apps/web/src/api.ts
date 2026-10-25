@@ -129,7 +129,11 @@ export async function pollJob<T extends { status: string }>(
           ? 500
           : "type" in job && job.type === "run"
             ? 300
-            : Math.min(500 * 2 ** Math.min(i, 3), 5000),
+            : "type" in job && job.type === "analyze"
+              ? i < 20
+                ? 100
+                : 500
+              : Math.min(500 * 2 ** Math.min(i, 3), 5000),
       );
       const abort = () => {
         clearTimeout(timer);

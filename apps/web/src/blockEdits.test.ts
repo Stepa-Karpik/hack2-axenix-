@@ -173,3 +173,152 @@ test("existing insert/delete/expression requests use the same guarded payload pa
     null,
   );
 });
+import {
+  extractionFromSelection,
+  extractionTargets,
+  validMethodName,
+} from "./methodExtraction.ts";
+
+test("method extraction carries exact sibling IDs and rejects invalid or stale bindings", () => {
+  const first = node("first", 2, { allowedOperations: ["extract_method"] });
+  const last = node("last", 10, { allowedOperations: ["extract_method"] });
+  const foreign = node("foreign", 15, {
+    parentId: "other",
+    allowedOperations: ["extract_method"],
+  });
+  const bound = { ...graph, nodes: [first, last, foreign] };
+  assert.deepEqual(
+    extractionTargets(first, bound).map((n) => n.id),
+    ["first", "last"],
+  );
+  assert.deepEqual(
+    blockEditPayload(first, bound, "extract_method", {
+      ...fields,
+      methodName: "calculate",
+      endNodeId: "last",
+    }),
+    { methodName: "calculate", endNodeId: "last" },
+  );
+  for (const methodName of ["", "bad-name", "class", "return", "_", "yield"]) {
+    assert.equal(
+      blockEditPayload(first, bound, "extract_method", {
+        ...fields,
+        methodName,
+        endNodeId: "last",
+      }),
+      null,
+    );
+  }
+  assert.equal(
+    blockEditPayload(first, bound, "extract_method", {
+      ...fields,
+      methodName: "calculate",
+      endNodeId: "foreign",
+    }),
+    null,
+  );
+  assert.deepEqual(
+    extractionTargets(first, { ...bound, revisionId: "old" }),
+    [],
+  );
+  assert.equal(validMethodName("счёт"), true);
+});
+
+test("source selection resolves only complete statement boundaries in one block and file", () => {
+  const source = "  one();\n two();  ";
+  const first = node("first", 2, {
+    sourceRange: { ...a.sourceRange, startOffset: 2, endOffset: 8 },
+    allowedOperations: ["extract_method"],
+  });
+  const last = node("last", 10, {
+    sourceRange: { ...a.sourceRange, startOffset: 10, endOffset: 16 },
+    allowedOperations: ["extract_method"],
+  });
+  const bound = { ...graph, nodes: [first, last] };
+  assert.deepEqual(
+    extractionFromSelection(bound, "Main.java", source, 0, source.length),
+    { start: first, end: last },
+  );
+  assert.equal(
+    extractionFromSelection(bound, "Main.java", source, 3, 16),
+    null,
+  );
+  assert.equal(
+    extractionFromSelection(bound, "Other.java", source, 2, 16),
+    null,
+  );
+  assert.equal(
+    extractionFromSelection(
+      { ...bound, nodes: [first, { ...last, parentId: "nested" }] },
+      "Main.java",
+      source,
+      2,
+      16,
+    ),
+    null,
+  );
+  assert.equal(extractionFromSelection(bound, "Main.java", source, 2, 2), null);
+});
+
+test("class decomposition uses a strict graph-bound class-name payload", () => {
+  const entry = node("entry", 0, {
+    allowedOperations: ["decompose_class"],
+    synthetic: true,
+  });
+  const bound = { ...graph, nodes: [entry] };
+  assert.deepEqual(nodeOperations(entry), ["decompose_class"]);
+  assert.deepEqual(
+    blockEditPayload(entry, bound, "decompose_class", {
+      ...fields,
+      className: "EvenTotals",
+    }),
+    { className: "EvenTotals" },
+  );
+  assert.equal(
+    blockEditPayload(entry, bound, "decompose_class", {
+      ...fields,
+      className: "bad/name",
+    }),
+    null,
+  );
+  assert.equal(
+    blockEditPayload(
+      entry,
+      { ...bound, analysisId: "old" },
+      "decompose_class",
+      { ...fields, className: "EvenTotals" },
+    ),
+    null,
+  );
+});
+
+test("local rename payload contains only a validated new name on the exact graph anchor", () => {
+  const declaration = node("declaration", 0, {
+    allowedOperations: ["rename_local"],
+  });
+  const bound = { ...graph, nodes: [declaration] };
+  assert.deepEqual(nodeOperations(declaration), ["rename_local"]);
+  assert.deepEqual(
+    blockEditPayload(declaration, bound, "rename_local", {
+      ...fields,
+      newName: "renamedValue",
+    }),
+    { newName: "renamedValue" },
+  );
+  assert.equal(
+    blockEditPayload(declaration, bound, "rename_local", {
+      ...fields,
+      newName: "class",
+    }),
+    null,
+  );
+  assert.equal(
+    blockEditPayload(
+      declaration,
+      { ...bound, revisionId: "old" },
+      "rename_local",
+      { ...fields, newName: "renamedValue" },
+    ),
+    null,
+  );
+});

@@ -96,6 +96,11 @@ test("glass material, uncluttered dock, real output and restored windows", async
   await page.getByRole("button", { name: "Запуск", exact: true }).click();
   await page.getByLabel("Класс с main").fill("Main");
   await page.getByRole("button", { name: "Запустить", exact: true }).click();
+  // Execution belongs to Main, while the canvas still shows OrderService.
+  // Follow the actual launch file before asserting its console history.
+  await page
+    .getByRole("button", { name: "Открыть src/Main.java", exact: true })
+    .click();
   await expect(page.locator('[data-panel-id="console"]')).toContainText(
     "2450",
     { timeout: 60000 },

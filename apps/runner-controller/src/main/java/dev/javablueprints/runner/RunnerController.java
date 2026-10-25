@@ -124,7 +124,7 @@ public final class RunnerController implements AutoCloseable {
             retainedBytes+=result.stdout().length()+result.stderr().length();
             ExecutionOutcome outcome=entry.cancelled.get() || stale(s)?ExecutionOutcome.cancelled:result.outcome();
             if(s.executionSpec().phase()==Phase.compile && outcome==ExecutionOutcome.exited && artifactId==null) outcome=ExecutionOutcome.sandbox_error;
-            entry.result=observation(s,"terminal",outcome,result.exit(),result.stdout(),result.stderr(),result.truncated(),artifactId,result.cleanupPending());
+            entry.result=new Observation(s.projectId(),s.jobId(),s.attemptId(),s.executionId(),s.specHash(),s.executionSpec().phase(),"terminal",outcome,result.exit(),result.stdout(),result.stderr(),result.truncated(),artifactId,result.cleanupPending(),result.metrics());
         }
     }
     private synchronized boolean stale(Submit s){Attempt a=attempts.get(s.jobId()); return a==null || a.fence()!=s.fencingToken() || !a.attempt().equals(s.attemptId()) || a.expiry().get().isBefore(Instant.now());}

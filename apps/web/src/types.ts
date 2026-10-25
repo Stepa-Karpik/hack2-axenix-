@@ -154,6 +154,11 @@ export interface Execution {
   exitCode?: number;
   wallTimeMs?: number;
   truncated?: boolean;
+  metrics?: {
+    executionWallMs: number;
+    containerPeakMemoryBytes: number | null;
+    memoryScope: string;
+  } | null;
 }
 export interface TestResult {
   elapsedMs?: number | null;
@@ -241,7 +246,21 @@ export interface ComparisonProgress {
     reasons: string[];
   }[];
 }
+export interface ExtractionSummary {
+  filePath: string;
+  methodName: string;
+  parameters: { name: string; type: string }[];
+  returnType: string;
+  returnedVariable: string | null;
+  isStatic: boolean;
+}
 export interface Proposal {
+  extraction?: ExtractionSummary | null;
+  decomposition?: {
+    filePath: string;
+    className: string;
+    originalMethodName: string;
+  } | null;
   compileExecution?: Execution | null;
   id: string;
   jobId: string;

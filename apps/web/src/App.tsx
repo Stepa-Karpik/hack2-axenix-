@@ -66,7 +66,15 @@ import {
 import type { Draft } from "./state";
 import { operationAnchor } from "./state";
 import { blockEditPayload, moveTargets, movePositions } from "./blockEdits";
+import {
+  extractionTargets,
+  extractionFromSelection,
+  validMethodName,
+  validClassName,
+} from "./methodExtraction";
 import CodeEditor, { disposeEditorModels } from "./CodeEditor";
+import ExecutionResources from "./ExecutionResources";
+import ProjectArchives from "./ProjectArchives";
 import ProjectExplorer, { FileGlyph } from "./ProjectExplorer";
 import {
   addPath,
@@ -561,6 +569,20 @@ function Workbench({
   const [statement, setStatement] = useState(statementTemplates.statement);
   const [targetNodeId, setTargetNodeId] = useState("");
   const [movePosition, setMovePosition] = useState("before");
+  const [extractedMethodName, setExtractedMethodName] =
+    useState("extractedMethod");
+  const [renamedLocalName, setRenamedLocalName] = useState("renamedValue");
+  const [extractedClassName, setExtractedClassName] =
+    useState("ExtractedLogic");
+  const [extractionEndNodeId, setExtractionEndNodeId] = useState("");
+  const [extractionEdit, setExtractionEdit] = useState<{
+    nodeId: string;
+    endNodeId: string;
+    serial: number;
+  } | null>(null);
+  const [selectionNotice, setSelectionNotice] = useState("");
+  const handledExtraction = useRef<number | null>(null);
+  const extractionSequence = useRef(0);
   const [wrapCondition, setWrapCondition] = useState("");
   const [elseSource, setElseSource] = useState("{\n\n}");
   const [intent, setIntent] = useState("semantic_edit");
@@ -614,6 +636,11 @@ function Workbench({
     );
     setRange((old) => (old?.filePath === file ? old : null));
   }, [file, methodId]);
+  useEffect(() => {
+    setExtractionEdit(null);
+    setExtractionEndNodeId("");
+    setSelectionNotice("");
+  }, [file]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const dirty = revision
@@ -1412,6 +1439,7 @@ function Workbench({
     serial: number;
   } | null>(null);
   const operations = nodeOperations(selected);
+  const extractionEnds = extractionTargets(selected, graph);
   const positions = selected?.insertionPositions ?? [];
   const targets = moveTargets(selected, graph);
   const target = targets.find((n) => n.id === targetNodeId);
@@ -1430,6 +1458,10 @@ function Workbench({
     elseSource,
     targetNodeId,
     movePosition,
+    newName: renamedLocalName,
+    className: extractedClassName,
+    methodName: extractedMethodName,
+    endNodeId: extractionEndNodeId,
   });
   useEffect(() => {
     proposalEpoch.current++;
@@ -1446,6 +1478,7 @@ function Workbench({
         : statementTemplates.statement,
     );
     setIntent("semantic_edit");
+    setExtractionEndNodeId(selected?.id ?? "");
     setTargetNodeId("");
     setMovePosition("before");
     setWrapCondition("");
@@ -1467,7 +1500,24 @@ function Workbench({
       setIntent("preserve_behavior");
       handledOptimization.current = optimizationEdit.serial;
     }
-  }, [selected?.id, revision?.id, dropEdit?.serial, optimizationEdit?.serial]);
+    if (
+      extractionEdit &&
+      extractionEdit.serial !== handledExtraction.current &&
+      extractionEdit.nodeId === selected?.id &&
+      selected?.allowedOperations?.includes("extract_method")
+    ) {
+      setOperation("extract_method");
+      setIntent("preserve_behavior");
+      setExtractionEndNodeId(extractionEdit.endNodeId);
+      handledExtraction.current = extractionEdit.serial;
+    }
+  }, [
+    selected?.id,
+    revision?.id,
+    dropEdit?.serial,
+    optimizationEdit?.serial,
+    extractionEdit?.serial,
+  ]);
   useEffect(() => {
     proposalEpoch.current++;
     setProposal(null);
@@ -1481,6 +1531,10 @@ function Workbench({
     movePosition,
     wrapCondition,
     elseSource,
+    extractedMethodName,
+    extractedClassName,
+    renamedLocalName,
+    extractionEndNodeId,
   ]);
   useEffect(() => {
     if (
@@ -1638,8 +1692,14 @@ function Workbench({
           nodeId: selected.id,
           operation,
           payload: changePayload,
-          intent:
-            operation === "optimize_membership" ? "preserve_behavior" : intent,
+          intent: [
+            "optimize_membership",
+            "extract_method",
+            "decompose_class",
+            "rename_local",
+          ].includes(operation)
+            ? "preserve_behavior"
+            : intent,
         },
       });
       if (!mounted.current || epoch !== proposalEpoch.current) return;
@@ -2235,6 +2295,11 @@ function Workbench({
               </div>
             ) : null;
           })()}
+        {selectionNotice && (
+          <p className="small quiet" role="status">
+            {selectionNotice}
+          </p>
+        )}
         {file && Object.hasOwn(files, file) ? (
           <CodeEditor
             onReady={(commands) => {
@@ -2266,6 +2331,41 @@ function Workbench({
                   : null,
               }),
             )}
+            onSelectionChange={(selection) => {
+              if (busy || saving || treeSaving || loadingRevision || inFlight) return;
+              if (!selection) {
+                setSelectionNotice("");
+                return;
+              }
+              if (stale || readOnly) {
+                setSelectionNotice(
+                  "Сначала сохраните исходник и дождитесь актуального анализа.",
+                );
+                return;
+              }
+              const bound = extractionFromSelection(
+                graph,
+                file,
+                files[file] ?? "",
+                selection.startOffset,
+                selection.endOffset,
+              );
+              if (!bound) {
+                setSelectionNotice(
+                  "Выделите целые соседние операторы одного блока для извлечения метода.",
+                );
+                return;
+              }
+              setMethodId(bound.start.methodId);
+              setSelected(bound.start);
+              setExtractionEdit({
+                nodeId: bound.start.id,
+                endNodeId: bound.end.id,
+                serial: ++extractionSequence.current,
+              });
+              setSelectionNotice("");
+              setInspector(true);
+            }}
             onOffset={offset}
             readOnly={readOnly || busy || treeSaving || loadingRevision}
           />
@@ -2410,7 +2510,14 @@ function Workbench({
                     disabled={inFlight || stale || readOnly}
                     onChange={(e) => {
                       setOperation(e.target.value);
-                      if (e.target.value === "optimize_membership")
+                      if (
+                        [
+                          "optimize_membership",
+                          "extract_method",
+                          "decompose_class",
+                          "rename_local",
+                        ].includes(e.target.value)
+                      )
                         setIntent("preserve_behavior");
                     }}
                   >
@@ -2585,6 +2692,89 @@ function Workbench({
                       Удалить все операторы ветки else
                     </p>
                   )}
+                  {operation === "rename_local" && (
+                    <>
+                      <label htmlFor="renamed-local-name">
+                        Новое имя переменной
+                      </label>
+                      <input
+                        id="renamed-local-name"
+                        value={renamedLocalName}
+                        disabled={inFlight || stale || readOnly}
+                        onChange={(e) => setRenamedLocalName(e.target.value)}
+                      />
+                      <p className="small quiet">
+                        Изменяются только ссылки на выбранное объявление. На
+                        входе метода с одним параметром переименовывается этот
+                        параметр. Коллизии и неоднозначные ссылки отклоняются;
+                        применение требует тестов.
+                      </p>
+                    </>
+                  )}
+                  {operation === "decompose_class" && (
+                    <>
+                      <label htmlFor="extracted-class-name">
+                        Имя нового класса
+                      </label>
+                      <input
+                        id="extracted-class-name"
+                        value={extractedClassName}
+                        disabled={inFlight || stale || readOnly}
+                        onChange={(e) => setExtractedClassName(e.target.value)}
+                      />
+                      {!validClassName(extractedClassName) && (
+                        <p className="small quiet" role="status">
+                          Имя класса: до 80 латинских букв, цифр, $ или _,
+                          начиная с буквы, $ или _.
+                        </p>
+                      )}
+                      <p className="small quiet">
+                        Тело статического метода переносится в отдельный класс.
+                        Исходный метод сохраняет вызовы через обёртку.
+                        Применение требует компиляции и совпадения тестов.
+                      </p>
+                    </>
+                  )}
+                  {operation === "extract_method" && (
+                    <>
+                      <p className="small quiet">
+                        Начало: строка {selected.sourceRange?.startLine}.
+                        Параметры и результат определяются по исходнику.
+                      </p>
+                      <label htmlFor="extracted-method-name">
+                        Имя нового метода
+                      </label>
+                      <input
+                        id="extracted-method-name"
+                        value={extractedMethodName}
+                        disabled={inFlight || stale || readOnly}
+                        onChange={(e) => setExtractedMethodName(e.target.value)}
+                      />
+                      <label htmlFor="extraction-end">Последний оператор</label>
+                      <select
+                        id="extraction-end"
+                        value={extractionEndNodeId}
+                        disabled={inFlight || stale || readOnly}
+                        onChange={(e) => setExtractionEndNodeId(e.target.value)}
+                      >
+                        {extractionEnds.map((n) => (
+                          <option key={n.id} value={n.id}>
+                            Строка {n.sourceRange?.startLine}:{" "}
+                            {n.label.slice(0, 90)}
+                          </option>
+                        ))}
+                      </select>
+                      {!validMethodName(extractedMethodName) && (
+                        <p className="small quiet" role="status">
+                          Укажите допустимое имя Java-метода.
+                        </p>
+                      )}
+                      <p className="small quiet">
+                        Применение доступно после компиляции и совпадения
+                        результатов обязательных тестов.
+                      </p>
+                    </>
+                  )}
                   {operation === "optimize_membership" && (
                     <div
                       className="optimization-assumptions"
@@ -2600,12 +2790,26 @@ function Workbench({
                   <label htmlFor="change-intent">Цель изменения</label>
                   <select
                     id="change-intent"
-                    value={intent}
+                    value={
+                      [
+                        "optimize_membership",
+                        "extract_method",
+                        "decompose_class",
+                        "rename_local",
+                      ].includes(operation)
+                        ? "preserve_behavior"
+                        : intent
+                    }
                     disabled={
                       inFlight ||
                       stale ||
                       readOnly ||
-                      operation === "optimize_membership"
+                      [
+                        "optimize_membership",
+                        "extract_method",
+                        "decompose_class",
+                        "rename_local",
+                      ].includes(operation)
                     }
                     onChange={(e) => setIntent(e.target.value)}
                   >
@@ -2874,6 +3078,40 @@ function Workbench({
                 Отклонить
               </button>
             </div>
+            {proposal.decomposition && (
+              <div className="diff" aria-label="Новый класс">
+                <code>{proposal.decomposition.filePath}</code>
+                <p className="small quiet">
+                  {proposal.decomposition.className}: тело{" "}
+                  {proposal.decomposition.originalMethodName} перенесено;
+                  исходный метод сохранён как обёртка.
+                </p>
+              </div>
+            )}
+            {proposal.extraction && (
+              <div className="diff" aria-label="Извлечённый метод">
+                <code>
+                  private {proposal.extraction.isStatic ? "static " : ""}
+                  {proposal.extraction.returnType}{" "}
+                  {proposal.extraction.methodName}(
+                  {proposal.extraction.parameters
+                    .map((p) => p.type + " " + p.name)
+                    .join(", ")}
+                  )
+                </code>
+                <p className="small quiet">
+                  Входы:{" "}
+                  {proposal.extraction.parameters
+                    .map((p) => p.name)
+                    .join(", ") || "нет"}{" "}
+                  · Выход:{" "}
+                  {proposal.extraction.returnedVariable ??
+                    (proposal.extraction.returnType === "void"
+                      ? "нет"
+                      : proposal.extraction.returnType)}
+                </p>
+              </div>
+            )}
             {proposal.diff?.map((d, i) => (
               <div key={i} className="diff">
                 <span className="small quiet">{d.filePath}</span>
@@ -2950,6 +3188,62 @@ function Workbench({
       data-readonly={accessReadOnly || undefined}
     >
       <header className="toolbar glass-topbar">
+        <details className="sidebar-command-menu global-command-menu">
+          <summary>
+            Меню проекта
+            <ChevronDown size={14} />
+          </summary>
+          <WorkspaceMenu
+            workspace={workspace}
+            archiveItems={
+              <ProjectArchives
+                key={projectId}
+                projectId={projectId}
+                workspace={{
+                  layout: workspace.layout,
+                  focused: workspace.focused,
+                  maximized: workspace.maximized,
+                }}
+                disabled={busy}
+                onError={setError}
+                onRestored={(id) => navigate("/projects/" + id)}
+              />
+            }
+            actions={{
+              createFile: () => {
+                workspace.reveal("project");
+                setCreateCommand({ kind: "file", id: Date.now() });
+              },
+              createFolder: () => {
+                workspace.reveal("project");
+                setCreateCommand({ kind: "folder", id: Date.now() });
+              },
+              save: () => void save(),
+              import: () => setImportChooser(true),
+              export: () => void exportRevision(),
+              projects: () => navigate("/"),
+              run: () => setDialog("run"),
+              compare: () => setDialog("compare"),
+              stop: stopJob,
+              edit: (command) => {
+                void workspace.reveal("code").then(() => {
+                  if (mounted.current) editorCommands.current?.[command]();
+                });
+              },
+              editDisabled: !file || readOnly || busy || loadingRevision,
+              saveDisabled: !dirty || saving || conflict || readOnly,
+              runDisabled:
+                accessReadOnly ||
+                !revision ||
+                dirty ||
+                busy ||
+                !Object.keys(files).some((p) => p.endsWith(".java")),
+              exportDisabled: !revision || busy,
+              importDisabled: busy || readOnly,
+              stopDisabled: !job || !["queued", "running"].includes(job.status),
+            }}
+          />
+        </details>
         <label className="global-search">
           <Icon name="search" size={17} />
           <input
@@ -3055,7 +3349,16 @@ function Workbench({
                 {file}
               </div>
               <h1>{file.split("/").pop() || "JavaBlueprints"}</h1>
-              <p>{method?.signature ?? "Выберите метод"}</p>
+              <p>
+                {method?.signature ?? "Выберите метод"}
+                {graph && (
+                  <small className="canvas-version" title={graph.revisionId}>
+                    {" "}
+                    · {short(graph.revisionId)}
+                    {stale ? " · предыдущая схема" : " · актуальная схема"}
+                  </small>
+                )}
+              </p>
             </>
           }
           sidebarChrome={
@@ -3103,50 +3406,6 @@ function Workbench({
                   </div>
                 </details>
               </nav>
-              <details className="sidebar-command-menu">
-                <summary>
-                  Меню проекта
-                  <ChevronDown size={14} />
-                </summary>
-                <WorkspaceMenu
-                  workspace={workspace}
-                  actions={{
-                    createFile: () => {
-                      workspace.reveal("project");
-                      setCreateCommand({ kind: "file", id: Date.now() });
-                    },
-                    createFolder: () => {
-                      workspace.reveal("project");
-                      setCreateCommand({ kind: "folder", id: Date.now() });
-                    },
-                    save: () => void save(),
-                    import: () => setImportChooser(true),
-                    export: () => void exportRevision(),
-                    projects: () => navigate("/"),
-                    run: () => setDialog("run"),
-                    compare: () => setDialog("compare"),
-                    stop: stopJob,
-                    edit: (command) => {
-                      void workspace.reveal("code").then(() => {
-                        if (mounted.current)
-                          editorCommands.current?.[command]();
-                      });
-                    },
-                    editDisabled: !file || readOnly || busy || loadingRevision,
-                    saveDisabled: !dirty || saving || conflict || readOnly,
-                    runDisabled:
-                      accessReadOnly ||
-                      !revision ||
-                      dirty ||
-                      busy ||
-                      !Object.keys(files).some((p) => p.endsWith(".java")),
-                    exportDisabled: !revision || busy,
-                    importDisabled: busy || readOnly,
-                    stopDisabled:
-                      !job || !["queued", "running"].includes(job.status),
-                  }}
-                />
-              </details>
             </>
           }
         />
@@ -3975,6 +4234,12 @@ function ExecutionView({
         <code>
           {e.outcome} {e.exitCode !== undefined ? "· exit " + e.exitCode : ""}{" "}
           {e.wallTimeMs !== undefined ? "· " + e.wallTimeMs + " ms" : ""}
+          {e.metrics && (
+            <>
+              {" "}
+              · <ExecutionResources execution={e} />
+            </>
+          )}
         </code>
       </div>
       {e.stdoutUtf8 !== undefined && (
