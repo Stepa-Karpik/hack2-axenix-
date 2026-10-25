@@ -4,9 +4,6 @@
   --canvas-ink: var(--theme-text, #202621);
   --canvas-quiet: var(--theme-muted, #56635b);
 }
-[data-theme="dark"] .glass-workbench {
-  --canvas-background: #000;
-}
 .glass-workbench.workbench {
   background: var(--canvas-background);
 }
@@ -20,9 +17,17 @@
 }
 .glass-workbench .flow-area,
 .glass-workbench .flow-area .react-flow,
-.glass-workbench .flow-area .react-flow__renderer,
 .glass-workbench .flow-area .react-flow__background {
   background-color: var(--canvas-background) !important;
+}
+.glass-workbench .flow-area .react-flow__renderer {
+  background: transparent !important;
+}
+.glass-workbench .flow-area {
+  --graph-grid: #aeb4b9;
+}
+[data-theme="dark"] .glass-workbench .flow-area {
+  --graph-grid: #48484f;
 }
 .workbench .workspace-group.glass-tile {
   border-color: color-mix(in srgb, var(--theme-text, #e4e4e7) 23%, transparent);
@@ -33,6 +38,9 @@
   );
   box-shadow: none;
   backdrop-filter: blur(24px) saturate(110%);
+}
+.workbench[data-canvas-moving="true"] .workspace-group.glass-tile {
+  backdrop-filter: none;
 }
 .workbench .workspace-panel-header {
   border-bottom: 1px solid
@@ -58,6 +66,8 @@
   align-items: center;
   gap: 9px;
   text-align: left;
+  justify-content: flex-start;
+  width: 100%;
   border: 0;
   background: none;
   color: var(--theme-text, #eee);
@@ -84,6 +94,100 @@
 }
 .navigation-collapsed .workspace-panel-tabs {
   overflow: hidden;
+}
+.workbench [data-tile-panel="navigation"]:not(.tile-dragging) {
+  max-height: 208px;
+}
+.glass-workbench .return-navigation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px dashed var(--theme-accent);
+  color: var(--theme-accent);
+  border-radius: 9px;
+  background: var(--theme-surface);
+  white-space: nowrap;
+}
+.workbench[data-navigation-dock-target] .return-navigation {
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  border-style: solid;
+}
+.workbench [data-tile-panel="navigation"].navigation-collapsed {
+  max-height: 40px;
+}
+.glass-workbench.workbench > header.glass-topbar {
+  left: 12px;
+  gap: 12px;
+}
+.glass-workbench .project-command-search {
+  flex: 1 1 380px;
+  min-width: 120px;
+  max-width: 530px;
+}
+.topbar-navigation {
+  flex: 0 0 auto;
+  width: 190px;
+  align-self: flex-start;
+  position: relative;
+  transition: width 240ms ease;
+  color: var(--ink);
+}
+.topbar-navigation.expanded {
+  width: 256px;
+}
+.glass-workbench .topbar-navigation-toggle {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--theme-surface) 88%, transparent);
+  color: var(--ink);
+  backdrop-filter: blur(24px);
+}
+.topbar-navigation-body {
+  position: absolute;
+  inset: 48px 0 auto;
+  background: color-mix(in srgb, var(--theme-surface) 90%, transparent);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 3px;
+}
+.topbar-navigation .navigation-undock {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  margin: 0 7px 7px;
+  padding: 8px 10px;
+}
+@media (max-width: 980px) {
+  .topbar-navigation,
+  .topbar-navigation.expanded {
+    width: 52px;
+  }
+  .topbar-navigation-toggle .navigation-wordmark {
+    font-size: 0;
+    gap: 0;
+  }
+  .topbar-navigation-toggle > svg {
+    display: none;
+  }
+  .topbar-navigation-body {
+    width: 225px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topbar-navigation {
+    transition: none;
+  }
 }
 .history-panel {
   padding: 14px 10px;
@@ -312,11 +416,11 @@
 .target-spotlight,
 .tour-aperture {
   position: fixed;
-  border: 1px solid #b19bff;
+  border: 1px solid var(--theme-accent);
   border-radius: 10px;
   box-shadow:
     0 0 0 9999px #000a,
-    0 0 22px #a78bfa77;
+    0 0 22px color-mix(in srgb, var(--theme-accent) 45%, transparent);
   pointer-events: none;
   z-index: 12000;
   transition:

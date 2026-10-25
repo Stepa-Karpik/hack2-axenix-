@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useAccount } from "./Account";
-import { presets, useTheme, validPalette, contrast } from "./theme";
+import { presets, useTheme, validPalette } from "./theme";
 import type { Palette } from "./theme";
+import TourButton from "./TourButton";
 export function AppearanceSettings() {
   const { preset, palette, setPreset, setCustom } = useTheme();
   const { session } = useAccount();
@@ -26,10 +27,11 @@ export function AppearanceSettings() {
       <p className="product-muted">
         Сохраняется в этом браузере. Выберите палитру или настройте свою.
       </p>
-      <div className="theme-options">
+      <div data-assistant-target="theme-options" className="theme-options">
         {presets.map((p) => (
           <button
             key={p.id}
+            data-assistant-target={`appearance_${p.id}`}
             aria-pressed={preset === p.id}
             onClick={() => {
               dirty.current = false;
@@ -56,15 +58,7 @@ export function AppearanceSettings() {
           </button>
         ))}
       </div>
-      {session?.user && (
-        <button
-          onClick={() =>
-            window.dispatchEvent(new CustomEvent("java-blueprints:tour"))
-          }
-        >
-          Повторить знакомство
-        </button>
-      )}
+      {session?.user && <TourButton label="Пройти обучение заново" />}
       <h3>Своя палитра</h3>
       <form
         onSubmit={(e) => {
@@ -92,21 +86,17 @@ export function AppearanceSettings() {
             </label>
           ))}
         </div>
-        <p className="product-muted">
-          Контраст текста:{" "}
-          {Math.min(
-            contrast(draft.text, draft.background),
-            contrast(draft.text, draft.surface),
-          ).toFixed(2)}
-          :1. Для всех текстовых цветов требуется минимум 4.5:1.
-        </p>
         {!valid && (
           <p role="alert">
             Увеличьте контраст текста, вторичного текста и акцента с фоном и
             поверхностью.
           </p>
         )}
-        <button className="product-action" disabled={!valid}>
+        <button
+          data-assistant-target="palette-apply"
+          className="product-action"
+          disabled={!valid}
+        >
           Применить свою палитру
         </button>
         {result && <p role="status">{result}</p>}

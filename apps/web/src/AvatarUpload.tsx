@@ -63,7 +63,12 @@ export default function AvatarUpload() {
   if (!session?.user) return null;
   const user = session.user;
   return (
-    <div className="avatar-editor" aria-busy={!!busy}>
+    <div
+      className="avatar-editor"
+      data-tour="profile-photo"
+      data-assistant-target="profile-photo"
+      aria-busy={!!busy}
+    >
       <Avatar user={user} className="settings-avatar" />
       <div className="avatar-editor-body">
         <strong>Фото профиля</strong>
@@ -71,6 +76,7 @@ export default function AvatarUpload() {
         <div className="avatar-editor-actions">
           <button
             type="button"
+            data-assistant-target="profile-photo-button"
             disabled={!!busy}
             onClick={() => input.current?.click()}
           >

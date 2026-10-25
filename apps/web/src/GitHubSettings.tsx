@@ -69,6 +69,7 @@ export default function GitHubSettings() {
     result || (callback?.endsWith("_success") ? "" : githubCallbackMessage());
   return (
     <section
+      data-assistant-target="integrations"
       className="github-settings integration-card"
       aria-labelledby="github-settings-title"
     >
@@ -80,7 +81,11 @@ export default function GitHubSettings() {
           <h2 id="github-settings-title">GitHub</h2>
           <p>Репозитории и импорт проектов</p>
         </div>
-        <span className="integration-status" data-connected={connected}>
+        <span
+          data-assistant-target={connected ? "github-control" : undefined}
+          className="integration-status"
+          data-connected={connected}
+        >
           <i aria-hidden="true" />
           {connected
             ? "Подключено"
@@ -120,6 +125,7 @@ export default function GitHubSettings() {
           </PageLink>
         ) : (
           <button
+            data-assistant-target="github-control"
             className="product-action"
             type="button"
             disabled={!status?.configured || busy || redirect.busy}

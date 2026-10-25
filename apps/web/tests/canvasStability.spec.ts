@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { assertRoutes, panToNode, revealPanel } from "./flowAssertions";
@@ -189,7 +190,7 @@ test("real source save and late layout keep camera/manual coordinates across reg
   await editor.focus();
   await page.keyboard.press("Control+Home");
   await page.keyboard.insertText("// source save shifts every source range\n");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect
     .poll(async () => (await head(page.request, a.base)).id)
     .not.toBe(a.revision.id);

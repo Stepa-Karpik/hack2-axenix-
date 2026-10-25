@@ -1,6 +1,14 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import "./theme-presets.css";
+import "./productPolish.css";
 import {
   presets,
   validPalette,
@@ -27,7 +35,7 @@ function readPreference(): ThemePreference {
 }
 const ThemeContext = createContext({
   theme: "dark" as Theme,
-  preset: "dark",
+  preset: "oled",
   palette: defaultPreference.custom,
   setPreset: (_id: string) => {},
   setCustom: (_p: Palette): boolean => false,
@@ -90,7 +98,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     window.addEventListener("storage", receive);
     return () => window.removeEventListener("storage", receive);
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme;
     root.dataset.themePreset = preference.preset;

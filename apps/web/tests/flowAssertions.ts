@@ -1,5 +1,10 @@
 import { chooseOption } from "./selectControl";
 import { expect, type Page } from "@playwright/test";
+export async function publishProject(page: Page) {
+  await revealPanel(page, "code", "Код Java");
+  const save = page.locator(".file-tabs-save");
+  if (await save.isEnabled()) await save.click();
+}
 export async function revealPanel(page: Page, id: string, label: string) {
   if (id === "graph") {
     await page

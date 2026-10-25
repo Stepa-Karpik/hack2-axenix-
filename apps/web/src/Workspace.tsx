@@ -1,4 +1,8 @@
 import Select from "./Select";
+import {
+  readWorkspaceSnapshot,
+  writeWorkspaceSnapshot,
+} from "./workspacePreferences";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, CSSProperties } from "react";
 import { createPortal, flushSync } from "react-dom";
@@ -9,6 +13,7 @@ import {
   Minimize2,
   ChevronUp,
   ChevronDown,
+  PanelTop,
 } from "lucide-react";
 import {
   defaultLayout,
@@ -39,20 +44,38 @@ import {
 import type { TileRect, Divider } from "./tileGeometry";
 export function useWorkspace(projectId: string) {
   const [initial] = useState(() => {
-    const layout = readLayout(projectId);
+    const baseline = readWorkspaceSnapshot();
+    const hasProjectLayout = (() => {
+      try {
+        return localStorage.getItem(layoutKey(projectId)) !== null;
+      } catch {
+        return false;
+      }
+    })();
+    const layout =
+      !hasProjectLayout && baseline ? baseline.layout : readLayout(projectId);
     try {
       const state = JSON.parse(
         localStorage.getItem("java-blueprints:window-state:" + projectId) ??
           "null",
       );
+      const navigationDocked = state
+        ? state.navigationDocked !== false
+        : (baseline?.navigationDocked ?? true);
       return {
         layout,
-        collapsedNavigation: state?.collapsedNavigation === true,
-        focused: panelIds.includes(state?.focused)
-          ? (state.focused as PanelId)
-          : ("graph" as PanelId),
+        collapsedNavigation: state
+          ? state.collapsedNavigation === true
+          : (baseline?.collapsedNavigation ?? true),
+        navigationDocked,
+        focused:
+          panelIds.includes(state?.focused) &&
+          !(navigationDocked && state.focused === "navigation")
+            ? (state.focused as PanelId)
+            : ("graph" as PanelId),
         maximized:
           panelIds.includes(state?.maximized) &&
+          !(navigationDocked && state.maximized === "navigation") &&
           !layout.hidden?.includes(state.maximized)
             ? (state.maximized as PanelId)
             : null,
@@ -63,10 +86,15 @@ export function useWorkspace(projectId: string) {
         focused: "graph" as PanelId,
         maximized: null,
         collapsedNavigation: false,
+        navigationDocked: true,
       };
     }
   });
   const [layout, setLayout] = useState(initial.layout);
+  const [navigationDocked, setNavigationDocked] = useState(
+    initial.navigationDocked,
+  );
+  const [layoutNotice, setLayoutNotice] = useState("");
   const [maximized, setMaximized] = useState<PanelId | null>(initial.maximized);
   const [focused, setFocused] = useState<PanelId>(initial.focused);
   const [collapsedNavigation, setCollapsedNavigation] = useState(
@@ -77,7 +105,18 @@ export function useWorkspace(projectId: string) {
       const panel = (event as CustomEvent<{ panel?: unknown }>).detail?.panel;
       if (
         typeof panel !== "string" ||
-        !["project", "graph", "palette", "code", "tests"].includes(panel)
+        ![
+          "project",
+          "graph",
+          "palette",
+          "code",
+          "tests",
+          "analysis",
+          "console",
+          "changes",
+          "history",
+          "navigation",
+        ].includes(panel)
       )
         return;
       const target = panel as PanelId;
@@ -86,7 +125,7 @@ export function useWorkspace(projectId: string) {
       setMaximized((current) =>
         current && current !== target ? null : current,
       );
-      if (target === "project") setCollapsedNavigation(false);
+      if (target === "project") setCollapsedNavigation(true);
     };
     window.addEventListener("java-blueprints:tour-reveal", revealForTour);
     return () =>
@@ -96,10 +135,15 @@ export function useWorkspace(projectId: string) {
     try {
       localStorage.setItem(
         "java-blueprints:window-state:" + projectId,
-        JSON.stringify({ focused, maximized, collapsedNavigation }),
+        JSON.stringify({
+          focused,
+          maximized,
+          collapsedNavigation,
+          navigationDocked,
+        }),
       );
     } catch {}
-  }, [projectId, focused, maximized, collapsedNavigation]);
+  }, [projectId, focused, maximized, collapsedNavigation, navigationDocked]);
   function animate(change: () => void): Promise<void> {
     // CSS geometry transitions preserve live content; no screenshot overlays.
     flushSync(change);
@@ -112,6 +156,42 @@ export function useWorkspace(projectId: string) {
   }, [layout, projectId]);
   return {
     layout,
+    navigationDocked,
+    toggleNavigationDock: () => {
+      setNavigationDocked((v) => !v);
+      if (!navigationDocked) setCollapsedNavigation(true);
+      setLayout((l) => revealPanel(l, "navigation"));
+      setMaximized(null);
+      setFocused("graph");
+    },
+    layoutNotice,
+    saveLayout: (asDefault = false) => {
+      const ok = writeWorkspaceSnapshot(
+        { version: 1, layout, collapsedNavigation, navigationDocked },
+        asDefault ? undefined : projectId,
+      );
+      setLayoutNotice(
+        ok
+          ? asDefault
+            ? "Базовое расположение сохранено"
+            : "Расположение проекта сохранено"
+          : "Не удалось сохранить расположение: хранилище браузера недоступно",
+      );
+    },
+    restoreLayout: () =>
+      animate(() => {
+        const saved =
+          readWorkspaceSnapshot(projectId) ?? readWorkspaceSnapshot();
+        setLayout(saved?.layout ?? defaultLayout());
+        setCollapsedNavigation(saved?.collapsedNavigation ?? true);
+        setNavigationDocked(saved?.navigationDocked ?? true);
+        setMaximized(null);
+        setLayoutNotice(
+          saved
+            ? "Сохранённое расположение восстановлено"
+            : "Стандартное расположение восстановлено",
+        );
+      }),
     collapsedNavigation,
     toggleNavigation: () => setCollapsedNavigation((v) => !v),
     setLayout,
@@ -242,9 +322,12 @@ export default function Workspace({
     height: Math.max(1, size.height - size.topInset - 82),
   };
   const layout = drag?.moved ? drag.preview : c.layout;
-  const root = visibleRoot(layout);
+  const canvasLayout = c.navigationDocked
+    ? hidePanel(layout, "navigation")
+    : layout;
+  const root = visibleRoot(canvasLayout);
   const geometry = tileGeometry(root, bounds, c.collapsedNavigation);
-  const shown = visiblePanels(layout);
+  const shown = visiblePanels(canvasLayout);
   const focus =
     c.maximized ??
     (compact ? (shown.includes(c.focused) ? c.focused : "graph") : null);
@@ -256,6 +339,9 @@ export default function Workspace({
       dragRef.current = null;
       setDrag(null);
       document.body.classList.remove("is-tiling");
+      container.current
+        ?.closest(".workbench")
+        ?.removeAttribute("data-navigation-dock-target");
     }
   }, [c.layout]);
   const projectTile = geometry.tiles.find(
@@ -284,8 +370,38 @@ export default function Workspace({
         current.moved || Math.hypot(x - current.startX, y - current.startY) > 6;
       if (!moved) return;
       event.preventDefault();
+      const dock = container.current
+        ?.closest(".workbench")
+        ?.querySelector("[data-return-navigation]")
+        ?.getBoundingClientRect();
+      const overDock =
+        current.panel === "navigation" &&
+        dock &&
+        event.clientX >= dock.left &&
+        event.clientX <= dock.right &&
+        event.clientY >= dock.top &&
+        event.clientY <= dock.bottom;
+      container.current
+        ?.closest<HTMLElement>(".workbench")
+        ?.toggleAttribute("data-navigation-dock-target", !!overDock);
+      if (overDock) {
+        dragRef.current = {
+          ...current,
+          x,
+          y,
+          moved,
+          target: "topbar",
+          preview: current.base,
+        };
+        setDrag(dragRef.current);
+        return;
+      }
       const targets = tileGeometry(
-        visibleRoot(current.base),
+        visibleRoot(
+          c.navigationDocked
+            ? hidePanel(current.base, "navigation")
+            : current.base,
+        ),
         bounds,
         c.collapsedNavigation,
       ).tiles;
@@ -324,12 +440,20 @@ export default function Workspace({
     }
     function finish(event: PointerEvent) {
       if (!dragRef.current) return;
+      const dock =
+        event.type === "pointerup" &&
+        dragRef.current.moved &&
+        dragRef.current.target === "topbar";
       if (event.type === "pointerup" && dragRef.current.moved)
         c.setLayout(dragRef.current.preview);
       wasDrag.current = dragRef.current.moved;
       dragRef.current = null;
       setDrag(null);
       document.body.classList.remove("is-tiling");
+      container.current
+        ?.closest(".workbench")
+        ?.removeAttribute("data-navigation-dock-target");
+      if (dock) c.toggleNavigationDock();
     }
     function closeMenus(event: PointerEvent) {
       container.current
@@ -352,6 +476,9 @@ export default function Workspace({
         dragRef.current = null;
         setDrag(null);
         document.body.classList.remove("is-tiling");
+        container.current
+          ?.closest(".workbench")
+          ?.removeAttribute("data-navigation-dock-target");
       }
     }
     document.addEventListener("pointerdown", closeMenus);
@@ -366,6 +493,9 @@ export default function Workspace({
       window.removeEventListener("pointercancel", finish);
       window.removeEventListener("keydown", cancel);
       document.body.classList.remove("is-tiling");
+      container.current
+        ?.closest(".workbench")
+        ?.removeAttribute("data-navigation-dock-target");
     };
   }, [
     size.width,
@@ -373,12 +503,15 @@ export default function Workspace({
     size.topInset,
     c.setLayout,
     c.collapsedNavigation,
+    c.navigationDocked,
   ]);
   function begin(panel: PanelId, event: React.PointerEvent) {
     if (compact || event.button !== 0 || panel === "graph") return;
     const box = container.current!.getBoundingClientRect();
     const tile = tileGeometry(
-      visibleRoot(c.layout),
+      visibleRoot(
+        c.navigationDocked ? hidePanel(c.layout, "navigation") : c.layout,
+      ),
       bounds,
       c.collapsedNavigation,
     ).tiles.find((t) => t.group.tabs.includes(panel));
@@ -395,6 +528,7 @@ export default function Workspace({
       startX: x,
       startY: y,
       source:
+        !c.navigationDocked &&
         panel === "project" &&
         tile.rect.x === bounds.x &&
         tile.rect.y === bounds.y
@@ -440,7 +574,8 @@ export default function Workspace({
       group.active === "project" &&
       initial.x === bounds.x &&
       initial.y === bounds.y &&
-      !focus;
+      !focus &&
+      !c.navigationDocked;
     if (sidebar)
       rect = {
         ...rect,
@@ -519,6 +654,16 @@ export default function Workspace({
                 </button>
               ))}
           </div>
+          {group.active === "navigation" && (
+            <button
+              className="workspace-panel-action"
+              aria-label="Закрепить JavaBlueprints наверху"
+              title="Закрепить JavaBlueprints наверху"
+              onClick={c.toggleNavigationDock}
+            >
+              <PanelTop size={14} />
+            </button>
+          )}
           {group.active === "navigation" && (
             <button
               className="workspace-panel-action"

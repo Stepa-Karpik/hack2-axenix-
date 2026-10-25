@@ -17,6 +17,26 @@ import {
   migrateLayout,
 } from "./workspaceLayout.ts";
 import { tileGeometry, tileDrop } from "./tileGeometry.ts";
+import { readWorkspaceSnapshot, writeWorkspaceSnapshot, savedWorkspaceKey } from "./workspacePreferences.ts";
+
+test("explicit layout snapshots separate project and default, validate storage and preserve window state", () => {
+  const previous = globalThis.localStorage;
+  const values = new Map();
+  globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  try {
+    const baseline = { version: 1, layout: defaultLayout("review"), collapsedNavigation: true, navigationDocked: true };
+    const project = { ...baseline, layout: defaultLayout("code"), navigationDocked: false };
+    assert.equal(writeWorkspaceSnapshot(baseline), true);
+    assert.equal(writeWorkspaceSnapshot(project, "project-a"), true);
+    assert.deepEqual(readWorkspaceSnapshot("project-a"), project);
+    assert.deepEqual(readWorkspaceSnapshot(), baseline);
+    assert.equal(readWorkspaceSnapshot("project-b"), null);
+    values.set(savedWorkspaceKey("project-a"), JSON.stringify({ ...project, layout: { version: 1, root: {} } }));
+    assert.equal(readWorkspaceSnapshot("project-a"), null);
+    globalThis.localStorage.setItem = () => { throw new Error("quota"); };
+    assert.equal(writeWorkspaceSnapshot(project, "project-a"), false);
+  } finally { globalThis.localStorage = previous; }
+});
 const all = (l) =>
   groups(l.root)
     .flatMap((g) => g.tabs)
@@ -263,4 +283,19 @@ test("external workspace trees cannot omit the permanent canvas or hidden tool s
     false,
   );
   assert.equal(validateLayout(defaultLayout()), true);
+});
+
+import { placeTourCard } from "./tourPlacement.ts";
+test("tutorial cards stay inside viewport and clear concrete targets", () => {
+  for (const viewport of [{width:1536,height:1024},{width:390,height:844}]) {
+    for (const target of [{left:16,top:20,width:220,height:48},{left:viewport.width-100,top:300,width:80,height:40},{left:60,top:viewport.height-70,width:220,height:40}]) {
+      const size={width:Math.min(336,viewport.width-32),height:280};
+      const card=placeTourCard(target,size,viewport);
+      assert.ok(card.left>=16 && card.top>=16);
+      assert.ok(card.left+size.width<=viewport.width-16);
+      assert.ok(card.top+size.height<=viewport.height-16);
+      const overlap=Math.max(0,Math.min(card.left+size.width,target.left+target.width)-Math.max(card.left,target.left))*Math.max(0,Math.min(card.top+size.height,target.top+target.height)-Math.max(card.top,target.top));
+      assert.equal(overlap,0);
+    }
+  }
 });

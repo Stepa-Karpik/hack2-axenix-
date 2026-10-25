@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
@@ -30,7 +31,7 @@ test("expired browser session reacquires CSRF once and saves with the original i
   await page.keyboard.insertText(
     "public class Main { static int recovered = 7; }\n",
   );
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect(page.locator(".local-label")).toHaveText("Сохранено", {
     timeout: 30000,
   });
@@ -84,7 +85,7 @@ test("concurrent head conflict preserves draft and requires explicit save after 
   await page.keyboard.insertText(
     "public class Main { static int local = 42; }\n",
   );
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect(
     page.getByText("Конфликт версий", { exact: false }),
   ).toBeVisible();
@@ -168,7 +169,7 @@ test("real API sample → graph/code selection → invalid persisted draft → r
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText("public class Main {\n  invalid !\n}\n");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await saved;
   await expect(
     page.getByText("Исходник сохранён · ошибка разбора"),

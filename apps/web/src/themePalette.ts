@@ -14,7 +14,7 @@ export const presets = [
     surface: "#050505",
     text: "#f2f5f4",
     muted: "#b8bfbd",
-    accent: "#b1e5c0",
+    accent: "#b58aff",
   },
   {
     id: "dark",
@@ -23,7 +23,7 @@ export const presets = [
     surface: "#050505",
     text: "#f0f0f0",
     muted: "#b8b8b8",
-    accent: "#8bd5a4",
+    accent: "#b58aff",
   },
   {
     id: "light",
@@ -32,7 +32,7 @@ export const presets = [
     surface: "#ffffff",
     text: "#18231c",
     muted: "#4d5b52",
-    accent: "#166534",
+    accent: "#7030c4",
   },
   {
     id: "pearl",
@@ -100,13 +100,13 @@ export function validPalette(value: unknown): value is Palette {
 
 export type ThemePreference = { preset: string; custom: Palette };
 export const defaultPreference: ThemePreference = {
-  preset: "dark",
+  preset: "oled",
   custom: {
-    background: presets[1].background,
-    surface: presets[1].surface,
-    text: presets[1].text,
-    muted: presets[1].muted,
-    accent: presets[1].accent,
+    background: presets[0].background,
+    surface: presets[0].surface,
+    text: presets[0].text,
+    muted: presets[0].muted,
+    accent: presets[0].accent,
   },
 };
 export function parsePreference(raw: string | null): ThemePreference | null {
@@ -141,7 +141,8 @@ export function preferenceFromStorage(
   return (
     parsePreference(appearance) ?? {
       ...defaultPreference,
-      preset: legacy === "light" ? "light" : "dark",
+      preset:
+        legacy === "light" ? "light" : legacy === "dark" ? "dark" : "oled",
     }
   );
 }

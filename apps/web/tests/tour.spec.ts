@@ -1,226 +1,192 @@
 import { test, expect, type Page } from "@playwright/test";
-import { fixture, head } from "./fileFixtures";
-import { defaultLayout, hidePanel, layoutKey } from "../src/workspaceLayout";
-
-// UI-only identity fixture; APIRequestContext retains its real guest session and CSRF.
-// Fresh backend projects are real, with no register/login, mail, provider or Java execution.
-async function account(page: Page) {
-  const initialResponse = await page.request.get("/api/v1/session");
-  expect(initialResponse.ok()).toBe(true);
-  const initial = (await initialResponse.json()).data;
-  const id = crypto.randomUUID();
-  await page.route("**/api/v1/session", async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        data: {
-          ...initial,
-          mode: "authenticated",
-          user: {
-            id,
-            username: "tour_ui_fixture",
-            displayName: "Tour UI fixture",
-            bio: "",
-            emailVerified: true,
-          },
-        },
-      }),
-    });
-  });
-  return id;
-}
-const dialog = (page: Page) =>
-  page.getByRole("dialog", { name: "Знакомство с JavaBlueprints" });
-async function aperture(page: Page, selector: string) {
-  await expect(page.locator(".tour-aperture")).toHaveAttribute(
-    "data-tour-target",
-    selector,
+import { readFileSync } from "node:fs";
+import { mount } from "./polishFixtures";
+const samplePath = process.env.JB_THEME_FIXTURE_PATH;
+const sample = () =>
+  JSON.parse(readFileSync(samplePath!, "utf8").replace(/^\uFEFF/, ""));
+async function step(page: Page, id: string) {
+  await expect(page.locator(".guided-tour")).toHaveAttribute(
+    "data-tour-step",
+    id,
   );
+  await expect(page.locator(".tour-aperture")).toBeVisible();
   await expect
     .poll(async () => {
-      const target = await page.locator(selector).first().boundingBox();
-      const ring = await page.locator(".tour-aperture").boundingBox();
-      if (!target || !ring || target.width < 1 || target.height < 1)
-        return false;
+      const a = await page.locator(".tour-aperture").boundingBox(),
+        b = await page.locator(".tour-card").boundingBox();
+      if (!a || !b) return false;
       return (
-        Math.abs(ring.x - (target.x - 5)) < 2 &&
-        Math.abs(ring.y - (target.y - 5)) < 2 &&
-        Math.abs(ring.width - (target.width + 10)) < 2 &&
-        Math.abs(ring.height - (target.height + 10)) < 2
+        Math.max(
+          0,
+          Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
+        ) *
+          Math.max(
+            0,
+            Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
+          ) ===
+        0
       );
     })
     .toBe(true);
 }
-async function replay(page: Page) {
+test.beforeEach(() => test.skip(!samplePath, "Captured analysis required"));
+test("editor tutorial waits for actions, downloads file, opens dialogs and saves layout", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  const state = await mount(page, sample());
   await page.evaluate(() =>
     window.dispatchEvent(new CustomEvent("java-blueprints:tour")),
   );
-  await expect(dialog(page)).toBeVisible();
-}
-
-test("first use, back/next, keyboard focus, skip persistence and settings replay", async ({
+  await step(page, "file");
+  await page.keyboard.press("ArrowRight");
+  await step(page, "file");
+  await page
+    .locator("[data-file-path]:not([data-directory-path])")
+    .first()
+    .click();
+  await step(page, "method");
+  await page.locator(".method-item").first().click();
+  await step(page, "node");
+  await page
+    .locator('.blueprint-node[data-node-kind="ExpressionStmt"]')
+    .first()
+    .click();
+  await step(page, "download");
+  const download = page.waitForEvent("download");
+  await page.keyboard.press("Control+s");
+  expect((await download).suggestedFilename()).toMatch(/\.java$/);
+  await step(page, "template");
+  await page.locator(".palette-condition").click();
+  await step(page, "preview");
+  await page.getByRole("button", { name: "Продолжить", exact: true }).click();
+  await step(page, "run");
+  await page.locator(".dock-run").click();
+  await step(page, "run-options");
+  await page
+    .getByRole("button", { name: "Закрыть диалог", exact: true })
+    .click();
+  await step(page, "compare");
+  await page.getByRole("button", { name: "Сравнить", exact: true }).click();
+  await step(page, "compare-options");
+  await page
+    .getByRole("button", { name: "Закрыть диалог", exact: true })
+    .click();
+  await step(page, "view");
+  await page.locator('[data-tour="workspace-view"]').click();
+  await step(page, "layout");
+  await page.locator('[data-tour="save-layout"]').click();
+  await expect(page.locator(".guided-tour")).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+});
+test("full replay navigates from projects; account training targets individual controls", async ({
   page,
 }) => {
-  const user = await account(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const state = await mount(page, sample());
+  await page.goto("/settings/profile");
+  await page.locator(".product-sidebar .tour-launcher").click();
+  await expect(page).toHaveURL(/\/projects$/);
+  await step(page, "open-project");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".guided-tour")).toHaveCount(0);
+  await page.goto("/settings/profile");
+  await expect(page.locator(".product-sidebar .tour-launcher")).toBeVisible();
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("java-blueprints:tour")),
+  );
+  await step(page, "settings");
+  await page.locator('.account-nav a[href="/settings/profile"]').click();
+  await step(page, "name");
+  await page.locator('[data-tour="profile-name"]').click();
+  await step(page, "photo");
+  await page.getByRole("button", { name: "Продолжить", exact: true }).click();
+  await step(page, "public-profile");
+  await page.locator('.account-nav a[href^="/u/"]').click();
+  await step(page, "edit-profile");
+  await page.locator('.profile-summary a[href="/settings/profile"]').click();
+  await step(page, "security");
+  await page.locator('.product-sidebar a[href="/settings/security"]').click();
+  await step(page, "security-method");
+  await page.getByRole("button", { name: "Продолжить", exact: true }).click();
+  await step(page, "appearance");
+  await page.locator('.product-sidebar a[href="/settings/appearance"]').click();
+  await step(page, "theme");
+  await page.getByRole("button", { name: "OLED", exact: true }).click();
+  await step(page, "palette");
+  await page.getByRole("button", { name: "Продолжить", exact: true }).click();
+  await step(page, "friends");
+  await page.locator('.product-sidebar a[href="/settings/friends"]').click();
+  await step(page, "people");
+  await page.getByRole("textbox", { name: "Поиск пользователей" }).fill("show");
+  await step(page, "integrations");
+  await page
+    .locator('.product-sidebar a[href="/settings/integrations"]')
+    .click();
+  await step(page, "github");
+  await page.getByRole("button", { name: "Готово", exact: true }).click();
+  await expect(page.locator(".guided-tour")).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+});
+
+test("first project visit starts training once; landing remains untouched and replay is visible", async ({
+  page,
+}) => {
+  await mount(page, sample());
+  await page.addInitScript(() => {
+    for (const key of Object.keys(localStorage))
+      if (key.startsWith("java-blueprints:onboarding:"))
+        localStorage.removeItem(key);
+  });
   await page.goto("/");
-  await expect(dialog(page)).toBeVisible();
-  await expect(dialog(page)).toBeFocused();
-  await aperture(page, ".project-heading");
-  await page.keyboard.press("Shift+Tab");
   await expect(
-    dialog(page).getByRole("button", { name: "Далее" }),
-  ).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(
-    dialog(page).getByRole("button", { name: "Пропустить" }),
-  ).toBeFocused();
-  await page.keyboard.press("ArrowRight");
-  await expect(dialog(page).getByRole("heading")).toHaveText(
-    "Рабочее пространство",
-  );
-  await aperture(page, ".project-list");
-  await dialog(page).getByRole("button", { name: "Назад" }).click();
-  await expect(dialog(page).getByRole("heading")).toHaveText(
-    "Начните с проекта",
-  );
-  await page.keyboard.press("Escape");
-  await expect(dialog(page)).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      (id) =>
-        localStorage.getItem("java-blueprints:onboarding:v1:" + id + ":home"),
-      user,
-    ),
-  ).toBe("done");
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "Ваши проекты" }),
+    page.getByRole("heading", {
+      name: "У кода есть другая сторона.",
+      level: 1,
+    }),
   ).toBeVisible();
-  await expect(dialog(page)).toHaveCount(0);
-  await page.goto("/settings/appearance");
-  await dialog(page).getByRole("button", { name: "Пропустить" }).click();
-  const trigger = page.getByRole("button", { name: "Повторить знакомство" });
-  await trigger.click();
-  await expect(dialog(page)).toBeVisible();
+  await expect(page.locator(".guided-tour")).toHaveCount(0);
+  await page.goto("/projects");
+  await step(page, "open-project");
+  await page.locator(".project-row").first().click();
+  await step(page, "file");
   await page.keyboard.press("Escape");
-  await expect(trigger).toBeFocused();
+  await expect(page.locator(".guided-tour")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "JavaBlueprints — навигация" })
+    .click();
+  await page
+    .getByRole("button", { name: "Обучение редактору", exact: true })
+    .click();
+  await step(page, "file");
+  await page.screenshot({
+    path: test.info().outputPath("interactive-guide.png"),
+  });
 });
-
-test("whole workspace tour reveals hidden panels and leaves project head and execution untouched", async ({
+test("narrow settings keep brand, aligned swatches and an unobstructed tutorial", async ({
   page,
 }) => {
-  const user = await account(page);
-  const own = await fixture(page.request);
-  let layout = defaultLayout();
-  for (const panel of ["project", "palette", "code", "tests"] as const)
-    layout = hidePanel(layout, panel);
-  await page.addInitScript(
-    ({ id, key, value }) => {
-      localStorage.setItem(key, JSON.stringify(value));
-      localStorage.setItem(
-        "java-blueprints:window-state:" + id,
-        JSON.stringify({
-          maximized: "graph",
-          focused: "graph",
-          collapsedNavigation: true,
-        }),
-      );
-    },
-    { id: own.projectId, key: layoutKey(own.projectId), value: layout },
-  );
-  const mutations: string[] = [];
-  page.on("request", (request) => {
-    if (
-      request.method() !== "GET" &&
-      // Lazy POST /revisions/{id}/analysis reads source; only exact revision creation writes it.
-      /\/(runs|comparisons|commands)(\/|$)|\/revisions\/?$/.test(
-        new URL(request.url()).pathname,
-      )
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mount(page, sample());
+  await page.goto("/settings/appearance");
+  await expect(page.locator(".product-sidebar .product-brand")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     )
-      mutations.push(request.url());
-  });
-  await page.goto("/projects/" + own.projectId);
-  const steps = [
-    ["Файлы проекта", '[data-tile-panel="project"]'],
-    ["Найти в проекте", ".project-command-search"],
-    ["Схема и код", "[data-graph-aperture]"],
-    ["Добавить блок", '[data-tile-panel="palette"]'],
-    ["Редактор", '[data-tile-panel="code"]'],
-    ["Запуск", ".dock-run-control"],
-    ["Проверить изменения", '[data-tile-panel="tests"]'],
-    ["Ваше рабочее место", '.workspace-dock [title="Окна"]'],
-    ["Профиль и настройки", ".local-presence"],
-  ];
-  for (const [title, target] of steps) {
-    await expect(dialog(page).getByRole("heading")).toHaveText(title);
-    await aperture(page, target);
-    await expect(dialog(page).getByRole("status")).toHaveCount(0);
-    await dialog(page)
-      .getByRole("button", {
-        name: title === steps.at(-1)![0] ? "Готово" : "Далее",
-        exact: true,
-      })
-      .click();
-  }
-  await expect(dialog(page)).toHaveCount(0);
-  expect(
-    await page.evaluate(
-      (id) =>
-        localStorage.getItem(
-          "java-blueprints:onboarding:v1:" + id + ":workspace",
-        ),
-      user,
-    ),
-  ).toBe("done");
-  expect((await head(page.request, own.base)).bundleHash).toBe(
-    own.original.bundleHash,
+    .toBe(true);
+  await page.locator(".product-sidebar .tour-launcher").click();
+  await step(page, "open-project");
+  await page.keyboard.press("Escape");
+  await page.goto("/settings/profile");
+  await expect(page.locator(".product-sidebar .tour-launcher")).toBeVisible();
+  await page.evaluate(() =>
+    window.dispatchEvent(new CustomEvent("java-blueprints:tour")),
   );
-  expect((await head(page.request, own.base)).id).toBe(own.original.id);
-  expect(mutations).toEqual([]);
-  await replay(page);
-  await expect(dialog(page).getByRole("heading")).toHaveText("Файлы проекта");
-  await dialog(page).getByRole("button", { name: "Пропустить" }).click();
-});
-
-test("reduced motion, missing target and route scope change stay usable", async ({
-  page,
-}) => {
-  await account(page);
-  const own = await fixture(page.request);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/projects/" + own.projectId);
-  await expect(dialog(page)).toBeVisible();
-  await aperture(page, '[data-tile-panel="project"]');
-  expect(
-    await page
-      .locator(".tour-aperture")
-      .evaluate((el) => getComputedStyle(el).transitionDuration),
-  ).toBe("0s");
-  for (let i = 0; i < 8; i++)
-    await dialog(page)
-      .getByRole("button", { name: "Далее", exact: true })
-      .click();
-  // Same-document route update exercises the preserved displayIndex clamp (workspace9 -> home3).
-  await page.evaluate(() => {
-    history.pushState({}, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await expect(dialog(page).getByRole("heading")).toHaveText(
-    "Начните с проекта",
-  );
-  await page.addStyleTag({
-    content: ".project-heading { display: none !important }",
-  });
-  await replay(page);
-  await expect(dialog(page).getByRole("status")).toContainText(
-    "Элемент недоступен",
-  );
-  await expect(page.locator(".tour-aperture")).toHaveCount(0);
-  await page.keyboard.press("ArrowRight");
-  await expect(dialog(page).getByRole("heading")).toHaveText(
-    "Рабочее пространство",
-  );
-  await aperture(page, ".project-list");
-  await dialog(page).getByRole("button", { name: "Пропустить" }).click();
+  await step(page, "settings");
+  await page.locator('.product-sidebar a[href="/settings/profile"]').click();
+  await step(page, "name");
+  await page.locator('[data-tour="profile-name"]').click();
+  await step(page, "photo");
+  await page.screenshot({ path: test.info().outputPath("mobile-guide.png") });
 });

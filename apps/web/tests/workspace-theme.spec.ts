@@ -81,21 +81,22 @@ async function contrast(page: Page, selector: string, minimum = 4.5) {
   const elements = page.locator(selector).filter({ visible: true });
   expect(await elements.count(), `Visible sample: ${selector}`).toBeGreaterThan(0);
   for (const element of await elements.all()) {
-    const result = await contrastOf(element);
-    expect(result.ratio, JSON.stringify({ selector, ...result })).toBeGreaterThanOrEqual(minimum);
+    await expect.poll(async () => (await contrastOf(element)).ratio, { message: `Settled theme contrast: ${selector}` }).toBeGreaterThanOrEqual(minimum);
   }
 }
 async function canvas(page: Page, preset: string) {
   const theme = preset === "custom" ? custom : presets.find(p => p.id === preset)!;
   const dark = !["light", "pearl", "custom"].includes(preset);
   await expect(page.locator("html")).toHaveAttribute("data-theme", dark ? "dark" : "light");
-  const expected = dark ? "rgb(0, 0, 0)" : await page.evaluate(hex => {
+  const expected = await page.evaluate(hex => {
     const node = document.createElement("div"); node.style.color = hex; document.body.append(node);
     const value = getComputedStyle(node).color; node.remove(); return value;
   }, theme.background);
-  for (const selector of [".workbench", ".workspace-canvas-background", ".graph-pane", ".flow-area", ".flow-area .react-flow", ".react-flow__renderer", ".react-flow__background"]) {
+  for (const selector of [".workbench", ".workspace-canvas-background", ".graph-pane", ".flow-area", ".flow-area .react-flow", ".react-flow__background"]) {
     await expect(page.locator(selector).first(), selector).toHaveCSS("background-color", expected);
   }
+  await expect(page.locator(".react-flow__renderer")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(page.locator(".react-flow__background pattern circle")).toBeAttached();
   if (!dark) {
     await contrast(page, ".canvas-heading h1, .canvas-heading p, .canvas-breadcrumb");
     await contrast(page, ".blueprint-node .node-label, .blueprint-node .node-meta span");
@@ -127,7 +128,7 @@ async function readableFrame(page: Page) {
   expect(await page.locator(".react-flow__viewport").evaluate(el => new DOMMatrix(getComputedStyle(el).transform).a)).toBeGreaterThan(.65);
 }
 
-for (const preset of ["light", "pearl", "custom", "dark"]) {
+for (const preset of ["light", "pearl", "custom", "dark", "oled"]) {
   test(`real OrderService canvas and controls follow ${preset} palette`, async ({ page }, info) => {
     await page.setViewportSize({ width: 1536, height: 1024 });
     const state = await fixture(page, preset);

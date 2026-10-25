@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { publishProject } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { fixture, head } from "./fileFixtures";
 
@@ -5,7 +7,7 @@ for (const [layout, key] of [
   ["English", "s"],
   ["Russian", "ы"],
 ] as const) {
-  test(`physical Ctrl+S saves the project in ${layout} layout inside and outside Monaco`, async ({
+  test(`physical Ctrl+S downloads the active draft in ${layout} layout inside and outside Monaco`, async ({
     page,
   }) => {
     const { projectId, base, original } = await fixture(page.request);
@@ -69,25 +71,16 @@ for (const [layout, key] of [
       await page.keyboard.insertText(marker);
       if (focus === "search")
         await page.getByRole("combobox", { name: "Поиск по проекту" }).focus();
-      const saved = page
-        .waitForResponse(
-          (response) =>
-            response.url().endsWith(base + "/revisions") &&
-            response.request().method() === "POST",
-          { timeout: 3000 },
-        )
-        .catch(() => null);
+      const pendingDownload = page.waitForEvent("download");
       await shortcut();
-      const response = await saved;
-      expect(response).not.toBeNull();
-      if (!response) throw new Error("Ctrl+S did not publish the project");
-      expect(response.status()).toBe(201);
-      const current = (await response.json()).data;
-      expect(current.id).not.toBe(previous);
-      expect(
-        current.files.find((file: any) => file.path === "Main.java")
-          .canonicalText,
-      ).toContain(marker);
+      const downloaded = await pendingDownload;
+      expect(downloaded.suggestedFilename()).toBe("Main.java");
+      expect(readFileSync((await downloaded.path())!, "utf8")).toContain(marker);
+      expect((await head(page.request, base)).id).toBe(previous);
+      await publishProject(page);
+      await expect.poll(async () => (await head(page.request, base)).id).not.toBe(previous);
+      const current = await head(page.request, base);
+      expect(current.files.find((file: any) => file.path === "Main.java").canonicalText).toContain(marker);
       await expect(page.locator(".file-tabs-save")).toBeDisabled();
       expect((await head(page.request, base)).id).toBe(current.id);
       await shortcut();

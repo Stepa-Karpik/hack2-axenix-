@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef, memo } from "react";
+import useFlowRoutes from "./useFlowRoutes";
 import {
   ReactFlow,
   Background,
@@ -11,6 +12,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   ViewportPortal,
+  useViewport,
 } from "@xyflow/react";
 import type {
   Node,
@@ -29,11 +31,7 @@ import {
   dismissedPreviewKeys,
   previewHitSnapshot,
 } from "./flowPreview";
-import {
-  BRANCH_BADGE,
-  planFlowRoutes,
-  validOverviewPositions,
-} from "./flowRouting";
+import { validOverviewPositions } from "./flowRouting";
 import {
   Maximize2,
   Braces,
@@ -299,27 +297,34 @@ function ShortcutEdge({
     arrival?: number;
     highlighted?: boolean;
     provisional?: boolean;
-    plannedRoute?: { points: { x: number; y: number }[]; complete: boolean };
+    plannedRoute?: {
+      points: { x: number; y: number }[];
+      complete: boolean;
+      path?: string;
+    };
+    pending?: boolean;
   }>
 >) {
   const routeX = data!.routeX;
-  const route = useMemo(
-    () =>
+  const route = useMemo(() => {
+    const value =
       data?.plannedRoute ??
       routeOrthogonal(
         { x: sourceX, y: sourceY },
         { x: targetX, y: targetY },
         routeX,
-        data!.boxes,
+        data?.pending ? [] : data!.boxes,
         data?.departure ?? 22,
         data?.sourceSide,
         data?.arrival ?? 22,
         data?.targetSide,
         data?.compact,
-      ),
-    [sourceX, sourceY, targetX, targetY, routeX, data],
-  );
-  const path = roundedRoute(route.points, 16, data?.boxes ?? []);
+      );
+    return data?.pending ? { ...value, complete: false } : value;
+  }, [sourceX, sourceY, targetX, targetY, routeX, data]);
+  const path =
+    data?.plannedRoute?.path ??
+    roundedRoute(route.points, 16, data?.pending ? [] : (data?.boxes ?? []));
   const horizontal = route.points
     .slice(1)
     .findIndex(
@@ -392,8 +397,19 @@ function ShortcutEdge({
   );
 }
 const edgeTypes = { shortcut: ShortcutEdge };
+function CanvasBackground() {
+  const { zoom } = useViewport();
+  const scale = 2 ** Math.floor(Math.log2(Math.max(0.01, zoom)));
+  return (
+    <Background
+      gap={22 / scale}
+      size={1.1 / Math.max(0.01, zoom)}
+      color="var(--graph-grid, #999)"
+    />
+  );
+}
 const nodeTypes = {
-  blueprint: BlueprintNode,
+  blueprint: memo(BlueprintNode),
   loopArea: LoopAreaNode,
   methodArea: MethodAreaNode,
 };
@@ -456,6 +472,10 @@ export default function FlowCanvas({
     "setViewport" | "getViewport" | "getNodes"
   > | null>(null);
   const container = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const shell = container.current?.closest<HTMLElement>(".workbench");
+    return () => shell?.removeAttribute("data-canvas-moving");
+  }, []);
   const viewportWidth = useRef(0);
   const method = graph.methods.find((candidate) => candidate.id === methodId);
   const scopeMethodId = overview ? "overview" : methodId;
@@ -584,6 +604,17 @@ export default function FlowCanvas({
   const scope = `${projectId}/${graph.revisionId}/${graph.analysisId}/${scopeMethodId}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+  useEffect(() => {
+    const focus = (event: Event) => {
+      const id = (event as CustomEvent).detail?.nodeId;
+      const node = nodesRef.current.find(candidate => candidate.id === id);
+      if (!node || !flow.current) return;
+      const area = safeArea(), zoom = Math.max(.75, Math.min(1, flow.current.getViewport().zoom));
+      void flow.current.setViewport({ x: area.x + area.width / 2 - (node.position.x + 132) * zoom, y: area.y + area.height / 2 - (node.position.y + 42) * zoom, zoom });
+    };
+    window.addEventListener("java-blueprints:tour-focus-node", focus);
+    return () => window.removeEventListener("java-blueprints:tour-focus-node", focus);
+  }, []);
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
       if (
@@ -1218,84 +1249,53 @@ export default function FlowCanvas({
     setDropTarget(null);
     setHoverKind(null);
   }, [scope, stale, readOnly]);
+  const routeScene = useMemo(() => {
+    const methods = new Map(methodNodes.map((n) => [n.id, n.methodId]));
+    return {
+      boxes: sceneNodes.map((node) => ({
+        id: node.id,
+        ...node.position,
+        width: node.measured?.width ?? 264,
+        height: node.measured?.height ?? 84,
+        methodId: methods.get(node.id),
+      })),
+      edges: edges.map(({ id, source, target, kind }) => ({
+        id,
+        source,
+        target,
+        kind,
+      })),
+      ghost: provisional
+        ? {
+            id: "preview-obstacle",
+            ...provisional.ghost,
+            methodId: provisional.methodId,
+          }
+        : undefined,
+    };
+  }, [sceneNodes, methodNodes, edges, provisional]);
+  const routing = useFlowRoutes(routeScene);
   const renderedEdges = useMemo(() => {
     const routes = routeFlowEdges(sceneNodes, edges);
-    const boxes = sceneNodes.map((node) => ({
-      id: node.id,
-      ...node.position,
-      width: node.measured?.width ?? 264,
-      height: node.measured?.height ?? 84,
-    }));
-    if (provisional)
-      boxes.push({ id: "preview-obstacle", ...provisional.ghost });
-    const planned = new Map<
-      string,
-      ReturnType<typeof planFlowRoutes>["routes"] extends Map<string, infer R>
-        ? R
-        : never
-    >();
-    const plannedObstacles = new Map<string, RouteBox[]>();
+    const boxes = routeScene.boxes;
+    const nodesById = new Map(sceneNodes.map((n) => [n.id, n]));
+    const boxesById = new Map(boxes.map((b) => [b.id, b]));
+    const planned = routing.routes;
     const realMethods = new Map(methodNodes.map((n) => [n.id, n.methodId]));
-    const groups = new Set(sceneNodes.map((n) => realMethods.get(n.id)));
-    for (const group of groups) {
-      const groupIds = new Set(
-        sceneNodes
-          .filter((n) => realMethods.get(n.id) === group)
-          .map((n) => n.id),
-      );
-      const ownBoxes = boxes.filter((b) => groupIds.has(b.id));
-      const nearby = boxes.filter(
-        (b) =>
-          groupIds.has(b.id) ||
-          ownBoxes.some(
-            (o) => Math.abs(o.x - b.x) < 500 && Math.abs(o.y - b.y) < 250,
-          ),
-      );
-      const plan = planFlowRoutes(
-        provisional && provisional.methodId === group
-          ? [...nearby, { id: "preview-obstacle", ...provisional.ghost }]
-          : nearby,
-        edges.filter((e) => groupIds.has(e.source) && groupIds.has(e.target)),
-      );
-      for (const [id, route] of plan.routes) {
-        planned.set(id, route);
-        plannedObstacles.set(id, plan.obstacles);
-      }
-    }
-    const labelBoxes = edges
-      .filter((edge) => edge.kind === "true" || edge.kind === "false")
-      .flatMap((edge) => {
-        const source = boxes.find((box) => box.id === edge.source);
-        const target = boxes.find((box) => box.id === edge.target);
-        if (!source || !target) return [];
-        const { sourceSide } = flowPorts(source, target, edge.kind);
-        const at = branchLabelPosition(
-          routePort(source, sourceSide),
-          sourceSide,
-        );
-        return [
-          {
-            id: `label:${edge.id}`,
-            x: at.x - BRANCH_BADGE.width / 2,
-            y: at.y - BRANCH_BADGE.height / 2,
-            ...BRANCH_BADGE,
-          },
-        ];
-      });
     const departures = new Map<number, number>();
     const arrivals = new Map<number, number>();
     return edges.map((edge) => {
-      const source = sceneNodes.find((node) => node.id === edge.source);
-      const target = sceneNodes.find((node) => node.id === edge.target);
+      const source = nodesById.get(edge.source);
+      const target = nodesById.get(edge.target);
       const sourceRow = source?.position.y ?? 0,
         targetRow = target?.position.y ?? 0;
       const leaving = departures.get(sourceRow) ?? 0,
         entering = arrivals.get(targetRow) ?? 0;
       departures.set(sourceRow, leaving + 1);
       arrivals.set(targetRow, entering + 1);
-      const sourceBox = boxes.find((box) => box.id === edge.source);
-      const targetBox = boxes.find((box) => box.id === edge.target);
-      const plannedRoute = planned.get(edge.id);
+      const sourceBox = boxesById.get(edge.source);
+      const targetBox = boxesById.get(edge.target);
+      const plannedRoute = planned?.get(edge.id);
       const ports =
         plannedRoute ??
         (sourceBox && targetBox
@@ -1346,7 +1346,8 @@ export default function FlowCanvas({
           routeX:
             routes.get(edge.id) ??
             ((source?.position.x ?? 0) + (target?.position.x ?? 0)) / 2 + 132,
-          boxes: plannedObstacles.get(edge.id) ?? [...boxes, ...labelBoxes],
+          boxes: [],
+          pending: !plannedRoute,
           plannedRoute,
           labelAtTarget: edge.kind === "case" || edge.kind === "default",
           ...ports,
@@ -1361,7 +1362,15 @@ export default function FlowCanvas({
         },
       };
     });
-  }, [sceneNodes, edges, selected, methodNodes, provisional]);
+  }, [
+    sceneNodes,
+    edges,
+    selected,
+    methodNodes,
+    provisional,
+    routeScene,
+    routing.routes,
+  ]);
   const renderedNodes = useMemo(() => {
     const boxes = sceneNodes.map((node) => ({
       id: node.id,
@@ -1553,9 +1562,13 @@ export default function FlowCanvas({
       className={
         "flow-area" +
         (overview ? " flow-overview" : "") +
+        (sceneNodes.length > 100 ? " flow-large" : "") +
         (spacePan ? " space-pan" : "")
       }
       data-graph-view={overview ? "overview" : "method"}
+      data-routing-state={
+        routing.pending ? "pending" : routing.failed ? "limited" : "ready"
+      }
       data-provisional-scene={provisional ? "true" : undefined}
       ref={container}
       onPointerDownCapture={(event) => {
@@ -1669,6 +1682,13 @@ export default function FlowCanvas({
           </button>
         </div>
       )}
+      {(routing.pending || routing.failed) && (
+        <span className="graph-routing-status" role="status">
+          {routing.pending
+            ? "Прокладываем связи…"
+            : "Не удалось проложить часть связей"}
+        </span>
+      )}
       <ReactFlow
         onInit={(instance) => {
           flow.current = instance;
@@ -1710,7 +1730,25 @@ export default function FlowCanvas({
         onSelectionDragStop={(_, selectedNodes) => {
           if (selectedNodes[0]) void saveLayout(selectedNodes[0]);
         }}
+        onMoveStart={() => {
+          if (nodesRef.current.length > 100)
+            container.current
+              ?.closest<HTMLElement>(".workbench")
+              ?.setAttribute("data-canvas-moving", "true");
+        }}
+        onMove={(_, viewport) => {
+          const element = container.current;
+          const level =
+            nodesRef.current.length > 100 && viewport.zoom < 0.22
+              ? "overview"
+              : "full";
+          if (element && element.dataset.detailLevel !== level)
+            element.dataset.detailLevel = level;
+        }}
         onMoveEnd={(event, viewport) => {
+          container.current
+            ?.closest<HTMLElement>(".workbench")
+            ?.removeAttribute("data-canvas-moving");
           // Controls finish programmatic animations too. Ignore only the default
           // viewport before this method's first initialization.
           if (!event && initializedCamera.current !== cameraKeyRef.current)
@@ -1755,7 +1793,7 @@ export default function FlowCanvas({
         nodesConnectable={false}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         minZoom={overview ? 0.03 : 0.15}
-        onlyRenderVisibleElements={overview}
+        onlyRenderVisibleElements={sceneNodes.length > 1500}
         maxZoom={1.5}
         attributionPosition="bottom-left"
       >
@@ -1818,7 +1856,7 @@ export default function FlowCanvas({
             </div>
           </ViewportPortal>
         )}
-        <Background gap={22} size={1} color="var(--graph-grid, #d8ddcf)" />
+        <CanvasBackground />
         <Controls
           showInteractive={false}
           showFitView={false}

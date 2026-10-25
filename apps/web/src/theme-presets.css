@@ -14,6 +14,22 @@
   --text: var(--theme-text);
   --muted: var(--theme-muted);
   --accent: var(--theme-accent);
+  --lime: var(--theme-accent);
+  --green: var(--theme-accent);
+}
+:root[data-theme-preset] .projects-page button.primary,
+:root[data-theme-preset] .projects-page button.primary:hover:not(:disabled) {
+  color: var(--theme-on-accent);
+  background: var(--theme-accent);
+  border-color: var(--theme-accent);
+}
+:root[data-theme-preset] .projects-page .sample-icon,
+:root[data-theme-preset] .projects-page .sample-row .arrow {
+  color: var(--theme-accent);
+  background: color-mix(in srgb, var(--theme-accent) 12%, var(--theme-surface));
+}
+:root[data-theme-preset] .projects-page .sample-row:hover {
+  border-color: var(--theme-accent);
 }
 :root[data-theme-preset] .product-page {
   background: var(--theme-background);

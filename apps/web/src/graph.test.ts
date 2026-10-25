@@ -1,6 +1,31 @@
 // @ts-nocheck -- Native Node test execution intentionally uses minimal API fixtures.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { computeRoutePlan } from "./flowRoutePlan.ts";
+
+test("background route scene preserves real ports, labels and obstacle-safe geometry across methods", () => {
+  const scene = {
+    boxes: [
+      { id: "check", methodId: "a", x: 300, y: 0, width: 264, height: 84 },
+      { id: "yes", methodId: "a", x: 20, y: 150, width: 264, height: 84 },
+      { id: "no", methodId: "a", x: 600, y: 150, width: 264, height: 84 },
+      { id: "other", methodId: "b", x: 1100, y: 0, width: 264, height: 84 },
+      { id: "end", methodId: "b", x: 1100, y: 150, width: 264, height: 84 },
+    ],
+    edges: [ { id: "true", source: "check", target: "yes", kind: "true" }, { id: "false", source: "check", target: "no", kind: "false" }, { id: "next", source: "other", target: "end", kind: "normal" } ],
+  };
+  const copy = structuredClone(scene);
+  const routes = computeRoutePlan(scene);
+  assert.equal(routes.size, 3);
+  for (const [id, route] of routes) {
+    assert.equal(route.complete, true, id);
+    assert.ok(route.path.startsWith("M "));
+    assert.ok(route.points.length >= 2);
+  }
+  assert.ok(routes.get("true").label);
+  assert.ok(routes.get("false").label);
+  assert.deepEqual(scene, copy);
+});
 import {
   planFlowRoutes,
   BRANCH_BADGE,

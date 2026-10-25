@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import TourButton from "./TourButton";
 import type { ReactNode } from "react";
 import { panelIds, panelLabels, visiblePanels } from "./workspaceLayout";
 import type { WorkspaceController } from "./Workspace";
@@ -48,6 +49,9 @@ export default function WorkspaceMenu({
   ) {
     return (
       <button
+        data-tour={
+          label === "Сохранить расположение проекта" ? "save-layout" : undefined
+        }
         type="button"
         disabled={disabled}
         onClick={(e) => {
@@ -75,7 +79,12 @@ export default function WorkspaceMenu({
           }
         }}
       >
-        <summary>{label}</summary>
+        <summary
+          data-assistant-menu={label}
+          data-tour={label === "Вид" ? "workspace-view" : undefined}
+        >
+          {label}
+        </summary>
         <div className="workspace-menu-popup">{children}</div>
       </details>
     );
@@ -105,7 +114,12 @@ export default function WorkspaceMenu({
           {item("Создать файл", actions.createFile, actions.importDisabled)}
           {item("Создать папку", actions.createFolder, actions.importDisabled)}
           {item("Импорт файлов…", actions.import, actions.importDisabled)}
-          {item("Сохранить", actions.save, actions.saveDisabled, "Ctrl+S")}
+          {item(
+            "Сохранить файл на компьютер",
+            actions.save,
+            actions.saveDisabled,
+            "Ctrl+S",
+          )}
           {item("Экспорт версии", actions.export, actions.exportDisabled)}
           {archiveItems}
         </>,
@@ -155,12 +169,26 @@ export default function WorkspaceMenu({
           {item("Схема и код", () => w.preset("default"))}
           {item("Работа с кодом", () => w.preset("code"))}
           {item("Проверка изменений", () => w.preset("review"))}
-          {item("Сбросить расположение", () => w.preset("default"))}
+          {item("Сохранить расположение проекта", () => w.saveLayout())}
+          {item("Сделать расположение базовым", () => w.saveLayout(true))}
+          {item("Сбросить расположение", () => void w.restoreLayout())}
+          {item(
+            w.navigationDocked
+              ? "Навигация на полотне"
+              : "Навигация в верхней панели",
+            w.toggleNavigationDock,
+          )}
+          {w.layoutNotice && (
+            <span className="workspace-menu-note" role="status">
+              {w.layoutNotice}
+            </span>
+          )}
         </>,
       )}
       {menu(
         "Справка",
         <>
+          <TourButton label="Пройти обучение редактору" mode="context" />
           <span className="workspace-menu-note">Java Blueprints · Java 21</span>
           <span className="workspace-menu-hint">
             Выберите узел → измените → проверьте diff → примените.

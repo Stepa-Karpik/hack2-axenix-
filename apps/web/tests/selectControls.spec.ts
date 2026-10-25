@@ -83,7 +83,7 @@ async function fixture(page: Page) {
     name: "Знакомство с JavaBlueprints",
   });
   await expect(intro).toBeVisible();
-  await intro.getByRole("button", { name: "Пропустить", exact: true }).click();
+  await intro.getByRole("button", { name: "Закрыть обучение", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Поделиться", exact: true }),
   ).toBeEnabled();

@@ -147,7 +147,7 @@ async function fixture(
     });
     await expect(intro).toBeVisible();
     await intro
-      .getByRole("button", { name: "Пропустить", exact: true })
+      .getByRole("button", { name: "Закрыть обучение", exact: true })
       .click();
   }
   await expect(

@@ -1,10 +1,47 @@
-/* Tour blocks workspace actions while its keyboard focus stays in the dialog. */
+/* Only the highlighted control and the guide card accept pointer interaction. */
 .guided-tour.guided-tour {
+  pointer-events: none;
+}
+.tour-shield {
+  position: fixed;
   pointer-events: auto;
+  z-index: 13000;
+}
+.tour-shield.tour-waiting {
+  inset: 0;
+  background: #000a;
 }
 .guided-tour .tour-card {
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
+  transition: none;
+  animation: tour-card-in 160ms ease-out;
+}
+.guided-tour .tour-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.guided-tour .tour-card-heading button {
+  border: 0;
+  font-size: 20px;
+  padding: 0 5px;
+}
+.guided-tour .tour-card-actions {
+  display: flex;
+  justify-content: space-between;
+}
+.guided-tour .tour-action-hint {
+  color: var(--theme-accent);
+  font-size: 12px;
+}
+@keyframes tour-card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .guided-tour .tour-card:focus-visible {
   outline: 2px solid var(--theme-accent, #b8f38a);

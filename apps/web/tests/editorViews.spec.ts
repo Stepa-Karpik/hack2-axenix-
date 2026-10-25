@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 const source =
@@ -42,7 +43,7 @@ test("fresh project never inherits the caret of another project with the same fi
   );
   await editor.focus();
   await page.keyboard.insertText("// B CARET\n");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect
     .poll(async () => (await head(page.request, b.base)).files[0].canonicalText)
     .toContain("// B CARET");
@@ -125,7 +126,7 @@ test("saved caret returns after a delayed source response without creating an em
     );
     await editor.focus();
     await page.keyboard.insertText("// RESTORED END\n");
-    await page.keyboard.press("Control+s");
+    await publishProject(page);
     await expect
       .poll(async () => (await head(page.request, base)).files[0].canonicalText)
       .toContain("// RESTORED END");

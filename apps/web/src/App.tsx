@@ -1,9 +1,14 @@
+import AssistantHost from "./AssistantHost";
+import { registerAssistantWorkspace } from "./assistantBridge";
+import type { AssistantWorkspace } from "./assistantBridge";
+import { searchProject } from "./searchIndex";
 import ReportDownloads from "./ReportDownloads";
 import ImportReview from "./ImportReview";
 import type { ImportTree } from "./ImportReview";
 import { isSaveShortcut } from "./shortcuts";
 import ProjectSearch from "./ProjectSearch";
 import GuidedTour, { TargetSpotlight } from "./Spotlight";
+import TourButton from "./TourButton";
 import GitHubSettings from "./GitHubSettings";
 import GitHubLoginButton from "./GitHubLoginButton";
 import GitHubSignup from "./GitHubSignup";
@@ -232,9 +237,11 @@ function AppRoutes() {
   return (
     <>
       <RouteContent path={path} />
+      <AssistantHost />
       {!/^\/(?:auth\/)?(?:login|register|forgot-password|reset-password|verify-email)\/?$/.test(
         path,
       ) &&
+        path !== "/" &&
         path !== "/github/complete" && <GuidedTour path={path} />}
     </>
   );
@@ -575,7 +582,6 @@ function Projects() {
       <div className="projects-page">
         <ProductSidebar active="/projects" />
         <header className="home-header">
-          <Brand />
           <AccountNav />
         </header>
         <main className="project-main">
@@ -601,7 +607,6 @@ function Projects() {
     <div className="projects-page">
       <ProductSidebar active="/projects" />
       <header className="home-header">
-        <Brand />
         <AccountNav />
       </header>
       <main className="project-main">
@@ -1449,7 +1454,7 @@ function Workbench({
       if (isSaveShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
-        void save();
+        downloadDraft();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !accessReadOnly) {
         e.preventDefault();
@@ -1471,7 +1476,7 @@ function Workbench({
     // Capture Save before Monaco handles it and stops the event bubbling.
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [save, dirty, accessReadOnly]);
+  }, [save, dirty, accessReadOnly, file, files]);
   useEffect(() => {
     setReportId(undefined);
     if (!runId) {
@@ -2293,6 +2298,7 @@ function Workbench({
     }
   }
   function downloadDraft() {
+    if (!file || !(file in files)) return;
     const a = document.createElement("a");
     const url = URL.createObjectURL(
       new Blob([files[file] ?? ""], { type: "text/plain" }),
@@ -2300,7 +2306,7 @@ function Workbench({
     a.href = url;
     a.download = file.split("/").pop() ?? "Main.java";
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   const report = job?.result?.report;
   const exactMatched =
@@ -2311,6 +2317,366 @@ function Workbench({
   const method = graph?.methods.find((m) => m.id === methodId);
   const expressions =
     graph?.nodes.filter((n) => n.methodId === methodId && !!editRange(n)) ?? [];
+  const assistantWorkspace = useRef<AssistantWorkspace | null>(null);
+  assistantWorkspace.current = {
+    context: () => ({
+      projectId,
+      projectName: project?.name,
+      revisionId: revision?.id,
+      filePath: file,
+      methodId,
+      methodName: method?.signature,
+      entryPoint: javaEntryHint(
+        revision?.files.find((source) => source.path === file),
+      ),
+      testJobId: testJob?.id,
+      runJobId: runJob?.id,
+      dirty,
+      readonly: accessReadOnly,
+    }),
+    execute: async (command) => {
+      if (!project || !revision || loadingRevision)
+        return { ok: false, message: "Проект ещё загружается." };
+      if (command.args.projectId && command.args.projectId !== projectId)
+        return {
+          ok: false,
+          message: "Открыт другой проект. Запросите действие снова.",
+        };
+      if (
+        ["run_tests", "run_program", "workspace_action", "optimize"].includes(
+          command.type,
+        ) &&
+        ((command.args.revisionId && command.args.revisionId !== revision.id) ||
+          (command.args.filePath && command.args.filePath !== file) ||
+          (command.args.methodId && command.args.methodId !== methodId))
+      )
+        return {
+          ok: false,
+          message:
+            "Выбранный файл, метод или версия изменились. Запросите действие снова.",
+        };
+      if (command.type === "show_panel") {
+        const aliases: Record<string, string> = {
+          files: "project",
+          optimization: "analysis",
+          diff: "changes",
+        };
+        const name = String(command.args.panel);
+        if (name === "search") {
+          searchInput.current?.focus();
+          return { ok: true, message: "Поиск по проекту открыт." };
+        }
+        const panel = aliases[name] ?? name;
+        if (
+          ![
+            "code",
+            "graph",
+            "tests",
+            "console",
+            "analysis",
+            "project",
+            "changes",
+            "history",
+          ].includes(panel)
+        )
+          return { ok: false, message: "Неизвестная панель." };
+        await workspace.reveal(panel as "code");
+        if (name === "optimization")
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:assistant-analysis-tab", {
+              detail: { tab: "recommendations" },
+            }),
+          );
+        return { ok: true, message: "Панель открыта: " + name };
+      }
+      if (command.type === "find_symbol") {
+        const query = String(command.args.query ?? "").trim();
+        if (!query || query.length > 120)
+          return { ok: false, message: "Уточните имя для поиска." };
+        const results = searchProject(files, stale ? null : graph, query);
+        if (!results.length)
+          return {
+            ok: false,
+            message: "В открытом проекте совпадений не найдено.",
+          };
+        const hit = results[0];
+        chooseSearch(hit);
+        window.dispatchEvent(
+          new CustomEvent("java-blueprints:assistant-minimize"),
+        );
+        setTimeout(() => {
+          const target = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              hit.kind === "method" ? ".method-item" : "[data-file-path]",
+            ),
+          ).find((el) =>
+            hit.kind === "method"
+              ? el.textContent?.includes(hit.title)
+              : el.getAttribute("data-file-path") === hit.file,
+          );
+          if (target) {
+            target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            setSpotlight(target);
+          }
+        }, 160);
+        return {
+          ok: true,
+          message: `Найдено ${results.length}. Открыто: ${hit.title} · ${hit.file}.`,
+        };
+      }
+      if (command.type === "workspace_action") {
+        const action = String(command.args.action);
+        if (accessReadOnly || busy || loadingRevision)
+          return {
+            ok: false,
+            message:
+              "Действие недоступно: нужен доступ к редактированию и свободный редактор.",
+          };
+        window.dispatchEvent(
+          new CustomEvent("java-blueprints:assistant-minimize"),
+        );
+        if (action === "create_file" || action === "create_folder") {
+          await workspace.reveal("project");
+          setCreateCommand({
+            kind: action === "create_file" ? "file" : "folder",
+            id: Date.now(),
+          });
+          return {
+            ok: true,
+            message:
+              "Открыта форма создания. Введите имя и нажмите Enter; файл или папка ещё не созданы.",
+          };
+        }
+        if (action === "import") {
+          setImportChooser(true);
+          return {
+            ok: true,
+            message:
+              "Открыт импорт. Выберите источник и файлы, затем подтвердите импорт.",
+          };
+        }
+        if (action === "run_settings" || action === "test_settings") {
+          setDialog(action === "run_settings" ? "run" : "compare");
+          return {
+            ok: true,
+            message: "Открыты параметры. Выполнение ещё не началось.",
+          };
+        }
+        if (action === "save_code") {
+          const ok = await save();
+          return {
+            ok: !!ok,
+            message: ok
+              ? "Код проекта сохранён."
+              : "Код не сохранён. Проверьте сообщение редактора.",
+          };
+        }
+        if (action === "save_layout" || action === "base_layout") {
+          await workspace.saveLayout(action === "base_layout");
+          return {
+            ok: true,
+            message: "Расположение сохранено в этом браузере.",
+          };
+        }
+        if (action === "restore_layout") {
+          await workspace.restoreLayout();
+          return { ok: true, message: "Расположение восстановлено." };
+        }
+        if (action === "stop") {
+          if (!job || !["queued", "running"].includes(job.status))
+            return {
+              ok: false,
+              message: "Нет текущего выполняющегося задания для остановки.",
+            };
+          await api(base + "/runs/" + job.id + "/cancel", { method: "POST" });
+          setJob(await api<Job>(base + "/runs/" + job.id));
+          return {
+            ok: true,
+            message:
+              "Запрос остановки отправлен. Итоговый статус появится в панели задания.",
+          };
+        }
+        return {
+          ok: false,
+          message: "Неизвестное действие рабочего пространства.",
+        };
+      }
+      if (
+        accessReadOnly ||
+        dirty ||
+        stale ||
+        inFlight ||
+        runnerAvailable === false
+      )
+        return {
+          ok: false,
+          message:
+            "Действие недоступно: сохраните код, дождитесь актуального анализа и завершения текущей операции. Для запуска нужен runner и право редактирования.",
+        };
+      if (command.type === "run_tests" || command.type === "run_program") {
+        const comparison = command.type === "run_tests";
+        await workspace.reveal(comparison ? "tests" : "console");
+        const previous = comparison ? testJob : runJob;
+        if (
+          !previous ||
+          ["queued", "running"].includes(previous.status) ||
+          (previous.revisionId ??
+            previous.result?.report?.candidateRevisionId) !== revision.id
+        ) {
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:assistant-minimize"),
+          );
+          setDialog(comparison ? "compare" : "run");
+          return {
+            ok: true,
+            message: !comparison
+              ? "Открыты параметры запуска текущего файла. Программа ещё не запущена."
+              : "Открыты параметры сравнения для текущего файла. Проверьте класс с main, версии и входы. Тесты ещё не запущены.",
+          };
+        }
+        const next = await api<Job>(base + "/runs/" + previous.id + "/repeat", {
+          method: "POST",
+        });
+        setJob(next);
+        setDock(comparison ? "tests" : "output");
+        navigate(`/projects/${projectId}/runs/${next.id}`);
+        return {
+          ok: true,
+          message:
+            (comparison
+              ? "Проверка поставлена в очередь: "
+              : "Программа поставлена в очередь: ") +
+            next.id +
+            ". Результат появится в панели тестов; прохождение ещё не подтверждено.",
+        };
+      }
+      if (command.type === "optimize") {
+        const opportunity = analysis?.optimizations?.find(
+          (op) => op.methodId === methodId,
+        );
+        const node = graph?.nodes.find(
+          (n) =>
+            n.id === opportunity?.nodeId &&
+            n.allowedOperations?.includes("optimize_membership"),
+        );
+        if (!node || !analysis) {
+          await workspace.reveal("analysis");
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:assistant-analysis-tab", {
+              detail: { tab: "recommendations" },
+            }),
+          );
+          return {
+            ok: false,
+            message:
+              "Для выбранного метода сервис не нашёл поддерживаемой автоматической оптимизации. Открыт анализ: можно рассмотреть рекомендации и извлечение метода.",
+          };
+        }
+        setBusy(true);
+        const epoch = ++proposalEpoch.current;
+        try {
+          const p = await api<Proposal>(base + "/changes", {
+            method: "POST",
+            body: {
+              baseRevisionId: revision.id,
+              analysisId: analysis.id,
+              methodId: node.methodId,
+              nodeId: node.id,
+              operation: "optimize_membership",
+              payload: {},
+              intent: "preserve_behavior",
+            },
+          });
+          if (!mounted.current || epoch !== proposalEpoch.current)
+            return {
+              ok: false,
+              message: "Контекст изменился. Проверьте историю изменений.",
+            };
+          writePrepared(projectId, p.id);
+          restoredProposal.current = p.id;
+          setProposal(p);
+          setDock("changes");
+          const final = await track({
+            id: p.jobId,
+            status: "queued",
+            type: "change",
+          });
+          const ready = await api<Proposal>(base + "/changes/" + p.id);
+          if (!mounted.current || epoch !== proposalEpoch.current)
+            return {
+              ok: false,
+              message:
+                "Контекст изменился. Проверьте подготовленное изменение.",
+            };
+          setProposal(ready);
+          void refreshHistory();
+          return {
+            ok: final.status !== "failed",
+            message:
+              final.status === "failed"
+                ? "Кандидат не прошёл подготовку. Посмотрите ошибку в изменениях."
+                : "Подготовлен отдельный кандидат оптимизации. Исходный код не заменён: просмотрите разницу и сравните версии на тестах перед применением.",
+          };
+        } finally {
+          if (mounted.current) setBusy(false);
+        }
+      }
+      return { ok: false, message: "Команда недоступна в этом контексте." };
+    },
+  };
+  useEffect(
+    () =>
+      registerAssistantWorkspace({
+        context: () => assistantWorkspace.current?.context() ?? {},
+        execute: (command) => assistantWorkspace.current!.execute(command),
+      }),
+    [projectId],
+  );
+  useEffect(() => {
+    const refresh = () => {
+      void api<Project>(base)
+        .then((p) => {
+          if (mounted.current) setProject(p);
+        })
+        .catch(() => {});
+    };
+    window.addEventListener(
+      "java-blueprints:assistant-project-refresh",
+      refresh,
+    );
+    return () =>
+      window.removeEventListener(
+        "java-blueprints:assistant-project-refresh",
+        refresh,
+      );
+  }, [base]);
+  useEffect(() => {
+    for (const [kind, current] of [
+      ["comparison", testJob],
+      ["run", runJob],
+    ] as const) {
+      if (!current) continue;
+      const outcome = current.result?.report?.outcome;
+      window.dispatchEvent(
+        new CustomEvent("java-blueprints:assistant-job", {
+          detail: {
+            kind,
+            id: current.id,
+            status: current.status,
+            outcome,
+            message:
+              current.status === "cancelled"
+                ? "Выполнение отменено."
+                : current.status === "failed"
+                  ? "Выполнение завершилось ошибкой. Проверьте диагностику."
+                  : outcome === "matched_on_tests"
+                    ? "Версии совпали на выбранных тестовых входах."
+                    : "Выполнение завершено. Проверьте результат и входные данные в панели.",
+          },
+        }),
+      );
+    }
+  }, [testJob, runJob]);
   const symbolPanel = (
     <SymbolInspector
       semantics={analysis?.semantics}
@@ -2413,6 +2779,7 @@ function Workbench({
           <History size={17} />
           История
         </button>
+        <TourButton label="Обучение редактору" mode="context" />
       </nav>
     ),
     history: (
@@ -2617,7 +2984,7 @@ function Workbench({
         {graph && stale && (
           <p className="small quiet" role="status">
             {dirty
-              ? "Редактор содержит локальный черновик. Схема показывает сохранённую версию; Ctrl+S сохранит код и обновит схему."
+              ? "В редакторе есть несохранённые изменения. Схема относится к сохранённой версии."
               : "Схема относится к предыдущей сохранённой версии; обновление ещё не завершено."}
           </p>
         )}
@@ -2780,7 +3147,8 @@ function Workbench({
             className="file-tabs-save"
             disabled={!dirty || saving || conflict || readOnly}
             onClick={() => void save()}
-            title="Ctrl+S"
+            title="Сохранить изменения в проекте"
+            aria-label="Сохранить изменения в проекте"
           >
             {saving ? "Сохранение…" : "Сохранить"}
           </button>
@@ -3443,7 +3811,14 @@ function Workbench({
       </aside>
     ),
     console: (
-      <div className="dock-content" data-source-file={file}>
+      <div
+        className="dock-content"
+        data-source-file={file}
+        data-assistant-target="run-result"
+        data-assistant-run-result
+        data-assistant-job-id={runJob?.id}
+        data-assistant-job-status={runJob?.status}
+      >
         {resultContext("run", runJob)}
         {rerunButton(runJob)}
         <>
@@ -3508,7 +3883,14 @@ function Workbench({
       </div>
     ),
     tests: (
-      <div className="dock-content" data-source-file={file}>
+      <div
+        className="dock-content"
+        data-source-file={file}
+        data-assistant-target="tests-result"
+        data-assistant-test-result
+        data-assistant-job-id={testJob?.id}
+        data-assistant-job-status={testJob?.status}
+      >
         {resultContext("compare", testJob)}
         {rerunButton(testJob)}
         {testJob?.type === "compare" &&
@@ -3742,6 +4124,51 @@ function Workbench({
       data-readonly={accessReadOnly || undefined}
     >
       <header className="toolbar glass-topbar">
+        {!workspace.navigationDocked && (
+          <button
+            type="button"
+            className="return-navigation"
+            data-return-navigation
+            onClick={workspace.toggleNavigationDock}
+          >
+            <PanelsTopLeft size={16} />
+            Закрепить панель
+          </button>
+        )}
+        {workspace.navigationDocked &&
+          !workspace.layout.hidden?.includes("navigation") && (
+            <div
+              className={
+                "topbar-navigation" +
+                (workspace.collapsedNavigation ? " collapsed" : " expanded")
+              }
+            >
+              <button
+                className="topbar-navigation-toggle"
+                aria-expanded={!workspace.collapsedNavigation}
+                aria-label="JavaBlueprints — навигация"
+                onClick={workspace.toggleNavigation}
+              >
+                <span className="navigation-wordmark">
+                  <img src="/brand-lockup.png" alt="" />
+                  JavaBlueprints
+                </span>
+                <ChevronDown size={14} />
+              </button>
+              {!workspace.collapsedNavigation && (
+                <div className="topbar-navigation-body">
+                  {panels.navigation}
+                  <button
+                    className="navigation-undock"
+                    onClick={workspace.toggleNavigationDock}
+                  >
+                    <PanelsTopLeft size={15} />
+                    На полотно
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         <ProjectSearch
           files={files}
           graph={stale ? null : graph}
@@ -3785,7 +4212,7 @@ function Workbench({
                 workspace.reveal("project");
                 setCreateCommand({ kind: "folder", id: Date.now() });
               },
-              save: () => void save(),
+              save: downloadDraft,
               import: () => setImportChooser(true),
               export: () => void exportRevision(),
               projects: () => navigate("/projects"),
@@ -3798,7 +4225,7 @@ function Workbench({
                 });
               },
               editDisabled: !file || readOnly || busy || loadingRevision,
-              saveDisabled: !dirty || saving || conflict || readOnly,
+              saveDisabled: !file || !(file in files),
               runDisabled:
                 accessReadOnly ||
                 !revision ||
@@ -3904,7 +4331,10 @@ function Workbench({
         </div>
         <Workspace
           controller={workspace}
-          panels={panels}
+          panels={{
+            ...panels,
+            navigation: workspace.navigationDocked ? null : panels.navigation,
+          }}
           canvasTitle={
             <>
               <div className="canvas-breadcrumb">
@@ -4019,6 +4449,7 @@ function Workbench({
           <span className="dock-divider" />
           <button
             className="dock-icon"
+            data-assistant-target="tests-start"
             aria-label="Сравнить"
             title="Сравнить версии"
             disabled={
@@ -4034,6 +4465,7 @@ function Workbench({
           </button>
           <div className="dock-run-control">
             <button
+              data-assistant-target="run-start"
               className="dock-run"
               disabled={
                 accessReadOnly ||
@@ -4558,6 +4990,7 @@ function RunDialog({
           </button>
           <button
             className="primary"
+            data-assistant-start
             onClick={() => void submit()}
             disabled={
               busy ||

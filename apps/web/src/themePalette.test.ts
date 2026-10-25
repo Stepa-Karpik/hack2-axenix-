@@ -76,3 +76,10 @@ test("stored theme preferences validate unknown input and migrate legacy mode wi
   assert.equal(parsePreference(" ".repeat(4097)), null);
   assert.equal(parsePreference("null"), null);
 });
+
+test("fresh and corrupt storage defaults to OLED while explicit choices survive", () => {
+  assert.equal(preferenceFromStorage(null, null).preset, "oled");
+  assert.equal(preferenceFromStorage("broken", null).preset, "oled");
+  assert.equal(preferenceFromStorage(null, "dark").preset, "dark");
+  assert.equal(preferenceFromStorage(null, "light").preset, "light");
+});

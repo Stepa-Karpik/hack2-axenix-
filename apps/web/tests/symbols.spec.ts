@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { setTheme } from "./flowAssertions";
 import { revealPanel } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
@@ -207,7 +208,7 @@ test("symbol identities, cross-file declarations and stale binding guards", asyn
     page.getByRole("button", { name: "К объявлению", exact: true }),
   ).toHaveCount(0);
   await expect(page.locator(".monaco-editor .code-binding")).toHaveCount(0);
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect(
     page.getByText("Исходник сохранён · ошибка разбора"),
   ).toBeVisible({ timeout: 30000 });

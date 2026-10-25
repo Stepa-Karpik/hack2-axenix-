@@ -255,6 +255,7 @@ export default function ProjectExplorer({
     <>
       <div className="explorer-tools">
         <button
+          data-assistant-target="files_create"
           aria-label="Создать файл"
           title="Создать файл"
           disabled={editingDisabled}
@@ -263,6 +264,7 @@ export default function ProjectExplorer({
           <FilePlus2 size={16} />
         </button>
         <button
+          data-assistant-target="files_folder"
           aria-label="Создать папку"
           title="Создать папку"
           disabled={editingDisabled}
@@ -271,6 +273,7 @@ export default function ProjectExplorer({
           <FolderPlus size={16} />
         </button>
         <button
+          data-assistant-target="files_rename"
           aria-label="Переименовать"
           title="Переименовать · F2"
           disabled={editingDisabled || !selected}
@@ -287,6 +290,7 @@ export default function ProjectExplorer({
           <Move size={15} />
         </button>
         <button
+          data-assistant-target="files_delete"
           aria-label="Удалить выбранный путь"
           title="Удалить файл или папку"
           disabled={editingDisabled || !selected}
@@ -298,6 +302,7 @@ export default function ProjectExplorer({
           <Trash2 size={15} />
         </button>
         <button
+          data-assistant-target="files_download"
           aria-label="Скачать выбранный путь"
           title="Скачать выбранный путь сохранённой версии"
           disabled={disabled || !selected}
@@ -305,7 +310,11 @@ export default function ProjectExplorer({
         >
           <Download size={15} />
         </button>
-        <button disabled={editingDisabled} onClick={onImport}>
+        <button
+          data-assistant-target="files_import"
+          disabled={editingDisabled}
+          onClick={onImport}
+        >
           Импорт
         </button>
       </div>

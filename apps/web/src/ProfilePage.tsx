@@ -26,6 +26,19 @@ type Overview = {
 };
 export default function ProfilePage({ username }: { username: string }) {
   const { session } = useAccount();
+  const [assistantRefresh, setAssistantRefresh] = useState(0);
+  useEffect(() => {
+    const changed = () => setAssistantRefresh((n) => n + 1);
+    window.addEventListener(
+      "java-blueprints:assistant-server-changed",
+      changed,
+    );
+    return () =>
+      window.removeEventListener(
+        "java-blueprints:assistant-server-changed",
+        changed,
+      );
+  }, []);
   const [data, setData] = useState<Overview | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -74,7 +87,7 @@ export default function ProfilePage({ username }: { username: string }) {
     return () => {
       epoch.current++;
     };
-  }, [identity]);
+  }, [identity, assistantRefresh]);
   async function action(path: string, body: unknown = {}, method = "POST") {
     if (lock.current) return;
     const ticket = epoch.current;

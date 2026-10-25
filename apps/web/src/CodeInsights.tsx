@@ -36,6 +36,18 @@ export default function CodeInsights({
 }) {
   const [tab, setTab] = useState<Tab>("node");
   const id = useId();
+  useEffect(() => {
+    const reveal = (event: Event) => {
+      const next = (event as CustomEvent).detail?.tab;
+      if (tabs.some(([key]) => key === next)) setTab(next);
+    };
+    window.addEventListener("java-blueprints:assistant-analysis-tab", reveal);
+    return () =>
+      window.removeEventListener(
+        "java-blueprints:assistant-analysis-tab",
+        reveal,
+      );
+  }, []);
   const quality = analysis?.quality;
   const metric = quality?.methods.find((m) => m.methodId === methodId);
   const method = analysis?.graph?.methods.find((m) => m.id === methodId);
@@ -69,6 +81,7 @@ export default function CodeInsights({
         {tabs.map(([key, label], index) => (
           <button
             key={key}
+            data-assistant-target={`analysis-${key}`}
             type="button"
             id={`${id}-tab-${key}`}
             role="tab"
@@ -107,6 +120,7 @@ export default function CodeInsights({
       <div
         role="tabpanel"
         id={`${id}-panel-node`}
+        data-assistant-target="analysis-content-node"
         className="insight-node"
         aria-labelledby={`${id}-tab-node`}
         hidden={tab !== "node"}
@@ -116,6 +130,7 @@ export default function CodeInsights({
       <div
         role="tabpanel"
         id={`${id}-panel-problems`}
+        data-assistant-target="analysis-content-problems"
         aria-labelledby={`${id}-tab-problems`}
         hidden={tab !== "problems"}
       >
@@ -161,6 +176,7 @@ export default function CodeInsights({
       <div
         role="tabpanel"
         id={`${id}-panel-recommendations`}
+        data-assistant-target="analysis-content-recommendations"
         aria-labelledby={`${id}-tab-recommendations`}
         hidden={tab !== "recommendations"}
       >
@@ -245,6 +261,7 @@ export default function CodeInsights({
       <div
         role="tabpanel"
         id={`${id}-panel-metrics`}
+        data-assistant-target="analysis-content-metrics"
         aria-labelledby={`${id}-tab-metrics`}
         hidden={tab !== "metrics"}
       >

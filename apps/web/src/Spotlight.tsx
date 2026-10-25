@@ -1,82 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useAccount } from "./Account";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { go, useAccount } from "./Account";
+import { isSaveShortcut } from "./shortcuts";
+import { homeSteps, workspaceSteps, tourSteps } from "./tourSteps";
+import { getAssistantContext } from "./assistantBridge";
+import type { TourStep } from "./tourSteps";
+import type { TourMode } from "./tourSteps";
+import { placeTourCard } from "./tourPlacement";
 import "./spotlight.css";
-type Step = {
-  target: string;
-  title: string;
-  text: string;
-  panel?: "project" | "graph" | "palette" | "code" | "tests";
-};
-const work: Step[] = [
-  {
-    target: '[data-tile-panel="project"]',
-    panel: "project",
-    title: "Файлы проекта",
-    text: "Импортируйте ZIP, папку или GitHub. Нажмите файл для общего обзора, метод — для отдельной схемы.",
-  },
-  {
-    target: ".project-command-search",
-    panel: "project",
-    title: "Найти в проекте",
-    text: "Ищите по коду, именам или словам «условие», «цикл», «метод». Enter открывает результат.",
-  },
-  {
-    target: "[data-graph-aperture]",
-    panel: "graph",
-    title: "Схема и код",
-    text: "Выберите блок для редактирования. Двойной клик открывает его поля. Ctrl-клик выделяет группу.",
-  },
-  {
-    target: '[data-tile-panel="palette"]',
-    panel: "palette",
-    title: "Добавить блок",
-    text: "Откройте палитру и перетащите оператор, условие или цикл в разрешённое место схемы.",
-  },
-  {
-    target: '[data-tile-panel="code"]',
-    panel: "code",
-    title: "Редактор",
-    text: "Код и схема связаны. Ctrl+S сохраняет весь файл и обновляет анализ; автосохранение работает после паузы.",
-  },
-  {
-    target: ".dock-run-control",
-    title: "Запуск",
-    text: "Выберите класс с main, задайте ввод и аргументы. Ответы Scanner отправляйте в консоли. Квадрат останавливает запуск.",
-  },
-  {
-    target: '[data-tile-panel="tests"]',
-    panel: "tests",
-    title: "Проверить изменения",
-    text: "Сравните две версии на одинаковых входах. Подготовленное изменение сначала покажет diff и пройдёт проверки.",
-  },
-  {
-    target: '.workspace-dock [title="Окна"]',
-    title: "Ваше рабочее место",
-    text: "Открывайте и скрывайте панели. Перетаскивайте за шесть точек, меняйте размеры — расположение и история сохраняются.",
-  },
-  {
-    target: ".local-presence",
-    title: "Профиль и настройки",
-    text: "Оформление, друзья, безопасность и GitHub находятся в отдельных разделах настроек. Знакомство можно повторить.",
-  },
-];
-const home: Step[] = [
-  {
-    target: ".project-heading",
-    title: "Начните с проекта",
-    text: "Создайте пустой проект, откройте пример или импортируйте свои файлы.",
-  },
-  {
-    target: ".project-list",
-    title: "Рабочее пространство",
-    text: "Откройте проект, чтобы перейти к Java-коду и интерактивным схемам. В редакторе знакомство продолжится.",
-  },
-  {
-    target: ".account-nav",
-    title: "Ваш аккаунт",
-    text: "Настройте профиль, внешний вид, друзей и интеграции. Здесь же можно повторить знакомство.",
-  },
-];
+
 export function TargetSpotlight({
   target,
   onClose,
@@ -88,12 +19,46 @@ export function TargetSpotlight({
   useLayoutEffect(() => {
     if (!target) return;
     let frame = 0;
+    const clips: { element: Element; x: boolean; y: boolean }[] = [];
+    for (
+      let parent = target.parentElement;
+      parent;
+      parent = parent.parentElement
+    ) {
+      const style = getComputedStyle(parent);
+      const x = /auto|scroll|hidden|clip/.test(style.overflowX);
+      const y = /auto|scroll|hidden|clip/.test(style.overflowY);
+      if (x || y) clips.push({ element: parent, x, y });
+    }
     const update = () => {
       if (!target.isConnected) {
         onClose();
         return;
       }
-      setRect(target.getBoundingClientRect());
+      const bounds = target.getBoundingClientRect();
+      let left = Math.max(0, bounds.left),
+        top = Math.max(0, bounds.top),
+        right = Math.min(innerWidth, bounds.right),
+        bottom = Math.min(innerHeight, bounds.bottom);
+      for (const clip of clips) {
+        const parent = clip.element.getBoundingClientRect();
+        if (clip.x) {
+          left = Math.max(left, parent.left);
+          right = Math.min(right, parent.right);
+        }
+        if (clip.y) {
+          top = Math.max(top, parent.top);
+          bottom = Math.min(bottom, parent.bottom);
+        }
+      }
+      setRect(
+        new DOMRect(
+          left,
+          top,
+          Math.max(0, right - left),
+          Math.max(0, bottom - top),
+        ),
+      );
       frame = requestAnimationFrame(update);
     };
     update();
@@ -127,95 +92,180 @@ export function TargetSpotlight({
 export default function GuidedTour({ path }: { path: string }) {
   const { session } = useAccount();
   const user = session?.user?.id;
-  const scope = path.startsWith("/projects/")
-    ? "workspace"
-    : path.startsWith("/settings")
-      ? "settings"
-      : path.startsWith("/u/")
-        ? "profile"
-        : "home";
-  const key = "java-blueprints:onboarding:v1:" + user + ":" + scope;
-  const [active, setActive] = useState(false),
-    [index, setIndex] = useState(0),
-    [rect, setRect] = useState<DOMRect | null>(null),
-    [unavailable, setUnavailable] = useState(false);
-  const previousFocus = useRef<HTMLElement | null>(null),
+  const [active, setActive] = useState(false);
+  const [customSteps, setCustomSteps] = useState<TourStep[] | null>(null);
+  const [completion, setCompletion] = useState("");
+  const baselineJob = useRef<string>("");
+  const [mode, setMode] = useState<TourMode>("full");
+  const [index, setIndex] = useState(0);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [cardSize, setCardSize] = useState({ width: 336, height: 280 });
+  const [viewport, setViewport] = useState({
+    width: innerWidth,
+    height: innerHeight,
+  });
+  const target = useRef<Element | null>(null),
     dialog = useRef<HTMLDivElement>(null);
-  const steps =
-    scope === "workspace"
-      ? work
-      : scope === "home"
-        ? home
-        : [
-            {
-              target: ".product-sidebar",
-              title: "Ваше пространство",
-              text: "Профиль, безопасность, темы, друзья и интеграции всегда доступны в боковой панели.",
-            },
-            {
-              target: ".product-content",
-              title: "Настройте под себя",
-              text: "Изменения профиля и внешнего вида сохраняются в ваших настройках. Публичные и приватные проекты учитывают права доступа.",
-            },
-          ];
-  // Route scope changes before the effect resets the previous tour's index.
+  const previousFocus = useRef<HTMLElement | null>(null),
+    claimed = useRef(false);
+  const steps = useMemo(
+    () => customSteps ?? tourSteps(mode),
+    [mode, customSteps],
+  );
   const displayIndex = Math.min(index, steps.length - 1);
+  const step = steps[displayIndex];
   function finish() {
     try {
-      localStorage.setItem(key, "done");
+      if (!customSteps)
+        localStorage.setItem(
+          `java-blueprints:onboarding:v2:${user}:${mode}`,
+          "done",
+        );
     } catch {}
     setActive(false);
-    const restore = previousFocus.current;
     requestAnimationFrame(() => {
-      if (restore?.isConnected) restore.focus();
+      if (previousFocus.current?.isConnected) previousFocus.current.focus();
     });
   }
+  function advance() {
+    if (claimed.current) return;
+    claimed.current = true;
+    if (displayIndex + 1 < steps.length) setIndex(displayIndex + 1);
+    else finish();
+  }
   useEffect(() => {
-    if (!user || path.includes("login")) {
+    if (!user) {
       setActive(false);
       return;
     }
-    let done = true;
+    let seen = true;
     try {
-      done = localStorage.getItem(key) === "done";
+      seen =
+        localStorage.getItem(`java-blueprints:onboarding:v2:${user}:full`) ===
+          "done" ||
+        ["home", "workspace", "settings", "profile"].some(
+          (scope) =>
+            localStorage.getItem(
+              `java-blueprints:onboarding:v1:${user}:${scope}`,
+            ) === "done",
+        );
     } catch {}
-    if (!done) {
+    if (!seen) {
       previousFocus.current = document.activeElement as HTMLElement;
-      setIndex(0);
+      setMode("full");
+      setIndex(
+        path.startsWith("/projects/")
+          ? homeSteps.length
+          : path === "/projects"
+            ? 0
+            : homeSteps.length + workspaceSteps.length,
+      );
       setActive(true);
-    } else setActive(false);
-  }, [user, key, path]);
+    }
+  }, [user]);
   useEffect(() => {
-    if (!active) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        finish();
-      }
-    };
-    window.addEventListener("keydown", escape, true);
-    return () => window.removeEventListener("keydown", escape, true);
-  }, [active, key]);
-  useEffect(() => {
-    const replay = () => {
+    const replay = (event: Event) => {
       if (!user) return;
+      const full = (event as CustomEvent).detail?.mode === "full";
+      setCustomSteps(null);
+      setCompletion("");
       previousFocus.current = document.activeElement as HTMLElement;
+      setMode(
+        full ? "full" : path.startsWith("/projects/") ? "workspace" : "account",
+      );
       setIndex(0);
       setActive(true);
+      if (full && path !== "/projects") go("/projects");
     };
     window.addEventListener("java-blueprints:tour", replay);
     return () => window.removeEventListener("java-blueprints:tour", replay);
+  }, [user, path]);
+  useEffect(() => {
+    const guide = (event: Event) => {
+      if (!user) return;
+      const steps = (event as CustomEvent<{ steps: TourStep[] }>).detail?.steps;
+      if (!Array.isArray(steps) || !steps.length || steps.length > 30) return;
+      previousFocus.current = document.activeElement as HTMLElement;
+      setCustomSteps(steps);
+      setCompletion("");
+      setIndex(0);
+      setActive(true);
+      claimed.current = false;
+    };
+    window.addEventListener("java-blueprints:assistant-guide", guide);
+    return () =>
+      window.removeEventListener("java-blueprints:assistant-guide", guide);
   }, [user]);
+  useEffect(() => {
+    if (!active || step.action !== "wait") return;
+    const done = (id: string, status: string, message?: string) => {
+      if (
+        !id ||
+        id === (baselineJob.current || step.afterJobId) ||
+        !["succeeded", "failed", "cancelled"].includes(status)
+      )
+        return;
+      setCompletion(
+        message ??
+          (status === "cancelled"
+            ? "Выполнение отменено."
+            : status === "failed"
+              ? "Выполнение завершилось ошибкой. Откройте диагностику."
+              : "Выполнение завершено. Проверьте итог и входные данные в панели."),
+      );
+      advance();
+    };
+    const receive = (event: Event) => {
+      const d = (event as CustomEvent).detail;
+      if (d?.kind === step.waitFor) done(d.id, d.status, d.message);
+    };
+    const entered = Date.now();
+    const inspect = () => {
+      const problem = document.querySelector(
+        '.modal[role="dialog"] [role="alert"]',
+      );
+      const submitting = document.querySelector(
+        "[data-assistant-start]:disabled",
+      );
+      if (problem && !submitting && Date.now() - entered > 400 && customSteps) {
+        const retry = customSteps.findIndex((s) => s.id === "assistant-entry");
+        if (retry >= 0) setIndex(retry);
+        return;
+      }
+      const el = document.querySelector(step.target);
+      if (el)
+        done(
+          el.getAttribute("data-assistant-job-id") ?? "",
+          el.getAttribute("data-assistant-job-status") ?? "",
+        );
+    };
+    const observer = new MutationObserver(inspect);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-assistant-job-id", "data-assistant-job-status"],
+    });
+    window.addEventListener("java-blueprints:assistant-job", receive);
+    inspect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("java-blueprints:assistant-job", receive);
+    };
+  }, [active, step, customSteps]);
   useLayoutEffect(() => {
     if (!active) return;
-    let frame = 0;
-    let scrolled: Element | null = null;
-    const step = steps[displayIndex];
+    claimed.current = false;
+    target.current = null;
     setRect(null);
     setUnavailable(false);
+    let frame = 0,
+      scrolled: Element | null = null,
+      focusedNode: Element | null = null;
+    const started = performance.now();
     const reveal = () => {
-      if (scope === "workspace" && step.panel)
+      if (step.panel)
         window.dispatchEvent(
           new CustomEvent("java-blueprints:tour-reveal", {
             detail: { panel: step.panel },
@@ -223,63 +273,88 @@ export default function GuidedTour({ path }: { path: string }) {
         );
     };
     reveal();
-    // Also reach workspace listeners mounted later in this React commit.
-    const retry = setTimeout(reveal, 100);
-    let missingSince: number | null = null;
+    const retry = setTimeout(reveal, 120);
     const measure = () => {
-      const el = Array.from(document.querySelectorAll(step.target)).find(
-        (candidate) => {
-          const box = candidate.getBoundingClientRect();
-          const style = getComputedStyle(candidate);
-          return (
-            box.width > 0 &&
-            box.height > 0 &&
-            style.visibility !== "hidden" &&
-            style.display !== "none"
+      const candidates = step.target
+        .split(",")
+        .flatMap((selector) =>
+          Array.from(document.querySelectorAll(selector.trim())),
+        );
+      let found: Element | null = null;
+      for (const element of candidates) {
+        const box = element.getBoundingClientRect(),
+          style = getComputedStyle(element);
+        if (
+          !box.width ||
+          !box.height ||
+          style.visibility === "hidden" ||
+          style.display === "none" ||
+          element.closest("[inert]") ||
+          (element as HTMLButtonElement).disabled
+        )
+          continue;
+        if (scrolled !== element) {
+          element.scrollIntoView({
+            block: "nearest",
+            inline: "nearest",
+            behavior: "instant",
+          });
+          scrolled = element;
+        }
+        const next = element.getBoundingClientRect();
+        const x = Math.max(
+            1,
+            Math.min(innerWidth - 1, next.left + next.width / 2),
+          ),
+          y = Math.max(
+            1,
+            Math.min(innerHeight - 1, next.top + next.height / 2),
           );
-        },
-      );
-      if (el && scrolled !== el) {
-        el.scrollIntoView({
-          block: "nearest",
-          inline: "nearest",
-          behavior: "instant",
-        });
-        scrolled = el;
+        const under = document
+          .elementsFromPoint(x, y)
+          .find((hit) => !hit.closest(".guided-tour"));
+        const visible =
+          next.left >= 0 &&
+          next.top >= 0 &&
+          next.right <= innerWidth &&
+          next.bottom <= innerHeight &&
+          under &&
+          (element.contains(under) || under === element);
+        if (
+          !visible &&
+          element.matches(".blueprint-node") &&
+          focusedNode !== element
+        ) {
+          focusedNode = element;
+          window.dispatchEvent(
+            new CustomEvent("java-blueprints:tour-focus-node", {
+              detail: { nodeId: element.getAttribute("data-node-id") },
+            }),
+          );
+        }
+        if (visible) {
+          found = element;
+          break;
+        }
       }
-      const box = el?.getBoundingClientRect();
-      const visible =
-        box &&
-        box.bottom > 0 &&
-        box.right > 0 &&
-        box.top < innerHeight &&
-        box.left < innerWidth;
-      setRect((old) => {
-        const next = visible ? box : null;
-        return old?.x === next?.x &&
-          old?.y === next?.y &&
-          old?.width === next?.width &&
-          old?.height === next?.height
+      target.current = found;
+      const next = found?.getBoundingClientRect() ?? null;
+      setRect((old) =>
+        old?.x === next?.x &&
+        old?.y === next?.y &&
+        old?.width === next?.width &&
+        old?.height === next?.height
           ? old
-          : (next ?? null);
-      });
-      // Track each consecutive absence, including targets hidden after first render.
-      if (visible) {
-        missingSince = null;
-        setUnavailable(false);
-      } else {
-        missingSince ??= performance.now();
-        setUnavailable(performance.now() - missingSince >= 3000);
-      }
+          : next,
+      );
+      setUnavailable(!found && performance.now() - started > 3500);
       frame = requestAnimationFrame(measure);
     };
     measure();
     dialog.current?.focus();
     const keepFocus = (event: FocusEvent) => {
-      if (
-        event.target instanceof Node &&
-        !dialog.current?.contains(event.target)
-      )
+      const el = event.target as Node;
+      if (!dialog.current?.contains(el) && !target.current?.contains(el))
         dialog.current?.focus();
     };
     document.addEventListener("focusin", keepFocus);
@@ -288,110 +363,216 @@ export default function GuidedTour({ path }: { path: string }) {
       clearTimeout(retry);
       document.removeEventListener("focusin", keepFocus);
     };
-  }, [active, displayIndex, scope]);
-  if (!active || !user) return null;
-  const step = steps[displayIndex],
-    left = Math.max(
-      16,
-      Math.min(innerWidth - 352, rect?.left ?? innerWidth / 2 - 168),
-    ),
-    top =
-      rect && rect.bottom + 180 < innerHeight
-        ? rect.bottom + 14
-        : Math.max(
-            16,
-            Math.min(innerHeight - 200, (rect?.top ?? innerHeight / 2) - 195),
-          );
-  return (
-    <div
-      className="guided-tour"
-      onKeyDownCapture={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          finish();
-        }
-        e.stopPropagation();
-        if (e.key === "ArrowRight") {
-          e.preventDefault();
-          if (displayIndex + 1 < steps.length) setIndex(displayIndex + 1);
-        }
-        if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          setIndex(Math.max(0, displayIndex - 1));
-        }
-        if (e.key === "Tab") {
-          const all = Array.from(
-            dialog.current?.querySelectorAll<HTMLButtonElement>(
-              "button:not(:disabled)",
-            ) ?? [],
-          );
-          const current = all.indexOf(
-            document.activeElement as HTMLButtonElement,
-          );
-          const next =
+  }, [active, mode, displayIndex, path, customSteps]);
+  useLayoutEffect(() => {
+    if (!active || !dialog.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.target.getBoundingClientRect();
+      setCardSize((old) =>
+        old.width === box.width && old.height === box.height
+          ? old
+          : { width: box.width, height: box.height },
+      );
+    });
+    observer.observe(dialog.current);
+    return () => observer.disconnect();
+  }, [active, displayIndex, mode]);
+  useEffect(() => {
+    const resize = () =>
+      setViewport({ width: innerWidth, height: innerHeight });
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    const onAction = (event: Event) => {
+      const el = event.target as Element;
+      if (
+        !target.current ||
+        !(el instanceof Element) ||
+        !target.current.contains(el)
+      )
+        return;
+      if (step.actionTarget && !el.closest(step.actionTarget)) return;
+      if (
+        step.action === "input" &&
+        (el as HTMLInputElement).value.trim().length < 2
+      )
+        return;
+      if (step.id === "assistant-start") {
+        const context = getAssistantContext();
+        baselineJob.current = String(
+          context[
+            customSteps?.some((s) => s.waitFor === "comparison")
+              ? "testJobId"
+              : "runJobId"
+          ] ?? "",
+        );
+      }
+      advance();
+    };
+    const eventType =
+      step.action === "focus"
+        ? "focusin"
+        : step.action === "input"
+          ? "input"
+          : "click";
+    if (["click", "focus", "input"].includes(step.action))
+      document.addEventListener(eventType, onAction, true);
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        finish();
+        return;
+      }
+      if (step.action === "download" && !event.repeat && isSaveShortcut(event))
+        advance();
+      if (event.key === "Tab") {
+        const focusable =
+          'button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]';
+        const all = [
+          ...Array.from(
+            target.current?.querySelectorAll<HTMLElement>(focusable) ?? [],
+          ),
+          ...(target.current?.matches(focusable)
+            ? [target.current as HTMLElement]
+            : []),
+          ...Array.from(
+            dialog.current?.querySelectorAll<HTMLElement>(focusable) ?? [],
+          ),
+        ].filter((el) => el.getClientRects().length && !el.closest("[inert]"));
+        const current = all.indexOf(document.activeElement as HTMLElement),
+          next =
             current < 0
-              ? e.shiftKey
+              ? event.shiftKey
                 ? all.length - 1
                 : 0
-              : (current + (e.shiftKey ? -1 : 1) + all.length) % all.length;
-          e.preventDefault();
-          all[next]?.focus();
-        }
-      }}
-    >
-      <div className="tour-dimmer" />
-      {rect && (
-        <div
-          className="tour-aperture"
-          data-tour-target={step.target}
-          aria-hidden="true"
-          style={{
-            left: rect.left - 5,
-            top: rect.top - 5,
-            width: rect.width + 10,
-            height: rect.height + 10,
-          }}
-        />
+              : (current + (event.shiftKey ? -1 : 1) + all.length) % all.length;
+        event.preventDefault();
+        all[next]?.focus();
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener(eventType, onAction, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, [active, displayIndex, mode, user, customSteps]);
+  if (!active || !user) return null;
+  const position = placeTourCard(rect, cardSize, viewport);
+  const hole = rect
+    ? {
+        left: Math.max(0, rect.left - 5),
+        top: Math.max(0, rect.top - 5),
+        right: Math.min(viewport.width, rect.right + 5),
+        bottom: Math.min(viewport.height, rect.bottom + 5),
+      }
+    : null;
+  return (
+    <div className="guided-tour" data-tour-step={step.id}>
+      {hole ? (
+        <>
+          <div
+            className="tour-shield"
+            style={{ left: 0, top: 0, width: viewport.width, height: hole.top }}
+          />
+          <div
+            className="tour-shield"
+            style={{
+              left: 0,
+              top: hole.bottom,
+              width: viewport.width,
+              height: viewport.height - hole.bottom,
+            }}
+          />
+          <div
+            className="tour-shield"
+            style={{
+              left: 0,
+              top: hole.top,
+              width: hole.left,
+              height: hole.bottom - hole.top,
+            }}
+          />
+          <div
+            className="tour-shield"
+            style={{
+              left: hole.right,
+              top: hole.top,
+              width: viewport.width - hole.right,
+              height: hole.bottom - hole.top,
+            }}
+          />
+          <div
+            key={`${mode}:${displayIndex}`}
+            className="tour-aperture"
+            data-tour-target={step.target}
+            aria-hidden="true"
+            style={{
+              left: hole.left,
+              top: hole.top,
+              width: hole.right - hole.left,
+              height: hole.bottom - hole.top,
+            }}
+          />
+        </>
+      ) : (
+        <div className="tour-shield tour-waiting" />
       )}
       <div
+        key={`${mode}:${displayIndex}`}
         className="tour-card"
         role="dialog"
-        aria-modal="true"
-        aria-describedby="tour-step-description"
+        aria-modal="false"
         aria-label="Знакомство с JavaBlueprints"
+        aria-describedby="tour-step-description"
         tabIndex={-1}
         ref={dialog}
-        style={{ left, top }}
+        style={position}
       >
-        <small>
-          {displayIndex + 1} / {steps.length}
-        </small>
+        <div className="tour-card-heading">
+          <small>
+            {displayIndex + 1} / {steps.length}
+          </small>
+          <button aria-label="Закрыть обучение" onClick={finish}>
+            ×
+          </button>
+        </div>
         <h3>{step.title}</h3>
         <p id="tour-step-description" aria-live="polite">
-          {step.text}
+          {step.id === "assistant-finished" && completion
+            ? completion + " " + step.text
+            : step.text}
         </p>
-        {unavailable && !rect && (
-          <p role="status">
-            Элемент недоступен в этом представлении. Можно перейти к следующему
-            шагу.
+        {unavailable && !rect ? (
+          <p className="tour-action-hint" role="status">
+            Этот шаг пока недоступен. Можно его пропустить.
           </p>
+        ) : (
+          step.action !== "inspect" && (
+            <p className="tour-action-hint">
+              {step.action === "wait"
+                ? "Ожидание результата выполнения…"
+                : step.action === "download"
+                  ? "Нажмите Ctrl+S / ⌘S"
+                  : step.action === "input"
+                    ? "Введите текст в подсвеченное поле"
+                    : step.action === "focus"
+                      ? "Нажмите на подсвеченное поле"
+                      : "Нажмите на подсвеченный элемент"}
+            </p>
+          )
         )}
-        <div>
-          <button onClick={finish}>Пропустить</button>
-          {displayIndex > 0 && (
-            <button onClick={() => setIndex(displayIndex - 1)}>Назад</button>
+        <div className="tour-card-actions">
+          <button onClick={finish}>Завершить</button>
+          {step.action === "inspect" ? (
+            <button className="primary" onClick={advance}>
+              {displayIndex + 1 === steps.length ? "Готово" : "Продолжить"}
+            </button>
+          ) : (
+            <button onClick={advance}>Пропустить шаг</button>
           )}
-          <button
-            className="primary"
-            onClick={() =>
-              displayIndex + 1 < steps.length
-                ? setIndex(displayIndex + 1)
-                : finish()
-            }
-          >
-            {displayIndex + 1 < steps.length ? "Далее" : "Готово"}
-          </button>
         </div>
       </div>
     </div>

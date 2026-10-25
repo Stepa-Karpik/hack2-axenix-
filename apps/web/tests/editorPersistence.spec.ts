@@ -1,7 +1,8 @@
+import { publishProject } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { fixture, headers, head } from "./fileFixtures";
 
-test("Monaco Ctrl+S cancels browser save, publishes once and retains drafts during typing pauses", async ({
+test("explicit project save publishes once and retains drafts during typing pauses", async ({
   page,
 }) => {
   const { projectId, base, original } = await fixture(page.request);
@@ -29,22 +30,7 @@ test("Monaco Ctrl+S cancels browser save, publishes once and retains drafts duri
   await expect(page.locator(".monaco-editor")).toContainText(
     "local persistence regression",
   );
-  await page.evaluate(() => {
-    window.addEventListener(
-      "keydown",
-      (event) => {
-        if (event.ctrlKey && event.key.toLowerCase() === "s")
-          document.body.dataset.savePrevented = String(event.defaultPrevented);
-      },
-      true,
-    );
-  });
-  await editor.focus();
-  await page.keyboard.press("Control+s");
-  await expect(page.locator("body")).toHaveAttribute(
-    "data-save-prevented",
-    "true",
-  );
+  await publishProject(page);
   await expect
     .poll(async () => (await head(page.request, base)).id)
     .not.toBe(original.id);
@@ -53,8 +39,8 @@ test("Monaco Ctrl+S cancels browser save, publishes once and retains drafts duri
     saved.files.find((f) => f.path === "Main.java")?.canonicalText,
   ).toContain("local persistence regression");
   await expect(page.locator(".file-tabs-save")).toBeDisabled();
-  await page.keyboard.press("Control+s");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
+  await publishProject(page);
   await page.waitForTimeout(500);
   expect((await head(page.request, base)).id).toBe(saved.id);
   expect(
@@ -73,7 +59,7 @@ test("Monaco Ctrl+S cancels browser save, publishes once and retains drafts duri
   expect(
     autosaved.files.find((f) => f.path === "Main.java")?.canonicalText,
   ).toContain("one idle autosave");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await page.waitForTimeout(500);
   expect((await head(page.request, base)).id).toBe(autosaved.id);
   expect(

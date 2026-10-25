@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { test, expect, type Page } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 import { panToNode } from "./flowAssertions";
@@ -167,7 +168,7 @@ test("syntax diagnostics reveal their current source line without trusting a sta
   await editor.focus();
   await page.keyboard.press("Control+a");
   await page.keyboard.insertText(source);
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect(
     page.getByText("Исходник сохранён · ошибка разбора", { exact: true }),
   ).toBeVisible({ timeout: 30000 });

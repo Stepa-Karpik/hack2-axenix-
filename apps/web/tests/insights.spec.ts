@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { chooseOption } from "./selectControl";
 import { test, expect, type Page } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
@@ -151,7 +152,7 @@ test("dirty source disables old insight navigation and a selected graph node res
   await expect(
     panel.getByText("Показан сохранённый анализ", { exact: true }),
   ).toBeVisible();
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect(panel.locator(".finding-location").first()).toBeEnabled({
     timeout: 30000,
   });

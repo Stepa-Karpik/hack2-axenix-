@@ -3,6 +3,7 @@ import type { ReactNode, MouseEvent } from "react";
 import { api, ApiError, setSessionCsrf } from "./api";
 import "./account-pages.css";
 import Avatar from "./Avatar";
+import TourButton from "./TourButton";
 export interface AccountUser {
   id: string;
   username: string;
@@ -184,11 +185,14 @@ export function AccountNav() {
   );
 }
 export function ProductShell({ children }: { children: ReactNode }) {
-  const { error, refresh } = useAccount();
+  const { error, refresh, session } = useAccount();
   return (
-    <div className="product-page">
+    <div
+      className="product-page product-shell"
+      data-has-sidebar={!!session?.user}
+    >
       <header className="product-header">
-        <ProductBrand />
+        {!session?.user && <ProductBrand />}
         <AccountNav />
       </header>
       {error && (
@@ -233,6 +237,7 @@ export function ProductSidebar({ active }: { active?: string }) {
   ];
   return (
     <aside className="product-sidebar" data-tour="navigation">
+      <ProductBrand />
       <nav aria-label="Разделы приложения">
         {links.map(([to, label]) => (
           <PageLink
@@ -244,6 +249,7 @@ export function ProductSidebar({ active }: { active?: string }) {
           </PageLink>
         ))}
       </nav>
+      <TourButton />
     </aside>
   );
 }

@@ -117,7 +117,11 @@ export default function SettingsPage({
           <div className="settings-layout">
             <div className="settings-sections">
               {section === "profile" && (
-                <section id="profile" className="product-card">
+                <section
+                  id="profile"
+                  data-assistant-target="profile-card"
+                  className="product-card"
+                >
                   <h2>Публичный профиль</h2>
                   <p className="product-muted">@{user.username}</p>
                   <AvatarUpload />
@@ -131,6 +135,7 @@ export default function SettingsPage({
                       <label>
                         Имя
                         <input
+                          data-tour="profile-name"
                           required
                           value={displayName}
                           onChange={(e) => setDisplayName(e.target.value)}
@@ -140,6 +145,7 @@ export default function SettingsPage({
                       <label>
                         О себе
                         <textarea
+                          data-tour="profile-bio"
                           value={bio}
                           onChange={(e) => setBio(e.target.value)}
                           maxLength={500}

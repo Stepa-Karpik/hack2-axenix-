@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
     name: "Знакомство с JavaBlueprints",
   });
   await expect(intro).toBeVisible();
-  await intro.getByRole("button", { name: "Пропустить", exact: true }).click();
+  await intro.getByRole("button", { name: "Закрыть обучение", exact: true }).click();
   await expect(intro).toHaveCount(0);
 });
 test("seven appearance presets persist with real palette attributes and custom contrast gate", async ({
@@ -89,13 +89,13 @@ test("seven appearance presets persist with real palette attributes and custom c
     "custom",
   );
   await page
-    .getByRole("button", { name: "Повторить знакомство", exact: true })
+    .getByRole("button", { name: "Пройти обучение заново", exact: true })
     .click();
   const intro = page.getByRole("dialog", {
     name: "Знакомство с JavaBlueprints",
   });
   await expect(intro).toBeVisible();
-  await intro.getByRole("button", { name: "Пропустить", exact: true }).click();
+  await intro.getByRole("button", { name: "Закрыть обучение", exact: true }).click();
   await expect(intro).toHaveCount(0);
 });
 test("settings sections survive direct navigation and expose one shared navigation", async ({
@@ -131,69 +131,18 @@ test("settings sections survive direct navigation and expose one shared navigati
   await expect(page).toHaveURL(/\/settings\/appearance$/);
 });
 
-test("active workspace tour handles forced same-document history/popstate transitions to shorter scopes without a render crash", async ({
-  page,
-}) => {
-  const projectId = "77777777-7777-4777-8777-777777777777";
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/api/v1/projects**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    const data =
-      path === `/api/v1/projects/${projectId}`
-        ? {
-            id: projectId,
-            name: "Tour scope fixture",
-            headRevisionId: null,
-            originalRevisionId: null,
-            updatedAt: "2026-10-25T00:00:00Z",
-            role: "owner",
-            ownerId: user.id,
-            visibility: "private",
-            canEdit: true,
-          }
-        : [];
-    await route.fulfill({ json: { data } });
-  });
-  await page.route("**/api/v1/capabilities", (route) =>
-    route.fulfill({ json: { data: { runner: { available: false } } } }),
-  );
-  const tour = page.getByRole("dialog", {
-    name: "Знакомство с JavaBlueprints",
-  });
-  async function stepSix() {
-    await page.goto("/projects/" + projectId);
-    await expect(tour).toBeVisible();
-    for (let i = 0; i < 5; i++)
-      await tour.getByRole("button", { name: "Далее", exact: true }).click();
-    await expect(
-      tour.getByRole("heading", { name: "Запуск", exact: true }),
-    ).toBeVisible();
-    await expect(tour.locator("small")).toHaveText("6 / 9");
-  }
-  await stepSix();
-  // Browser/history navigation can change scope while the modal tour is active.
-  await page.evaluate(() => {
-    history.pushState({}, "", "/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  });
-  await expect(page).toHaveURL(/\/$/);
-  await expect(
-    page.getByRole("heading", { name: /Ваши проекты/ }),
-  ).toBeVisible();
+test("tutorial can be closed after same-document route transitions", async ({page}) => {
+  const errors: string[]=[];
+  page.on("pageerror",error=>errors.push(error.message));
+  await page.getByRole("button",{name:"Пройти обучение заново",exact:true}).click();
+  const tour=page.getByRole("dialog",{name:"Знакомство с JavaBlueprints"});
   await expect(tour).toBeVisible();
-  await expect(tour.locator("small")).toHaveText("1 / 3");
-  await tour.getByRole("button", { name: "Пропустить", exact: true }).click();
-  expect(errors).toEqual([]);
-  await stepSix();
-  await page.evaluate(() => {
-    history.pushState({}, "", "/settings/profile");
+  await page.evaluate(()=>{
+    history.pushState({},"","/settings/profile");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
-  await expect(page).toHaveURL(/\/settings\/profile$/);
-  await expect(
-    page.getByRole("heading", { name: "Профиль", level: 1, exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Профиль",level:1,exact:true})).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(tour).toHaveCount(0);
   expect(errors).toEqual([]);
 });

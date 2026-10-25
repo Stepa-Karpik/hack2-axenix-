@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { test, expect } from "@playwright/test";
 import { headers, head } from "./fileFixtures";
 
@@ -48,7 +49,7 @@ test("running interactive output retains its original revision after editing and
     (r) =>
       r.url().endsWith(base + "/revisions") && r.request().method() === "POST",
   );
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   const r2 = (await (await saved).json()).data.id;
   expect(r2).not.toBe(r1);
   await expect(page.locator(".file-tabs-save")).toBeDisabled();

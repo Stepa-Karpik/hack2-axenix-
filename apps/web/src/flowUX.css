@@ -218,3 +218,33 @@
 [data-theme="light"] .flow-area .graph-preview-branches {
   color: var(--graph-yellow);
 }
+.graph-routing-status {
+  position: absolute;
+  right: 22px;
+  bottom: 80px;
+  z-index: 5;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-surface);
+  color: var(--theme-muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+.glass-workbench .flow-area.flow-large .blueprint-node {
+  backdrop-filter: none;
+}
+.glass-workbench
+  .flow-area.flow-large
+  g[data-route-highlighted]
+  .react-flow__edge-path,
+.glass-workbench .flow-area.flow-large .react-flow__edge-path {
+  filter: none;
+}
+.flow-area[data-detail-level="overview"]
+  .blueprint-node
+  > :not(.react-flow__handle),
+.flow-area[data-detail-level="overview"] .shortcut-label,
+.flow-area[data-detail-level="overview"] .graph-method-frame > span {
+  visibility: hidden;
+}

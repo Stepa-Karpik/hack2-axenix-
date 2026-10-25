@@ -402,7 +402,7 @@ test("provider-only account security omits password and unlink controls", async 
     name: "Знакомство с JavaBlueprints",
   });
   if (await tour.isVisible())
-    await tour.getByRole("button", { name: "Пропустить", exact: true }).click();
+    await tour.getByRole("button", { name: "Закрыть обучение", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Безопасность", exact: true, level: 1 }),
   ).toBeVisible();
@@ -596,7 +596,7 @@ test("signed in dark projects visual evidence has real empty collection state", 
     name: "Знакомство с JavaBlueprints",
   });
   await expect(tour).toBeVisible();
-  await tour.getByRole("button", { name: "Пропустить", exact: true }).click();
+  await tour.getByRole("button", { name: "Закрыть обучение", exact: true }).click();
   await expect(tour).toHaveCount(0);
   await page.screenshot({
     path: test.info().outputPath("projects-dark-desktop.png"),

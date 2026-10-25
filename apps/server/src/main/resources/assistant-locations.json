@@ -1,0 +1,796 @@
+{
+  "profile": {
+    "label": "Профиль",
+    "description": "В верхней панели откройте профиль или настройки. В «Профиле» меняются фото, отображаемое имя и описание. Страница профиля показывает доступные проекты и активность. Закрепление доступно для собственных проектов; видимость проекта меняется отдельно.",
+    "selectors": [
+      "[data-assistant-target=\"profile-card\"]"
+    ],
+    "panels": [],
+    "route": "/settings/profile",
+    "lookupPatterns": [
+      "профил"
+    ],
+    "lookupPriority": 46
+  },
+  "profile_photo": {
+    "label": "Фото профиля",
+    "description": "Откройте настройки профиля. В карточке «Публичный профиль», в блоке «Фото профиля» нажмите «Загрузить фото» или «Изменить фото». Выберите PNG или JPEG до 2 МБ.",
+    "selectors": [
+      "[data-assistant-target=\"profile-card\"]",
+      "[data-assistant-target=\"profile-photo\"]",
+      "[data-assistant-target=\"profile-photo-button\"]"
+    ],
+    "panels": [],
+    "route": "/settings/profile",
+    "lookupPatterns": [
+      "аватар",
+      "фото",
+      "картинк.*профил"
+    ],
+    "lookupPriority": 9
+  },
+  "profile_name": {
+    "label": "Имя",
+    "description": "Отображаемое имя меняется в настройках профиля в поле «Имя». После изменения нажмите «Сохранить профиль».",
+    "selectors": [
+      "[data-assistant-target=\"profile-card\"]",
+      "[data-tour=\"profile-name\"]"
+    ],
+    "panels": [],
+    "route": "/settings/profile",
+    "lookupPatterns": [
+      "имя.*профил",
+      "отображаем.*имя"
+    ],
+    "lookupPriority": 10
+  },
+  "profile_bio": {
+    "label": "О себе",
+    "description": "Описание меняется в настройках профиля в поле «О себе». После изменения нажмите «Сохранить профиль».",
+    "selectors": [
+      "[data-assistant-target=\"profile-card\"]",
+      "[data-tour=\"profile-bio\"]"
+    ],
+    "panels": [],
+    "route": "/settings/profile",
+    "lookupPatterns": [
+      "о себе",
+      "описани.*профил"
+    ],
+    "lookupPriority": 11
+  },
+  "appearance": {
+    "label": "Темы",
+    "description": "Откройте «Настройки» → «Оформление». Выберите готовую тему или настройте собственные цвета и примените палитру. OLED использует #000000. Выбор сохраняется в этом браузере. Настройки окон проекта находятся в меню «Вид» редактора.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "\\bтем[ауы]\\b",
+      "оформлен"
+    ],
+    "lookupPriority": 20
+  },
+  "appearance_palette": {
+    "label": "Своя палитра",
+    "description": "В «Настройки» → «Оформление» найдите «Своя палитра», выберите цвета и нажмите «Применить свою палитру».",
+    "selectors": [
+      ".appearance-settings",
+      ".custom-colors",
+      "[data-assistant-target=\"palette-apply\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "палитр",
+      "сво[йяю].*цвет",
+      "акцент.*цвет",
+      "цвет.*акцент"
+    ],
+    "lookupPriority": 12
+  },
+  "appearance_oled": {
+    "label": "Тема oled",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_oled\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "oled",
+      "олед"
+    ],
+    "lookupPriority": 13
+  },
+  "appearance_dark": {
+    "label": "Тема dark",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_dark\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "т[её]мн.*тем"
+    ],
+    "lookupPriority": 14
+  },
+  "appearance_light": {
+    "label": "Тема light",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_light\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "светл.*тем"
+    ],
+    "lookupPriority": 15
+  },
+  "appearance_pearl": {
+    "label": "Тема pearl",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_pearl\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "жемчуж"
+    ],
+    "lookupPriority": 16
+  },
+  "appearance_blue": {
+    "label": "Тема blue",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_blue\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "(син|голуб).*тем"
+    ],
+    "lookupPriority": 17
+  },
+  "appearance_amber": {
+    "label": "Тема amber",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_amber\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "янтар",
+      "желт.*тем"
+    ],
+    "lookupPriority": 18
+  },
+  "appearance_slate": {
+    "label": "Тема slate",
+    "description": "Готовые темы доступны в «Настройки» → «Оформление». Нажмите подсвеченную карточку, чтобы применить тему в этом браузере.",
+    "selectors": [
+      ".appearance-settings",
+      ".theme-options",
+      "[data-assistant-target=\"appearance_slate\"]"
+    ],
+    "panels": [],
+    "route": "/settings/appearance",
+    "lookupPatterns": [
+      "сланц"
+    ],
+    "lookupPriority": 19
+  },
+  "files": {
+    "label": "Файлы",
+    "description": "В панели «Проект» нажмите иконку нового файла или папки. Имя подтверждается Enter или кликом вне поля. Файлы и папки можно переименовывать и переносить; вкладки открываются по клику. Импорт поддерживает файлы, папки, ZIP и подключённые репозитории GitHub.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "файл",
+      "папк"
+    ],
+    "lookupPriority": 37
+  },
+  "files_create": {
+    "label": "Создать файл",
+    "description": "В панели «Проект» нажмите «Создать файл», введите имя с расширением и нажмите Enter.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_create\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "созда.*файл",
+      "нов[ыо].*файл"
+    ],
+    "lookupPriority": 21
+  },
+  "files_folder": {
+    "label": "Создать папку",
+    "description": "В панели «Проект» нажмите «Создать папку», введите путь папки и нажмите Enter.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_folder\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "созда.*папк",
+      "нов.*папк",
+      "созда.*директор"
+    ],
+    "lookupPriority": 22
+  },
+  "files_rename": {
+    "label": "Переименовать файл",
+    "description": "Выберите файл или папку в панели «Проект» и нажмите «Переименовать» либо F2.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_rename\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "переимен"
+    ],
+    "lookupPriority": 23
+  },
+  "files_delete": {
+    "label": "Удалить файл",
+    "description": "Выберите файл или папку, нажмите значок корзины в панели «Проект», проверьте путь и подтвердите удаление.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_delete\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "удал.*(файл|папк)"
+    ],
+    "lookupPriority": 24
+  },
+  "files_download": {
+    "label": "Скачать файл",
+    "description": "Выберите файл или папку в панели «Проект» и нажмите значок скачивания. Загружается сохранённая версия.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_download\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "скача.*(файл|папк)",
+      "выгруз.*файл"
+    ],
+    "lookupPriority": 26
+  },
+  "files_import": {
+    "label": "Импорт файлов",
+    "description": "Нажмите «Импорт» в панели «Проект». В окне можно выбрать файлы, папку, ZIP или GitHub; импорт подтверждается после просмотра выбранного содержимого.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "[data-assistant-target=\"files_import\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "импорт",
+      "загруз.*(файл|папк|zip|репозитор)"
+    ],
+    "lookupPriority": 27
+  },
+  "files_move": {
+    "label": "Перемещение файла",
+    "description": "Выберите файл или папку в панели «Проект». Нажмите «Переместить» или перетащите путь в нужную папку.",
+    "selectors": [
+      "[data-tile-panel=\"project\"]",
+      ".explorer-tools",
+      "button[aria-label=\"Переместить\"]"
+    ],
+    "panels": [
+      "project"
+    ],
+    "lookupPatterns": [
+      "перемест.*(файл|папк)",
+      "перенес.*(файл|папк)"
+    ],
+    "lookupPriority": 25
+  },
+  "tests": {
+    "label": "Запуск тестов",
+    "description": "Откройте проект и нужный файл. Внизу нажмите кнопку сравнения рядом с «Запуск». Выберите класс с main, базовую и проверяемую версии, заполните тестовые входы и нажмите «Сравнить». Панель «Тесты» покажет прогресс и результат каждого входа. Это проверка программы через main, а не отдельного метода. Успешная компиляция сама по себе не означает, что тесты пройдены.",
+    "selectors": [
+      ".workspace-dock",
+      "[data-assistant-target=\"tests-start\"]"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "тест",
+      "сравн.*верс"
+    ],
+    "lookupPriority": 32
+  },
+  "tests_results": {
+    "label": "Результаты тестов",
+    "description": "Результаты, время и статусы проверки находятся в панели «Тесты». Они относятся к подписанному файлу и версии; если проверок ещё не было, панель будет пустой.",
+    "selectors": [
+      "[data-tile-panel=\"tests\"]",
+      "[data-assistant-test-result]"
+    ],
+    "panels": [
+      "tests"
+    ],
+    "lookupPatterns": [
+      "результат.*тест",
+      "врем.*тест",
+      "статус.*тест",
+      "прогресс.*тест",
+      "метрик.*тест",
+      "тест.*метрик"
+    ],
+    "lookupPriority": -10
+  },
+  "run": {
+    "label": "Запуск программы",
+    "description": "Выберите файл с main. Нажмите «Запуск» в нижней панели, проверьте класс, аргументы и начальный ввод, затем нажмите «Запустить». Ответы Scanner вводятся в консоли во время выполнения. Там же доступны EOF и остановка. Результат относится к указанной версии.",
+    "selectors": [
+      ".workspace-dock",
+      ".dock-run"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "запуск",
+      "запуст.*программ"
+    ],
+    "lookupPriority": 36
+  },
+  "run_console": {
+    "label": "Консоль и Scanner",
+    "description": "Во время запуска откройте «Консоль». В поле «Ответ программе» вводятся ответы Scanner. Поле доступно только пока программа выполняется и стандартный ввод открыт.",
+    "selectors": [
+      "[data-tile-panel=\"console\"]",
+      "input[aria-label=\"Ответ программе\"], [data-assistant-run-result]:not(:has(input[aria-label=\"Ответ программе\"]))"
+    ],
+    "panels": [
+      "console"
+    ],
+    "lookupPatterns": [
+      "консол",
+      "scanner",
+      "stdin",
+      "ввод.*программ",
+      "ответ.*программ"
+    ],
+    "lookupPriority": 33
+  },
+  "analysis": {
+    "label": "Анализ",
+    "description": "Панель «Анализ» содержит вкладки «Узел», «Проблемы», «Рекомендации» и «Метрики». Это не история и не результаты тестов.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-node\"]",
+      "[data-assistant-target=\"analysis-content-node\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "node",
+    "lookupPatterns": [
+      "анализ"
+    ],
+    "lookupPriority": 8
+  },
+  "analysis_node": {
+    "label": "Выбранный узел",
+    "description": "Вкладка «Узел» панели «Анализ»: свойства выбранного блока, символы и редактирование.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-node\"]",
+      "[data-assistant-target=\"analysis-content-node\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "node"
+  },
+  "analysis_problems": {
+    "label": "Проблемы",
+    "description": "Ошибки разбора и диагностика кода находятся в «Анализ» → «Проблемы». Ошибки выполнения смотрите в консоли.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-problems\"]",
+      "[data-assistant-target=\"analysis-content-problems\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "problems",
+    "lookupPatterns": [
+      "проблем",
+      "диагност",
+      "ошибк.*(разбор|синтакс|компиляц)",
+      "(разбор|синтакс|компиляц).*ошибк"
+    ],
+    "lookupPriority": 5
+  },
+  "analysis_metrics": {
+    "label": "Метрики кода",
+    "description": "Метрики находятся в «Анализ» → «Метрики»: строки кода, операторы, сложность, вложенность выбранного метода. Это не время тестов. Для чисел выберите метод.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-metrics\"]",
+      "[data-assistant-target=\"analysis-content-metrics\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "metrics",
+    "lookupPatterns": [
+      "метрик",
+      "цикломат",
+      "сложност",
+      "вложенност"
+    ],
+    "lookupPriority": 4
+  },
+  "analysis_recommendations": {
+    "label": "Рекомендации",
+    "description": "Замечания и предложения улучшения находятся в «Анализ» → «Рекомендации».",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-recommendations\"]",
+      "[data-assistant-target=\"analysis-content-recommendations\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "recommendations",
+    "lookupPatterns": [
+      "рекомендац"
+    ],
+    "lookupPriority": 6
+  },
+  "optimization": {
+    "label": "Оптимизация",
+    "description": "Откройте метод и раздел рекомендаций в «Анализе». Если сервис нашёл поддерживаемую оптимизацию, выберите её, подготовьте изменение и посмотрите разницу. Затем сравните версии на тестах. Применение доступно отдельно после проверки; предложение не изменяет исходный код автоматически.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-recommendations\"]",
+      "[data-assistant-target=\"analysis-content-recommendations\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "recommendations",
+    "lookupPatterns": [
+      "оптимиз"
+    ],
+    "lookupPriority": 7
+  },
+  "code": {
+    "label": "Код Java",
+    "description": "Редактор кода выбранного файла, вкладки открытых файлов и сохранение.",
+    "selectors": [
+      "[data-tile-panel=\"code\"]"
+    ],
+    "panels": [
+      "code"
+    ],
+    "lookupPatterns": [
+      "редактор",
+      "код java"
+    ],
+    "lookupPriority": 38
+  },
+  "graph": {
+    "label": "Блок-схема",
+    "description": "Постоянное полотно схемы: узлы и цветные связи, масштаб, перемещение, выбор и редактирование блоков.",
+    "selectors": [
+      ".react-flow"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "схем",
+      "граф"
+    ],
+    "lookupPriority": 39
+  },
+  "palette": {
+    "label": "Добавление блоков",
+    "description": "Панель «Блоки»: выберите тип и перетащите его на допустимое место схемы. Изменения готовятся отдельно и проверяются до применения.",
+    "selectors": [
+      "[data-tile-panel=\"palette\"]"
+    ],
+    "panels": [
+      "palette"
+    ],
+    "lookupPatterns": [
+      "добав.*блок",
+      "блок.*добав",
+      "палитр.*блок"
+    ],
+    "lookupPriority": 1
+  },
+  "history": {
+    "label": "История",
+    "description": "Панель «История»: сохранённые версии проекта и результаты операций. Метрики и диагностика находятся в «Анализе», не здесь.",
+    "selectors": [
+      "[data-tile-panel=\"history\"]"
+    ],
+    "panels": [
+      "history"
+    ],
+    "lookupPatterns": [
+      "истори",
+      "сохран[её]н.*верси"
+    ],
+    "lookupPriority": 40
+  },
+  "diff": {
+    "label": "Изменения и diff",
+    "description": "Панель «Изменения»: предложение, разница исходного кода, проверка компиляции и тестов, применение проверенного кандидата.",
+    "selectors": [
+      "[data-tile-panel=\"changes\"]"
+    ],
+    "panels": [
+      "changes"
+    ],
+    "lookupPatterns": [
+      "изменени",
+      "diff",
+      "разниц.*код"
+    ],
+    "lookupPriority": 41
+  },
+  "search": {
+    "label": "Поиск",
+    "description": "В верхнем поиске введите имя файла, метода, выражение или тип блока — например «условие». Выберите результат: откроется нужный файл и участок кода либо схема. Можно также попросить меня найти конкретное имя.",
+    "selectors": [
+      ".project-command-search input"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "поиск"
+    ],
+    "lookupPriority": 48
+  },
+  "integrations": {
+    "label": "Интеграции",
+    "description": "В «Настройки» → «Интеграции» находится подключение GitHub и состояние доступа к репозиториям.",
+    "selectors": [
+      "[data-assistant-target=\"integrations\"]"
+    ],
+    "panels": [],
+    "route": "/settings/integrations",
+    "lookupPatterns": [
+      "интеграц"
+    ],
+    "lookupPriority": 29
+  },
+  "integrations_github": {
+    "label": "Подключение GitHub",
+    "description": "В «Настройки» → «Интеграции» откройте карточку GitHub. Если подключение отсутствует, нажмите «Подключить GitHub», затем подтвердите доступ на GitHub. Если аккаунт уже связан, здесь отображается его состояние.",
+    "selectors": [
+      "[data-assistant-target=\"integrations\"]",
+      "[data-assistant-target=\"github-control\"]"
+    ],
+    "panels": [],
+    "route": "/settings/integrations",
+    "lookupPatterns": [
+      "github",
+      "гитхаб"
+    ],
+    "lookupPriority": 28
+  },
+  "security": {
+    "label": "Безопасность и пароль",
+    "description": "В «Настройки» → «Безопасность» доступны пароль и защита аккаунта. Пароли и коды вводятся только в форме, не в чате. У аккаунта GitHub вход через GitHub.",
+    "selectors": [
+      "#security"
+    ],
+    "panels": [],
+    "route": "/settings/security",
+    "lookupPatterns": [
+      "парол",
+      "безопасност"
+    ],
+    "lookupPriority": 44
+  },
+  "friends": {
+    "label": "Друзья",
+    "description": "В «Настройки» → «Друзья» доступны поиск людей, отправка заявки, входящие и исходящие заявки, список друзей.",
+    "selectors": [
+      ".friends-content",
+      ".people-search"
+    ],
+    "panels": [],
+    "route": "/settings/friends",
+    "lookupPatterns": [
+      "друз",
+      "друг",
+      "заявк"
+    ],
+    "lookupPriority": 45
+  },
+  "projects": {
+    "label": "Проекты",
+    "description": "Список собственных и доступных проектов, создание и импорт.",
+    "selectors": [
+      ".project-list"
+    ],
+    "panels": [],
+    "route": "/projects",
+    "lookupPatterns": [
+      "проект"
+    ],
+    "lookupPriority": 47
+  },
+  "sharing": {
+    "label": "Доступ и публичность",
+    "description": "Кнопка «Поделиться» открывает доступ к проекту: видимость, участники и роли. Публичность меняется только после подтверждения.",
+    "selectors": [
+      ".share-button"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "поделит",
+      "доступ.*проект",
+      "публичн",
+      "приватн",
+      "роль"
+    ],
+    "lookupPriority": 42
+  },
+  "layout": {
+    "label": "Расположение окон",
+    "description": "Меню «Вид»: показать и скрыть окна, сохранить расположение проекта или базовое расположение, восстановить, закрепить навигацию.",
+    "selectors": [
+      "[data-assistant-menu=\"Вид\"]"
+    ],
+    "panels": [],
+    "menu": "Вид",
+    "lookupPatterns": [
+      "расположен",
+      "тайлинг",
+      "окн"
+    ],
+    "lookupPriority": 43
+  },
+  "project_export": {
+    "label": "Экспорт проекта",
+    "description": "Меню «Файл»: экспорт сохранённой версии, скачивание файлов, архив проекта.",
+    "selectors": [
+      "[data-assistant-menu=\"Файл\"]"
+    ],
+    "panels": [],
+    "menu": "Файл",
+    "lookupPatterns": [
+      "экспорт",
+      "архив.*проект"
+    ],
+    "lookupPriority": 3
+  },
+  "tour": {
+    "label": "Обучение",
+    "description": "Меню «Справка» запускает полное обучение редактору. Это отдельный запрос, не обычное точечное «Показать».",
+    "selectors": [
+      "[data-assistant-menu=\"Справка\"]"
+    ],
+    "panels": [],
+    "menu": "Справка",
+    "lookupPatterns": [
+      "обучени",
+      "демо",
+      "ознакомлен"
+    ],
+    "lookupPriority": 49
+  },
+  "method_extract": {
+    "label": "Выделение метода",
+    "description": "Выберите оператор в схеме, затем в «Анализ» → «Узел» выберите извлечение метода, параметры и возвращаемое значение. Подготовьте кандидат, просмотрите diff, проверьте на тестах до применения.",
+    "selectors": [
+      "[data-tile-panel=\"analysis\"]",
+      "[data-assistant-target=\"analysis-node\"]",
+      "[data-assistant-target=\"analysis-content-node\"]"
+    ],
+    "panels": [
+      "analysis"
+    ],
+    "tab": "node",
+    "lookupPatterns": [
+      "выдел.*метод",
+      "извле.*метод"
+    ],
+    "lookupPriority": 0
+  },
+  "project_create": {
+    "label": "Создание проекта",
+    "description": "На странице «Проекты» введите название в блоке нового проекта. Можно начать с примера или импортировать исходники.",
+    "selectors": [
+      ".new-project"
+    ],
+    "panels": [],
+    "route": "/projects",
+    "lookupPatterns": [
+      "созда.*проект",
+      "нов.*проект"
+    ],
+    "lookupPriority": 2
+  },
+  "run_stop": {
+    "label": "Остановка программы",
+    "description": "Во время запуска в нижнем доке появляется квадратная кнопка «Остановить выполнение». Если задания нет, кнопка скрыта.",
+    "selectors": [
+      ".workspace-dock"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "останов",
+      "заверш.*запуск"
+    ],
+    "lookupPriority": 34
+  },
+  "tests_settings": {
+    "label": "Параметры тестов",
+    "description": "Нажмите «Сравнить» в нижнем доке: версии, класс main, тестовые входы и ожидаемый вывод.",
+    "selectors": [
+      "[data-assistant-target=\"tests-start\"]"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "параметр.*тест",
+      "настро.*тест"
+    ],
+    "lookupPriority": 31
+  },
+  "run_settings": {
+    "label": "Параметры запуска",
+    "description": "Кнопка «Запуск» открывает класс main, аргументы и начальный stdin.",
+    "selectors": [
+      ".dock-run"
+    ],
+    "panels": [],
+    "lookupPatterns": [
+      "параметр.*запуск",
+      "настро.*запуск"
+    ],
+    "lookupPriority": 35
+  }
+}

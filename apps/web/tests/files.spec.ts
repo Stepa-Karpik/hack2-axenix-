@@ -1,3 +1,4 @@
+import { publishProject } from "./flowAssertions";
 import { chooseOption } from "./selectControl";
 import { setTheme } from "./flowAssertions";
 import { expect, test } from "@playwright/test";
@@ -255,7 +256,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.insertText("43");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect
     .poll(
       async () =>
@@ -279,7 +280,7 @@ test("explorer creation, subtree rename and drag preserve source while tabs reta
   await page.keyboard.press("Control+z");
   await expect(page.locator(".monaco-editor")).toContainText("marker = 43;");
   await page.keyboard.press("Control+z");
-  await page.keyboard.press("Control+s");
+  await publishProject(page);
   await expect
     .poll(
       async () =>

@@ -24,13 +24,14 @@ export function tileGeometry(
     const horizontal = node.axis === "horizontal",
       gap = 8;
     const extent = Math.max(0, (horizontal ? rect.width : rect.height) - gap);
-    const collapsed = (n: LayoutNode) =>
-      collapsedNavigation && n.type === "group" && n.active === "navigation";
+    const navigation = (n: LayoutNode) =>
+      n.type === "group" && n.active === "navigation";
+    const navigationHeight = collapsedNavigation ? 40 : 208;
     const first =
-      !horizontal && collapsed(node.first)
-        ? Math.min(40, extent)
-        : !horizontal && collapsed(node.second)
-          ? Math.max(0, extent - 40)
+      !horizontal && navigation(node.first)
+        ? Math.min(navigationHeight, extent)
+        : !horizontal && navigation(node.second)
+          ? Math.max(0, extent - navigationHeight)
           : extent * node.ratio;
     visit(node.first, {
       ...rect,
